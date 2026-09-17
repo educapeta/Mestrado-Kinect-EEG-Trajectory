@@ -89,7 +89,8 @@ gravacoes/            sessoes gravadas (ignorado pelo git; --pasta-sessoes)
 data/                 dados antigos/BCI IV e resultados de treino anteriores
 results/              saídas de execuções de teste
 docs/                 histórico, críticas, imagens e MIGRACAO_FORA_DO_ONEDRIVE.md
-tools/                utilitários (indexar PDFs, analisar o log de overlay)
+tools/                utilitários e a ferramenta autônoma do Kinect
+                      (kinect_groundtruth_tool.py: calibração/diagnóstico)
 legacy/               zip do código legado (subir no Drive manualmente)
 ```
 

@@ -38,5 +38,3 @@ docs/*.pdf
 legacy/
 gravacoes/
 *_priming/
-# Clone de referencia da biblioteca g.Pype (3,6 MB; baixar de novo se preciso)
-gpype/

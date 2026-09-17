@@ -273,8 +273,15 @@ RESULTADO
 - Repositorio local iniciado e commit unico desta sessao: 8b7db39
   "Protocolo de aquisicao final: EEG cru, movimento separado, metadados, duas
    maos, vigia e painel de impedancias" (34 arquivos versionados).
-- Segundo commit: 58c8dc0 (historico) e um terceiro com a consolidacao do IMU
-  (imu.py) e a organizacao final.
+- Depois: 58c8dc0 (historico), 5571742 (consolidacao do IMU em imu.py),
+  799ff17 (higiene: checkpoints do legado e saidas de smoke fora da raiz) e
+  um commit final com o main() do Kinect movido para tools/ e o clone gpype
+  apagado.
+- O `main()` de kinect_imu_groundtruth.py (768 linhas) foi MOVIDO por script
+  para tools/kinect_groundtruth_tool.py: a biblioteca ficou com 2.307 linhas e
+  sem entrada propria; a ferramenta ajusta o sys.path e copia o namespace do
+  modulo (globals().update) para rodar o mesmo codigo. `gpype/` (clone de
+  referencia, 3,6 MB) foi apagado -- o pacote instalado no .venv e' o que roda.
 - Ficam FORA do git (por .gitignore): .venv/, gravacoes/, data/, results/,
   legacy/, gpype/ (clone de referencia), *.csv, *.avi, *.pt, __pycache__.
   Vao no Drive/backup: os dados de sessao e o zip do legado.

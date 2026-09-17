@@ -100,7 +100,50 @@ funcionar offline).
 **Vão para o Drive/HD (manual):** `legacy/*.zip` e, se quiser, os dados das
 sessões (grandes) — o GitHub não é lugar para eles.
 
-## 6. Checklist rápido de "higiene" (repetir a cada sessão nova)
+## 7. E se eu nao tiver um segundo disco? (pendrive de 2 TB)
+
+Um pendrive **serve como arquivo**, mas nao como destino da gravacao ao vivo:
+
+1. **Nao grave a sessao direto nele.** O CSV de EEG e' escrito a 500 Hz com
+   flush constante; se o pendrive engasgar (ou o USB cair), a trial e' perdida.
+   Grave no SSD local (padrao `gravacoes/`) e **copie no fim** (ou entre
+   participantes):
+
+   ```powershell
+   robocopy "C:\Mestrado\projeto\gravacoes" "M:\Mestrado_Dados\gravacoes" `
+            /E /XO /R:1 /W:1     # /XO = nao recopia o que ja' esta' la'
+   ```
+
+2. **Letra fixa.** O Windows troca a letra do pendrive ao reconectar. Fixe uma
+   letra (Gerenciamento de Disco -> Alterar letra de unidade -> `M:`) e use
+   sempre ela; sem isso um `--pasta-sessoes` ou junction aponta para o vazio.
+3. **Formato:** use **exFAT** (ou NTFS). FAT32 limita arquivo a 4 GB.
+4. **Junction para o pendrive:** funciona, mas se o pendrive estiver fora a
+   pasta `gravacoes` fica quebrada e a gravacao falha. Prefira `--pasta-sessoes`
+   explicito e copie no fim.
+5. **Velocidade:** um pendrive USB 3.x grava ~30–100 MB/s e le ~100–200 MB/s —
+   suficiente para copiar ~600 MB por sessao em poucos segundos. Para gravar
+   *direto* nele, um SSD externo USB-C e' o minimo aceitavel.
+
+**Tamanho real para planejar (medido/tabelado):**
+
+| Item | Tamanho |
+|---|---|
+| EEG por sessao (50 min, 34 colunas) | ~440 MB |
+| Movimento por sessao (30 Hz, 44 colunas) | ~18 MB/h |
+| Metadados (JSON + questionario) | < 100 kB |
+| Clipes de priming (250 trials) | ~60–100 MB |
+| **Total por sessao** | **~0,5 GB** |
+| **25 sessoes** | **~13 GB** |
+| Dataset BCI IV 2a (se usar) | 707 MB |
+| Dados antigos (`data/`) | 78 MB |
+| Codigo + modelos + calibracoes | ~27 MB |
+
+Ou seja: 2 TB e' folgadissimo (sobra ~99%). Se quiser guardar os **videos brutos
+do Kinect** (ainda nao gravamos), ai sim o espaco importa: 1080p a 30 fps da'
+~2–4 GB por hora de sessao.
+
+## 8. Checklist rápido de "higiene" (repetir a cada sessão nova)
 
 - [ ] `git status` limpo antes de começar a gravar
 - [ ] `python test_paradigm_protocol.py` verde depois de qualquer mudança de protocolo
