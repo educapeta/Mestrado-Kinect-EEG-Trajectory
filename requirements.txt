@@ -1,0 +1,19 @@
+# Núcleo
+numpy
+scipy
+opencv-python
+mediapipe
+
+# EEG (usar SEMPRE a Python do .venv — ver README)
+gpype
+gtec-gds
+
+# Kinect v2 (requer Kinect for Windows SDK 2.0)
+pykinect2
+comtypes
+
+# Rede SAND
+torch
+
+# GUI (gpype traz PySide6; listado explicito para ambientes novos)
+PySide6

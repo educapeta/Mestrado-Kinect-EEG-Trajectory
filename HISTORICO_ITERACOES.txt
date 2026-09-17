@@ -1,0 +1,264 @@
+================================================================================
+ HISTORICO DE ITERACOES DO PROJETO
+ Ground truth 3D da mao (Kinect + MediaPipe + IMU) acoplado a EEG (g.Nautilus)
+================================================================================
+Ultima atualizacao: 2026-09-17
+Registro cronologico de problemas, diagnosticos (com evidencias) e solucoes,
+para uso na escrita da dissertacao/artigo e na manutencao do codigo.
+Formato de cada item:  PROBLEMA -> EVIDENCIA -> CAUSA RAIZ -> SOLUCAO
+
+--------------------------------------------------------------------------------
+0. VISAO GERAL DO PIPELINE (estado atual)
+--------------------------------------------------------------------------------
+Hardware
+  - Kinect v2: RGB 1920x1080 + depth 512x424 -> referencia metrica principal.
+  - Webcams auxiliares: laptop (indice 0) e USB (indices 1/2) -> triangulacao.
+  - ESP32 + MPU6050 no dorso da mao (UDP 4210): roll/pitch/yaw, acc e gyro.
+  - g.Nautilus / g.tec GDS: 32 canais, 500 Hz.
+Programas
+  1) eeg_motor_paradigm.py     - AQUISICAO OFFLINE (EEG + movimento + ME/MI)
+  2) sand_traj_treino.py       - TREINO do SAND de trajetoria
+     sand_trajectory_model.py  - rede/alvo/normalizador/inferencia (compartilhado)
+  3) sand_traj_tempo_real.py   - SISTEMA ONLINE (EEG -> trajetoria prevista)
+Bibliotecas internas
+  - kinect_imu_groundtruth.py: CameraAlignment (stereo + landmarks + trim),
+    KinectHandTracker (MediaPipe + depth + esqueleto SDK), ArmLinkModel (IK de
+    2 elos), PositionFusion (zeragem IMU + cameras), ImuReceiver.
+  - camera_mpu_fusion.py: ImuReceiver usado pelo paradigma e pelo tempo real.
+Arquivos de calibracao
+  stereo_calibration.npz, camera_alignment.npz, hand_landmark_calibration.npz,
+  arm_model.json, overlay_trim.json  (por webcam: sufixo _aux1/_aux2).
+
+--------------------------------------------------------------------------------
+1. CALIBRACAO ESTEREO (Kinect x webcam)
+--------------------------------------------------------------------------------
+PROBLEMA
+  RMS estereo entre 30 e 70 px, enquanto o RMS individual de cada camera ficava
+  entre 0.5 e 1.0 px. A calibracao "parecia" boa camera a camera.
+EVIDENCIA
+  Log do coletor: "RMS Kinect=0.7255 px | RMS auxiliar=0.4892 px |
+  RMS stereo=31.2372 px" e chegando a 69.7 px.
+CAUSA RAIZ
+  Ordem dos cantos do tabuleiro variava de pose para pose. O detector devolve
+  os 48 cantos na ordem canonica da IMAGEM; como cada camera ve o tabuleiro de
+  um angulo diferente, o "canto 0" pode corresponder a cantos fisicos
+  diferentes nas duas cameras. Essa troca e uma rotacao rigida do tabuleiro:
+  e absorvida pela pose individual (por isso o RMS por camera era otimo) mas
+  corrompe a pose RELATIVA -> RMS estereo explode.
+SOLUCAO (stereo_calibration.py reescrito)
+  - Ordenacao canonica por pose + semente RANSAC: resolve subconjuntos
+    aleatorios de 5 poses; subconjuntos limpos dao ~0.5 px e contaminados
+    dezenas de px, o que permite achar um subconjunto limpo mesmo com ~50% das
+    poses trocadas.
+  - Atribuicao por pose via solvePnP: testa as 4 simetrias da grade por pose
+    contra o modelo (correta ~1 px, errada 30+ px) e corrige ou descarta.
+  - Solve final duplo: CALIB_FIX_INTRINSIC e CALIB_USE_INTRINSIC_GUESS
+    (refinamento conjunto); salva o melhor.
+  - Distorcao completa (k1,k2,k3,p1,p2 livres), gates de qualidade, relatorio
+    por pose, avisos de diversidade de poses e .npz com kinect_size,
+    auxiliary_size e diagnosticos.
+  - camera_alignment.npz (homografia) passa a ser regerado automaticamente ao
+    salvar o stereo -> recalibrar = rodar um script uma vez.
+VALIDACAO
+  test_stereo_solve.py (permanente): com 5 trocas injetadas (31% dos dados
+  corrompidos) o metodo antigo da 29.99 px e o novo 0.42 px, com erro de
+  rotacao 0.21 deg e translacao 1.1 mm.
+RESULTADO REAL
+  RMS estereo final do usuario: 1.45 px -> 1.11 px -> 0.58 px (apos fixar a
+  webcam no lugar). Ha tambem a versao com correcao de offset por trim (tecla
+  K no programa principal).
+
+--------------------------------------------------------------------------------
+2. PROFUNDIDADE DO KINECT (pykinect2)
+--------------------------------------------------------------------------------
+PROBLEMA
+  "Kinect sem mao" permanente, diagnostico do tabuleiro com 0/48 cantos, mas o
+  Kinect Studio mostrava a profundidade funcionando (hardware OK).
+EVIDENCIA
+  "Diagnostico depth: 140655/217088 px validos (65%) | frames 785" mas
+  "0/48 cantos com profundidade valida do Kinect".
+CAUSA RAIZ (3 bugs encadeados, todos SILENCIOSOS)
+  (a) MapColorFrameToDepthSpace era chamado passando um array numpy; o SDK
+      exige o PONTEIRO ctypes do buffer interno de depth + um buffer de saida
+      pre-alocado de _DepthSpacePoint. A chamada COM falhava, o pykinect2 tem
+      "except: pass" e tudo voltava None.
+  (b) O codigo usava self.kinect.mapper; o atributo real e' _mapper ->
+      AttributeError a cada chamada, tambem engolido.
+  (c) MapDepthPointToCameraSpace exige c_ushort (inteiro, milimetros) no 2o
+      argumento -> ArgumentError com float; e OverflowError quando a mediana da
+      profundidade era inf (pixels 0 do depth).
+SOLUCAO
+  - Chamada correta com _mapper + buffer ctypes + CACHE do mapeamento por
+    frame (antes era refeito por landmark: 21x mais caro).
+  - int(round(depth_mm)) nas duas chamadas; _median_depth devolve None para
+    valores nao finitos; validacao de ponto finito antes de arredondar.
+  - Handler de depth instrumentado (o do pykinect2 engole excecoes), deteccao
+    de frame novo por timestamp real de captura e janela "Kinect depth" ao
+    vivo (colormap) para teste de fogo.
+RESULTADO
+  "48/48 cantos com profundidade valida"; depth com 62-65% de pixels validos.
+
+--------------------------------------------------------------------------------
+3. OVERLAY DA MAO AUXILIAR (o caminho longo ate' a triangulacao)
+--------------------------------------------------------------------------------
+3a) Esqueleto vermelho invisivel
+    MediaPipe do Kinect sem deteccao -> profundidade None -> o desenho caia no
+    caminho antigo de homografia -> NaN -> nada desenhado, sem aviso. Correcao:
+    caminho estereo sempre que a calibracao carrega, cadeia de profundidade com
+    aviso, linha de status e silenciamento dos logs do MediaPipe/TFLite.
+3b) Causa provavel encontrada pelo usuario: a webcam auxiliar havia sido
+    reposicionada -> recalibrar o stereo resolveu (RMS 1.45 -> 1.11 px).
+3c) CALIBRACAO DA MAO (tecla H)
+    12 -> 18 amostras a cada 2 s; homografia + residuo mediano por no + modelo
+    de profundidade por escala aparente (depth = a/scale + b) + offsets por no.
+    LIMITES CONCEITUAIS medidos: a homografia 2D nao representa uma mao 3D
+    (RMS 94-404 px) e a "escala aparente" conflita com a inclinacao da mao
+    (residuo 31-47 cm). Ambos foram DESCARTADOS como caminho de overlay.
+3d) TRIANGULACAO ESTEREO (solucao definitiva)
+    cv2.triangulatePoints com P1=[I|0] e P2=[R|T]; 21 nos em correspondencia
+    trivial pelo indice do MediaPipe. Erro medido: 0.62-0.67 mm com a calibracao
+    real do usuario e 1.8 mm com ruido tipico do MediaPipe. Imune a inclinacao
+    (Z e' MEDIDO, nao inferido).
+3e) Remocao do "seguidor"
+    Decisao do usuario: a transformacao auxiliar->Kinect deve ser PURA
+    CALIBRACAO. O refinamento afim online (que empurrava o vermelho para o verde
+    a cada frame) foi removido; se o Kinect perde a mao, o overlay NAO deve
+    depender do tracking verde.
+3f) Log de desvio (tecla L) + analyze_overlay_log.py
+    593 linhas analisadas: bias constante (+32,+26 px) com sinal ESTAVEL
+    (100% dos frames), sem correlacao com velocidade (nao e' dessincronia),
+    crescendo com a excentricidade (distorcao) e explodindo fora da imagem.
+    Correcoes: EMA de profundidade com bootstrap/alpha adaptativa/rejeicao de
+    saltos, gate de validade +-80 px e TRIM FIXO de calibracao (tecla K ->
+    overlay_trim.json), aplicado no desenho e na medida de desvio.
+3g) Esqueleto do SDK como fonte de Z + IK de elos rigidos
+    Quando o MediaPipe do Kinect perde a mao, o Z passa a vir do body tracking
+    do SDK (note=esqueletoSDK). ArmLinkModel mede L1/L2 na calibracao de origem
+    e resolve o cotovelo por IK de 2 elos; colunas ARM_* e PALM_* no CSV.
+
+--------------------------------------------------------------------------------
+4. PROGRAMA 1 - AQUISICAO OFFLINE (eeg_motor_paradigm.py)
+--------------------------------------------------------------------------------
+- Pipeline g.Pype: GNautilus/Generator -> CountsToMicrovolts -> filtros ->
+  RecordingMuxer -> RecordingCsvWriter + TimeSeriesScope.
+- Paradigma Qt: PREPARACAO -> baseline (olhos abertos/fechados/repouso ativo) ->
+  calibracao de origem -> 5 blocos de 50 trials com pausa de 2 min.
+- Trial de 12 s: repouso 2 s -> cue + ME 4 s -> pausa + video 0,5x 2 s -> MI 4 s.
+- 6 condicoes (garrafa/bola/caneta x esquerda/direita), balanceadas na sessao.
+- TrackingThread: Kinect + webcams + ESP32 (UDP 4210) -> SharedState -> CSV.
+- Falha recorrente de validacao: o console cp1252 morria com a tabela Unicode do
+  ioiocore -> sys.stdout.reconfigure(utf-8) no main().
+- O g.Pype exige IDE suportada: rodar pelo TERMINAL do VS Code.
+
+--------------------------------------------------------------------------------
+5. PROGRAMA 2 - SISTEMA ONLINE (SAND de trajetoria)
+--------------------------------------------------------------------------------
+- sand_trajectory_model.py: rede SAND (60.427 parametros; artigo: 59.785),
+  preprocess (CAR + z-score), alvo reamostrado em 30 pontos, normalizador em
+  metros, checkpoint versionado e SandTrajectoryBCI.predict_window.
+- sand_traj_treino.py: treino sobre os CSV do Programa 1, hold-out por sessao,
+  MSE/PCC por eixo.
+- sand_traj_tempo_real.py: inferencia ASSINCRONA em thread propria (nao atrasa a
+  amostragem), log CSV e overlay da trajetoria prevista no Kinect.
+- Latencia medida: 6-10 ms (CUDA) por janela de 2 s.
+
+--------------------------------------------------------------------------------
+6. MULTI-CAMERA E ZERAGEM DO IMU
+--------------------------------------------------------------------------------
+- 3 entradas de video (Kinect + webcam do laptop + webcam USB), calibracao
+  PAR A PAR (--aux-index N) e escolha automatica da melhor webcam por menor erro
+  de reprojecao na triangulacao.
+- PositionFusion: com a camera medindo a mao parada, estima o bias do
+  acelerometro, zera a velocidade e ancora a posicao ("ZERAGEM IMU ATIVA").
+  Teste: deriva de 0.0000 m com bias vs 0.0612 m sem bias em 0,5 s sem camera.
+- Colunas IMU_pos_x/y/z_m e ZERO_lock no CSV.
+
+--------------------------------------------------------------------------------
+7. AQUISICAO REAL COM O g.NAUTILUS
+--------------------------------------------------------------------------------
+- Descoberta importante: existem DUAS instalacoes de gtec_gds na maquina; a
+  Python do PATH (1.4.0) exige os headers C (ausentes) e falha; a do .venv
+  (1.6.0) traz os cdefs compilados e funciona. Foi implementado
+  _check_gtec_environment() com mensagem acionavel.
+- Taxa real medida: 500.7 Hz (32 canais, frame_size=1).
+- EEG chega em COUNTS do ADC de 24 bits: criado o no CountsToMicrovolts
+  (uV = (count*Factor + Offset) * sensibilidade / 2^24 / 1000).
+- A impedancia nao pode ser medida sem eletrodos no escalpo (esperado).
+
+--------------------------------------------------------------------------------
+8. REVISAO CRITICA (24 itens) E DECISOES / STATUS
+--------------------------------------------------------------------------------
+#1 dados massivos -> movimento em arquivo separado a 30 Hz (FEITO).
+#2 identidade dos dados -> participante/sessao + bloco "meta" no JSON e
+   questionario no fim da gravacao (FEITO).
+#3 unidades -> nao reaproveitar CSVs antigos em counts; campo eeg_units no meta
+   (FEITO).
+#4 dupla filtragem -> o CSV agora grava o sinal CRU; os filtros alimentam apenas
+   o escopo de monitoramento (FEITO).
+#5 mao errada / duas maos -> num_hands=2, lateralidade corrigida pela convencao
+   de espelho do MediaPipe, selecao da mao pelo cue da trial e colunas KT_hand /
+   KT_src (FEITO).
+#6 split / LOSO -> sera' aplicado no treino; benchmark final = novo participante.
+#7 priming descartado -> clipes .avi em <prefixo>_priming/ (FEITO).
+#8 relogios dessincronizados -> cada evento do JSON tem sample_index (EEG) E
+   monotonic_s; o CSV de movimento tem t_mono_s no mesmo relogio (FEITO).
+#9 duplicacao estrutural -> legado zipado em legacy/LEGADO_classificacao_BCI.zip
+   (8 arquivos, 41.713 bytes) e removido do diretorio de trabalho (FEITO).
+#10 raiz do projeto = garagem -> .gitignore/README/docs/tools (FEITO).
+#11 publicar no GitHub -> repositorio git iniciado e commit feito; falta criar o
+   remote e dar push (passo manual, exige autenticacao do usuario).
+#12 manifesto de dependencias -> requirements.txt criado; atencao: mne e
+   scikit-learn NAO estao instalados (o caminho .gdf do treino antigo depende
+   deles).
+#13 sincronia do cue com fotoevento -> PROPOSTA: usar a ENTRADA DIGITAL do
+   g.Nautilus (enable_di=True) com um pulso de LED visto por fotodiodo no mesmo
+   instante do cue; o marcador do pulso vira a referencia FISICA de latencia
+   (mede Qt + refresh da tela + buffer do GDS). Alternativa sem hardware extra:
+   LED ligado por GPIO e fotodiodo colado na tela.
+#14 faltam testes do paradigma -> test_paradigm_protocol.py, 8/8 blocos (FEITO).
+#15 queda do link no meio da sessao -> LinkWatchdog + marcadores 899/898 +
+   aviso na tela e no console (FEITO).
+#16 sessoes GDS presas -> improvavel no fluxo atual; a mensagem acionavel de
+   _check_gtec_environment ja' orienta o caso (nao foi implementado --kill-stale).
+#17 offsets de marcador -> 769 -> 778/779 (+50 ms) -> 811-816 (+100 ms) existem
+   porque a coluna Marker guarda UM codigo por amostra; a alternativa limpa e'
+   uma segunda coluna Marker2 (decisao adiada para a versao final).
+#18 higiene -> zip do legado, docs/, tools/, README, .gitignore (FEITO).
+#19 validacao do ground truth -> sera' feita com alvo de posicao conhecida
+   (grade/ArUco) reportando RMS em mm; a base e' o overlay_deviation_log.csv.
+#20 duracao -> o protocolo completo passa de 1 h; comunicar ~2 h por sessao.
+#21 balanceamento por bloco -> 250 trials nao e' multiplo de 6*50; se houver
+   decodificacao online por bloco, usar 48 ou 54 trials por bloco.
+#22 movimento por ZOH -> documentado; o movimento agora e' gravado a 30 Hz e o
+   EEG pode ser subsampleado antes de calcular velocidade/aceleracao (FEITO).
+#23 laudo automatico por sessao -> painel de impedancias ao vivo (FEITO);
+   laudo pos-sessao consolidado (PENDENTE).
+#24 checklist de eletrodos -> painel de impedancias com limite de 50 kOhm,
+   marcacao canal a canal e "---" para nao medido (FEITO).
+
+--------------------------------------------------------------------------------
+9. MUDANCAS DESTA SESSAO (2026-09-17) - MEDICOES
+--------------------------------------------------------------------------------
+- CSV de EEG: 1.393 -> 281 bytes/amostra (4,95x menor). Sessao de 50 min:
+  ~2,1 GB -> ~440 MB. 25 sessoes: ~55 GB -> ~11 GB. Movimento: 166 bytes/linha
+  a 30 Hz (~18 MB/h).
+- test_paradigm_protocol.py: 8/8 (trials balanceados, trial de 12 s, codigos
+  unicos com legenda, EEG de 34 colunas, movimento de 44 colunas a 30 Hz, vigia
+  899/898, painel de impedancias, questionario, KT_src).
+- Suite completa verde: ARM_CSV 5/5, ARM_IK 8/8, BODY_ANCHOR 6/6, CAMERAS_MULTI
+  5/5, hand_calib, triangulation, stereo_solve, SAND_TRAJ 6/6, PARADIGM 8/8.
+- Smoke do Programa 1: EXIT=0 com EEG cru + movimento separado + vigia + meta.
+
+--------------------------------------------------------------------------------
+10. PENDENCIAS CONHECIDAS
+--------------------------------------------------------------------------------
+- Criar o remote do GitHub e dar push (#11).
+- Laudo automatico por sessao (#23) e validacao metrica do ground truth (#19).
+- mne/scikit-learn ausentes no .venv (afeta o caminho .gdf do treino antigo).
+- Entrada digital (fotodiodo) para medir a latencia real dos cues (#13).
+- Decisao sobre a segunda coluna de marcador (Marker2) antes das 25 sessoes.
+- Google Drive: subir manualmente o zip do legado e os dados das sessoes.
+
+================================================================================
+ FIM DO DOCUMENTO (atualizar ao final de cada sessao de desenvolvimento)
+================================================================================

@@ -1,0 +1,52 @@
+sobre as criticas:
+
+1-realmente os dados vão ser massivos e não vao caber no computador, melhor plano seria de fato separar o movimento em uma aquisição em outra frequencia mais compativel com a das cameras. depois é só fazer ou o downsampling do EEG (mas isso depois no pipeline de pré-processamento) ou uma média linear entre cordenadas de um frame ao outro (no caso da posição do esqueleto)
+
+2-Fazer a marcação dos dados dos participantes é importantissimo, vamos pegar no final da gravação as informações do participante para ter isto organizado, de fato execute o que propoem em 2
+
+3-sobre unidades diferentes não se preocupe, não vou usar os dados do CSV antigo, se está falando do BCI IV, nem vou utiliza-lo para o treinamento até onde estou planejando
+
+4-A dupla filtragem é um problema! os dados tem que ser gravados cru na aquisição offline, faca isso!
+
+5-Isso é um problema, mas como o paradigma vai rastrear as duas mãos em funcionamento, na verdade rpecisamos habilitar o multihandedness, não entendi muito bem qual foi sua solução proposta para este problema
+
+6-No split de treino e calculo de métrica iremos aplicar este conceito parecido, mas para fazer a avaliação do algoritmo Online, um novo participante (EU) será o benchmark final publicado no artigo
+
+7- A gravação com esqueleto do priming é interessante ser salvo, pode ser usado futuramente, quao pesado em GB isso vai ficar para a maquina?
+
+8- não entendi esta critica
+
+9- Limpe esta duplicação estrutural, versões antigas ainda não são necessárias. melhor é compacte elas em um zip, delete as originais, ai vou upar estes codigos no drive manualmente
+
+10- realmente está uma confusão, me ajuda a arrumar isto?
+
+11- vamos migrar o codigo pro github, voce está correto
+
+12- resolverei isto assim que chegarmos na versão final mesmo
+
+13- verdade, precisamos sincronizar os Cues com o fotoevento, como podemos calibrar isto futuramente?
+
+14- não entendi como vamos testar o paradigma
+
+15- sim, precisamos impor um watchdog para a gravaçao de dados
+
+16- acho dificil necessitar disto
+
+17- o que são os offseats de marcador?
+
+18- de fato vale uma organização honesta/higiene, vamos fazer isto juntos
+
+19- a principio vou citar artigos que já usaram kinect para este experimento, mas sim posso fazer esta validação do ground truth, ela é necessária e vamos fazer isto!
+
+20- Isso imaginei que não seria uma hora mesmo, este era o tempo antigo, ja estou falando para os possiveis participantes que todo o processo de aquisição vai durar 2 horas mais ou menos, na sua totalidade
+
+21- não entendi muito bem
+
+22- Sim o subsampling já está no radar ao usar os dados para treinar a rede
+
+23- Sim um laudo automático é necessário tambem, mas preciso tambem que um painel iterativo de impedâncias seja mostrado enquanto ainda estou montando o EEG no participante, só vou começar o trial quando assegurar que todos os eletrodos estão validos
+
+24- exatamente isso que é necessário
+
+
+Agora que revisei todos os pontos, vamos começar a fazer todas essas mudanças, vamos la! inclusive, faca um arquivo txt com nossas interações e todos os progressos e mudanças que viemos fazendo, para eu documentar futuramente as iterações do projeto

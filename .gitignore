@@ -1,0 +1,42 @@
+# Python
+__pycache__/
+*.pyc
+.venv/
+
+# Dados de aquisição (ficam no Drive, não no git)
+gravacoes/
+clips/
+*.csv
+*.avi
+overlay_deviation_log.csv
+BCICIV_2a_gdf/
+dados_legado/
+legado_*.zip
+
+# Modelos treinados
+*.pt
+*.pth
+*.ckpt
+
+# Saídas de diagnóstico temporárias
+_inv.txt
+_smoke*.txt
+_aq*.txt
+_aq*.pid
+_dm*.txt
+_s12*.txt
+_ds_body*.json
+*.pid
+_t*.txt
+_tt.txt
+
+# Pastas de trabalho (dados, resultados, documentação e legado não versionados)
+data/
+results/
+docs/*.png
+docs/*.pdf
+legacy/
+gravacoes/
+*_priming/
+# Clone de referencia da biblioteca g.Pype (3,6 MB; baixar de novo se preciso)
+gpype/
