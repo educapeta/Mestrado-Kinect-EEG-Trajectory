@@ -94,9 +94,6 @@ tools/                utilitários e a ferramenta autônoma do Kinect
 legacy/               zip do código legado (subir no Drive manualmente)
 ```
 
-Documento de referência do desenvolvimento: **`HISTORICO_ITERACOES.txt`**.
-Para tirar o projeto do OneDrive (dados em outro disco, `.venv` recriado):
-**`docs/MIGRACAO_FORA_DO_ONEDRIVE.md`**.
 
 ## Dados gerados (por sessão, em `gravacoes/` — mude com `--pasta-sessoes`)
 
