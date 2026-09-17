@@ -1,0 +1,113 @@
+﻿INVENTARIO DE C:\Drivers (antes da limpeza) - 2026-09-17 17:22
+
+AMD_UI             9 arquivos      241,5 MB
+AMD_VGA          293 arquivos    1.519,6 MB
+   |- Bin64                                       39 arq      102,3 MB
+   |- Config                                      38 arq        0,9 MB
+   |- Packages                                   215 arq    1.416,4 MB
+Audio           1004 arquivos      242,7 MB
+   |- Fortemedia                                 950 arq      127,9 MB
+   |- Nahimic                                     29 arq       17,7 MB
+   |- Realtek                                     24 arq       97,0 MB
+Bluetooth          9 arquivos        1,9 MB
+Camera            30 arquivos      122,3 MB
+   |- SunplusIT                                   11 arq       73,6 MB
+Chipset           28 arquivos        1,2 MB
+   |- GPIO2                                        3 arq        0,1 MB
+   |- I2C                                          4 arq        0,1 MB
+   |- INTERFACE                                    3 arq        0,0 MB
+   |- MicroPEP                                     5 arq        0,1 MB
+   |- PPMPF                                        5 arq        0,0 MB
+   |- PSP                                          7 arq        0,8 MB
+CursorSpeed        1 arquivos        0,0 MB
+LAN                4 arquivos        2,1 MB
+NahimicUI         17 arquivos       87,6 MB
+NvidiaVGA       1620 arquivos    3.519,0 MB
+   |- DC                                         366 arq    1.232,8 MB
+   |- UWP                                          5 arq        8,3 MB
+   |- WIN32UX                                   1248 arq    2.277,9 MB
+WLAN               5 arquivos        9,5 MB
+
+INSTALADORES (.exe/.msi) presentes:
+  AMD_VGA\Bin64\7z.exe
+  AMD_VGA\Bin64\AMDCleanupUtility.exe
+  AMD_VGA\Bin64\AMDInstallUEP.exe
+  AMD_VGA\Bin64\AMDSoftwareInstaller.exe
+  AMD_VGA\Bin64\AMDSplashScreen.exe
+  AMD_VGA\Bin64\ATISetup.exe
+  AMD_VGA\Bin64\InstallManagerApp.exe
+  AMD_VGA\Bin64\Setup.exe
+  AMD_VGA\Packages\Apps\CNBranding\CNBranding64.msi
+  AMD_VGA\Packages\Drivers\Display\WT6A_INF\amdfdans\AMDNoiseSuppression.exe
+  AMD_VGA\Packages\Drivers\Display\WT6A_INF\B390356\amdlogum.exe
+  AMD_VGA\Packages\Drivers\Display\WT6A_INF\B390356\amdsmi.exe
+  AMD_VGA\Packages\Drivers\Display\WT6A_INF\B390356\atieah32.exe
+  AMD_VGA\Packages\Drivers\Display\WT6A_INF\B390356\atieah64.exe
+  AMD_VGA\Packages\Drivers\Display\WT6A_INF\B390356\atieclxx.exe
+  AMD_VGA\Packages\Drivers\Display\WT6A_INF\B390356\atiesrxx.exe
+  AMD_VGA\Packages\Drivers\Display\WT6A_INF\B390356\clinfo.exe
+  AMD_VGA\Packages\Drivers\Display\WT6A_INF\B390356\dgtrayicon.exe
+  AMD_VGA\Packages\Drivers\Display\WT6A_INF\B390356\eeurestart.exe
+  AMD_VGA\Packages\Drivers\Display\WT6A_INF\B390356\vulkaninfo32.exe
+  AMD_VGA\Packages\Drivers\Display\WT6A_INF\B390356\vulkaninfo64.exe
+  Audio\Fortemedia\FMService\FMAPP.exe
+  Audio\Fortemedia\FMService\FMAudioMonitor.exe
+  Audio\Fortemedia\FMService\FMService64.exe
+  Audio\Nahimic\SWC_Path\NahimicService.exe
+  Audio\Nahimic\SWC_Path\NahimicSvc32.exe
+  Audio\Nahimic\SWC_Path\NahimicSvc64.exe
+  Audio\Nahimic\SWC_Path\NhNotifSys.exe
+  Audio\Realtek\RealtekService_591\RtkAudUService64.exe
+  Bluetooth\RtkBtManServ.exe
+  NvidiaVGA\DC\Display.Driver\Display.NvContainer\NVDisplay.Container.exe
+  NvidiaVGA\DC\Display.Driver\Display.NvContainer\nvgwls.exe
+  NvidiaVGA\DC\Display.Driver\NvCamera\FreqTransfer32.exe
+  NvidiaVGA\DC\Display.Driver\NvCamera\FreqTransfer64.exe
+  NvidiaVGA\DC\Display.Driver\NvCamera\HighresBlender32.exe
+  NvidiaVGA\DC\Display.Driver\NvCamera\HighresBlender64.exe
+  NvidiaVGA\DC\Display.Driver\NvCamera\NvCameraEnable.exe
+  NvidiaVGA\DC\Display.Driver\NvCamera\NvImageConvert32.exe
+  NvidiaVGA\DC\Display.Driver\NvCamera\NvImageConvert64.exe
+  NvidiaVGA\DC\Display.Driver\NvCamera\ReShadeFXC32.exe
+  NvidiaVGA\DC\Display.Driver\NvCamera\ReShadeFXC64.exe
+  NvidiaVGA\DC\Display.Driver\NvCamera\SphericalEquirect32.exe
+  NvidiaVGA\DC\Display.Driver\NvCamera\SphericalEquirect64.exe
+  NvidiaVGA\DC\Display.Driver\NVWMI\nvWmi64.exe
+  NvidiaVGA\DC\Display.Driver\dbInstaller.exe
+  NvidiaVGA\DC\Display.Driver\nvdispco64.exe
+  NvidiaVGA\DC\Update.Core\NvProfileUpdater64.exe
+  NvidiaVGA\DC\nvsetup.exe
+  NvidiaVGA\DC\setup.exe
+  NvidiaVGA\WIN32UX\Display.Nview\nViewMain.exe
+  NvidiaVGA\WIN32UX\Display.Nview\nViewMain64.exe
+  NvidiaVGA\WIN32UX\Display.Nview\nvwdmcpl.exe
+  NvidiaVGA\WIN32UX\Display.Nview\nwiz.exe
+  NvidiaVGA\WIN32UX\FrameViewSDK\bin\nvrla.exe
+  NvidiaVGA\WIN32UX\FrameViewSDK\bin\PresentMon_x64.exe
+  NvidiaVGA\WIN32UX\FrameViewSDK\bin\TestSystemDataCollectors_x64.exe
+  NvidiaVGA\WIN32UX\FrameViewSDK\SDK\FvSDKTestClient.exe
+  NvidiaVGA\WIN32UX\FrameViewSDK\SDK\FvSDKTestClient_Public.exe
+  NvidiaVGA\WIN32UX\FrameViewSDK\nvfvsdksvc_x64.exe
+  NvidiaVGA\WIN32UX\GFExperience\7z.exe
+  NvidiaVGA\WIN32UX\GFExperience\courgette.exe
+  NvidiaVGA\WIN32UX\GFExperience\GeForce Experience Permission.exe
+  NvidiaVGA\WIN32UX\GFExperience\nvdlisrwrapper.exe
+  NvidiaVGA\WIN32UX\GFExperience\NVIDIA GeForce Experience.exe
+  NvidiaVGA\WIN32UX\GFExperience\NVIDIA Notification.exe
+  NvidiaVGA\WIN32UX\GFExperience\NVIDIA Share.exe
+  NvidiaVGA\WIN32UX\GFExperience.NvStreamSrv\amd64\server\nvstreamer.exe
+  NvidiaVGA\WIN32UX\GFExperience.NvStreamSrv\SteamLauncher\NVIDIA.SteamLauncher.exe
+  NvidiaVGA\WIN32UX\MSVCRT\vc_redist.x64.exe
+  NvidiaVGA\WIN32UX\MSVCRT\vc_redist.x86.exe
+  NvidiaVGA\WIN32UX\nodejs\NVIDIA Web Helper.exe
+  NvidiaVGA\WIN32UX\nodejs\nvnodejslauncher.exe
+  NvidiaVGA\WIN32UX\NvBackend\NvSHIM.exe
+  NvidiaVGA\WIN32UX\NvBackend\NvTmRep.exe
+  NvidiaVGA\WIN32UX\NvBroadcastContainer\x86_64\NvBroadcast.Container.exe
+  NvidiaVGA\WIN32UX\NvContainer\x86\NvContainer.exe
+  NvidiaVGA\WIN32UX\NvContainer\x86\NvContainerInternal.exe
+  NvidiaVGA\WIN32UX\NvContainer\x86_64\NvContainer.exe
+  NvidiaVGA\WIN32UX\NvContainer\x86_64\NvContainerInternal.exe
+  NvidiaVGA\WIN32UX\NVIDIABroadcast\nv\NVIDIA Broadcast UI.exe
+
+Para rebaixar: use o site do fabricante do notebook (Lenovo Vantage/Support) ou os instaladores oficiais AMD/NVIDIA/Intel.

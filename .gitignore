@@ -35,6 +35,7 @@ data/
 results/
 docs/*.png
 docs/*.pdf
+docs/*.log
 legacy/
 gravacoes/
 *_priming/
