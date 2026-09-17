@@ -203,7 +203,16 @@ RESULTADO
 #8 relogios dessincronizados -> cada evento do JSON tem sample_index (EEG) E
    monotonic_s; o CSV de movimento tem t_mono_s no mesmo relogio (FEITO).
 #9 duplicacao estrutural -> legado zipado em legacy/LEGADO_classificacao_BCI.zip
-   (8 arquivos, 41.713 bytes) e removido do diretorio de trabalho (FEITO).
+   (9 arquivos: SAND.py, sand_bci_model.py, SAND_BCI_Treino.py, SAND_LOSO.py,
+   test_sand_bci.py, SAND_Gnautilus_GravacaoMI.py, SAND_Gnautilus_TempoReal.py,
+   Gnautilus_Integracao.py e camera_mpu_fusion.py) e removido do diretorio de
+   trabalho. A duplicacao de IMU foi ELIMINADA de verdade: `imu.py` e' agora a
+   FONTE UNICA de ImuSample/ImuReceiver/rotation_matrix/PositionFusion (antes
+   havia uma copia em kinect_imu_groundtruth.py e outra em camera_mpu_fusion.py;
+   corrigir uma deixava a outra errada em silencio). Alem disso o modulo do IMU
+   ficou LEVE (nao importa cv2/mediapipe/pykinect2 so' para ler um datagrama).
+   Bonus: removida a linha `return` duplicada no fim de PositionFusion.update
+   (codigo morto).
 #10 raiz do projeto = garagem -> .gitignore/README/docs/tools (FEITO).
 #11 publicar no GitHub -> repositorio git iniciado e commit feito; falta criar o
    remote e dar push (passo manual, exige autenticacao do usuario).
@@ -264,6 +273,8 @@ RESULTADO
 - Repositorio local iniciado e commit unico desta sessao: 8b7db39
   "Protocolo de aquisicao final: EEG cru, movimento separado, metadados, duas
    maos, vigia e painel de impedancias" (34 arquivos versionados).
+- Segundo commit: 58c8dc0 (historico) e um terceiro com a consolidacao do IMU
+  (imu.py) e a organizacao final.
 - Ficam FORA do git (por .gitignore): .venv/, gravacoes/, data/, results/,
   legacy/, gpype/ (clone de referencia), *.csv, *.avi, *.pt, __pycache__.
   Vao no Drive/backup: os dados de sessao e o zip do legado.

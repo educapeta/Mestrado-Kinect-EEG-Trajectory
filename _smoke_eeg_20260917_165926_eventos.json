@@ -1,0 +1,253 @@
+{
+  "fs": 500.0,
+  "canais_eeg": 32,
+  "movimento_no_csv_de_eeg": false,
+  "colunas_movimento": [
+    "KT_x_m",
+    "KT_y_m",
+    "KT_z_m",
+    "IMU_roll_deg",
+    "IMU_pitch_deg",
+    "IMU_yaw_deg",
+    "IMU_pos_x_m",
+    "IMU_pos_y_m",
+    "IMU_pos_z_m",
+    "ZERO_lock",
+    "KTT_valid",
+    "ARM_shoulder_x_m",
+    "ARM_shoulder_y_m",
+    "ARM_shoulder_z_m",
+    "ARM_elbow_x_m",
+    "ARM_elbow_y_m",
+    "ARM_elbow_z_m",
+    "ARM_wrist_x_m",
+    "ARM_wrist_y_m",
+    "ARM_wrist_z_m",
+    "ARM_elbow_angle_deg",
+    "ARM_shoulder_elev_deg",
+    "ARM_shoulder_azim_deg",
+    "ARM_upper_len_m",
+    "ARM_fore_len_m",
+    "ARM_valid",
+    "ARM_ik",
+    "ARM_clamped",
+    "ARM_side",
+    "PALM_nx",
+    "PALM_ny",
+    "PALM_nz",
+    "PALM_dirx",
+    "PALM_diry",
+    "PALM_dirz",
+    "PALM_elev_deg",
+    "PALM_azim_deg",
+    "PALM_pitch_deg",
+    "PALM_yaw_deg",
+    "PALM_valid",
+    "KT_hand",
+    "KT_src"
+  ],
+  "meta": {
+    "protocolo_versao": "1.0",
+    "participante": "P01",
+    "sessao": "S1",
+    "montagem": "",
+    "mao_declarada": "",
+    "inicio_data_hora": "2026-09-17 16:59:25",
+    "inicio_epoch_s": 1789675165.2102354,
+    "inicio_monotonic_s": 218805.063692,
+    "host": "Dudu_Laptop",
+    "fonte": "generator",
+    "fs_eeg_hz": 500.0,
+    "fs_movimento_hz": 30.0,
+    "movimento_no_csv_de_eeg": false,
+    "unidades": {
+      "EEG_ChNN": "uV (counts do ADC convertidos; sinal CRU, sem filtro)",
+      "Time": "s (relogio do pipeline g.Pype)",
+      "t_mono_s (movimento)": "s (time.monotonic; alinhar pelo JSON)",
+      "KT_*": "m (relativo a origem)",
+      "IMU_roll/pitch/yaw": "graus (relativo a origem)",
+      "ARM_* posicoes": "m (relativo a origem)",
+      "ARM_* angulos": "graus (absolutos)",
+      "PALM_n*/dir*": "versor unitario (absoluto)",
+      "Marker": "codigo inteiro"
+    },
+    "pacotes": {
+      "gpype": "3.0.9",
+      "gtec-gds": "1.6.0",
+      "mediapipe": "1.0.1",
+      "opencv-python": "5.0.0.93",
+      "numpy": "2.5.2",
+      "scipy": "1.18.1",
+      "torch": "2.14.0",
+      "PySide6": "6.9.0",
+      "pykinect2": "0.1.0",
+      "comtypes": "1.4.16"
+    },
+    "calibracoes_sha1": {
+      "camera_alignment.npz": "cff361b5d71b17e3",
+      "stereo_calibration.npz": "ddd4a33b7dbfdf5c",
+      "hand_landmark_calibration.npz": "02fcaa7a1314b0b2"
+    },
+    "arquivos": {
+      "eeg_csv": "_smoke_eeg.csv",
+      "movimento_csv": "_smoke_eeg_movimento.csv",
+      "eventos_json": "_smoke_eeg_eventos.json",
+      "priming_dir": "_smoke_eeg_priming"
+    },
+    "tempos_fase_s": {
+      "home": 0.2,
+      "cue_me": 0.3,
+      "video": 0.2,
+      "mi": 0.2
+    },
+    "trials_por_bloco": 1,
+    "blocos": 1,
+    "condicoes_contagem": {
+      "caneta_esquerda": 1
+    },
+    "ordem_dos_trials": [
+      "caneta_esquerda"
+    ]
+  },
+  "hold_samples": 50,
+  "legenda_codigos": {
+    "32766": "inicio da sessao",
+    "32765": "fim da sessao",
+    "276": "baseline olhos abertos",
+    "277": "baseline olhos fechados",
+    "899": "LINK EEG PERDIDO (sem amostras novas)",
+    "898": "link EEG recuperado",
+    "784": "baseline repouso ativo",
+    "768": "inicio do trial (repouso/home)",
+    "500": "inicio calibracao de origem",
+    "501": "fim calibracao de origem",
+    "778": "inicio fase ME (execucao)",
+    "779": "fim ME (pausa + video)",
+    "780": "inicio fase MI (imaginacao)",
+    "781": "fim MI (fim do trial)",
+    "790": "inicio do bloco",
+    "791": "fim do bloco",
+    "792": "inicio pausa entre blocos",
+    "793": "fim pausa entre blocos",
+    "794": "inicio do video em camera lenta",
+    "769": "cue mao esquerda",
+    "770": "cue mao direita",
+    "811": "condicao garrafa + mao direita",
+    "812": "condicao garrafa + mao esquerda",
+    "813": "condicao bola + mao direita",
+    "814": "condicao bola + mao esquerda",
+    "815": "condicao caneta + mao direita",
+    "816": "condicao caneta + mao esquerda"
+  },
+  "origem_xyz_m": null,
+  "origem_rpy_deg": null,
+  "nota_origem": "KT_*/IMU_* sao RELATIVOS a esta origem apos o evento 501; antes disso sao absolutos. Origem = mao apoiada na mesa.",
+  "modelo_braco": {
+    "ik_ativa": true,
+    "modelo": "ausente"
+  },
+  "nota": "sample_index = indice (0-based) da primeira linha do CSV em que o codigo aparece na coluna Marker",
+  "numero_de_eventos": 12,
+  "eventos": [
+    {
+      "code": 32766,
+      "nome": "inicio da sessao",
+      "hora": "16:59:27",
+      "monotonic_s": 218807.160484,
+      "sample_index": 211
+    },
+    {
+      "code": 500,
+      "nome": "inicio calibracao de origem",
+      "hora": "16:59:27",
+      "monotonic_s": 218807.160582,
+      "sample_index": 261
+    },
+    {
+      "code": 501,
+      "nome": "fim calibracao de origem",
+      "hora": "16:59:29",
+      "monotonic_s": 218809.704446,
+      "sample_index": 1483
+    },
+    {
+      "code": 768,
+      "nome": "inicio do trial (repouso/home)",
+      "hora": "16:59:31",
+      "monotonic_s": 218811.726903,
+      "bloco": 1,
+      "trial": 1,
+      "objeto": "caneta",
+      "mao": "esquerda",
+      "condicao": "caneta_esquerda",
+      "sample_index": 2494
+    },
+    {
+      "code": 769,
+      "nome": "cue mao esquerda",
+      "hora": "16:59:32",
+      "monotonic_s": 218811.954241,
+      "objeto": "caneta",
+      "mao": "esquerda",
+      "condicao": "caneta_esquerda",
+      "bloco": 1,
+      "trial": 1,
+      "sample_index": 2608
+    },
+    {
+      "code": 778,
+      "nome": "inicio fase ME (execucao)",
+      "hora": "16:59:32",
+      "monotonic_s": 218812.022736,
+      "sample_index": 2643
+    },
+    {
+      "code": 816,
+      "nome": "condicao caneta + mao esquerda",
+      "hora": "16:59:32",
+      "monotonic_s": 218812.079229,
+      "objeto": "caneta",
+      "mao": "esquerda",
+      "condicao": "caneta_esquerda",
+      "bloco": 1,
+      "trial": 1,
+      "sample_index": 2671
+    },
+    {
+      "code": 779,
+      "nome": "fim ME (pausa + video)",
+      "hora": "16:59:32",
+      "monotonic_s": 218812.271593,
+      "sample_index": 2767
+    },
+    {
+      "code": 794,
+      "nome": "inicio do video em camera lenta",
+      "hora": "16:59:32",
+      "monotonic_s": 218812.271605,
+      "sample_index": 2817
+    },
+    {
+      "code": 780,
+      "nome": "inicio fase MI (imaginacao)",
+      "hora": "16:59:32",
+      "monotonic_s": 218812.540486,
+      "sample_index": 2901
+    },
+    {
+      "code": 781,
+      "nome": "fim MI (fim do trial)",
+      "hora": "16:59:32",
+      "monotonic_s": 218812.743361,
+      "sample_index": 3003
+    },
+    {
+      "code": 32765,
+      "nome": "fim da sessao",
+      "hora": "16:59:32",
+      "monotonic_s": 218812.74342,
+      "sample_index": 3053
+    }
+  ],
+  "arquivo_csv": "_smoke_eeg_20260917_165926.csv"
+}

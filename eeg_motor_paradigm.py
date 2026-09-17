@@ -19,7 +19,7 @@ Programa 1 (gravacao offline). Um UNICO processo integra:
      Condicoes: 3 objetos x 2 maos = 6, balanceadas ao longo da sessao.
   3. Thread de tracking: reutiliza KinectHandTracker/CameraAlignment de
      kinect_imu_groundtruth (triangulacao stereo MediaPipe->3D + cadeia de
-     fallback) e o ImuReceiver de camera_mpu_fusion (ESP32, UDP 4210),
+     fallback) e o ImuReceiver de imu.py (ESP32, UDP 4210),
      publicando no estado thread-safe, a cada frame: a posicao 3D da mao
      (landmark 9 = centro da palma, metros no frame do Kinect), roll/pitch/yaw
      do ESP32, a geometria do BRACO (ombro/cotovelo/punho + angulos, com
@@ -103,7 +103,7 @@ from PySide6.QtWidgets import (QApplication, QLabel, QMainWindow, QWidget)
 from gpype.backend.core.io_node import IONode
 
 from gpype.common.constants import Constants
-from camera_mpu_fusion import ImuReceiver
+from imu import ImuReceiver
 
 try:
     import winsound
@@ -2737,6 +2737,11 @@ def parse_args():
                         help="Montagem de eletrodos (ex.: 'C3,Cz,C4,P3,P4').")
     parser.add_argument("--mao-dominante", default="",
                         help="Mao dominante declarada pelo participante.")
+    parser.add_argument("--pasta-sessoes", default="gravacoes",
+                        help="Onde gravar as sessoes (CSV de EEG, movimento "
+                             "e clipes). Aponte para OUTRO DISCO se quiser "
+                             "tirar os dados do OneDrive, ex.: "
+                             "'D:\\Mestrado_Dados\\gravacoes'.")
     parser.add_argument("--sem-questionario", action="store_true",
                         help="Nao pergunta os dados do participante no fim.")
     parser.add_argument("--sem-painel-impedancia", action="store_true",
@@ -2930,7 +2935,7 @@ def main():
         if pasta_sessoes:
             os.makedirs(pasta_sessoes, exist_ok=True)
     else:
-        pasta_sessoes = "gravacoes"
+        pasta_sessoes = args.pasta_sessoes
         os.makedirs(pasta_sessoes, exist_ok=True)
         csv_name = os.path.join(pasta_sessoes, f"gravacao_MEMI_{stamp}.csv")
     events_name = os.path.splitext(csv_name)[0] + "_eventos.json"

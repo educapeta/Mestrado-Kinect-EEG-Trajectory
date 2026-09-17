@@ -18,7 +18,8 @@ Pipeline de aquisição **offline** (ME/MI com 6 condições objeto×mão) e sis
 | Ground truth autônomo | `kinect_imu_groundtruth.py` | Ferramenta de calibração/diagnóstico standalone (uso pontual) |
 
 Biblioteca compartilhada: `kinect_imu_groundtruth.py` (stereo/triangulação, MediaPipe,
-IK de 2 elos `ArmLinkModel`, fusão IMU `PositionFusion`, esqueleto do SDK).
+IK de 2 elos `ArmLinkModel`, esqueleto do SDK) e **`imu.py`** (IMU do ESP32 por UDP +
+`PositionFusion` com zeragem — **fonte única**, importada pelo módulo do Kinect).
 Modelo: `sand_trajectory_model.py`.
 
 ## Instalação
@@ -77,23 +78,26 @@ mão auxiliar e **"LINK EEG PERDIDO"** se o amplificador parar de enviar amostra
 
 ```
 *.py                  programas e bibliotecas (rodam da raiz)
+imu.py                IMU do ESP32 (UDP) + PositionFusion: FONTE UNICA
 test_*.py             suites de teste (sem hardware)
 _smoke_*.py           testes ponta-a-ponta sintéticos
 _demo_trial.py        demo da plataforma gráfica com a webcam
 *.npz / *.json        calibrações: stereo_calibration_auxN, camera_alignment,
                       hand_landmark_calibration, arm_model, overlay_trim
 *.task / *.pt         modelos (MediaPipe e checkpoints do SAND)
-gravacoes/            sessoes gravadas (ignorado pelo git)
+gravacoes/            sessoes gravadas (ignorado pelo git; --pasta-sessoes)
 data/                 dados antigos/BCI IV e resultados de treino anteriores
 results/              saídas de execuções de teste
-docs/                 histórico de iterações, críticas, imagens de referência
+docs/                 histórico, críticas, imagens e MIGRACAO_FORA_DO_ONEDRIVE.md
 tools/                utilitários (indexar PDFs, analisar o log de overlay)
-legacy/               zip do código legado de classificação BCI (não usado)
+legacy/               zip do código legado (subir no Drive manualmente)
 ```
 
 Documento de referência do desenvolvimento: **`HISTORICO_ITERACOES.txt`**.
+Para tirar o projeto do OneDrive (dados em outro disco, `.venv` recriado):
+**`docs/MIGRACAO_FORA_DO_ONEDRIVE.md`**.
 
-## Dados gerados (por sessão, em `gravacoes/`)
+## Dados gerados (por sessão, em `gravacoes/` — mude com `--pasta-sessoes`)
 
 | Arquivo | Conteúdo |
 |---|---|

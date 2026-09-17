@@ -44,7 +44,7 @@ from gpype.backend.core.i_port import IPort
 
 import sand_trajectory_model as st
 import eeg_motor_paradigm as emp
-from camera_mpu_fusion import ImuReceiver
+from imu import ImuReceiver
 
 PORT_IN = gp.Constants.Defaults.PORT_IN
 PORT_OUT = gp.Constants.Defaults.PORT_OUT
