@@ -20,7 +20,7 @@ legado_*.zip
 
 # Saídas de diagnóstico temporárias
 _inv.txt
-_smoke*.txt
+_smoke*
 _aq*.txt
 _aq*.pid
 _dm*.txt
