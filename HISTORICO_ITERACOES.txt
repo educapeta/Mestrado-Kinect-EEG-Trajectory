@@ -259,6 +259,21 @@ RESULTADO
 - Decisao sobre a segunda coluna de marcador (Marker2) antes das 25 sessoes.
 - Google Drive: subir manualmente o zip do legado e os dados das sessoes.
 
+11. REPOSITORIO GIT (estado)
+--------------------------------------------------------------------------------
+- Repositorio local iniciado e commit unico desta sessao: 8b7db39
+  "Protocolo de aquisicao final: EEG cru, movimento separado, metadados, duas
+   maos, vigia e painel de impedancias" (34 arquivos versionados).
+- Ficam FORA do git (por .gitignore): .venv/, gravacoes/, data/, results/,
+  legacy/, gpype/ (clone de referencia), *.csv, *.avi, *.pt, __pycache__.
+  Vao no Drive/backup: os dados de sessao e o zip do legado.
+- Para publicar (passo manual, exige autenticacao do usuario):
+      git remote add origin https://github.com/<usuario>/<repo>.git
+      git branch -M main
+      git push -u origin main
+- A identidade local do commit ficou 'Educapeta <educapeta@users.noreply.github.com>';
+  ajuste com:  git config user.email "seu@email"
+
 ================================================================================
  FIM DO DOCUMENTO (atualizar ao final de cada sessao de desenvolvimento)
 ================================================================================
