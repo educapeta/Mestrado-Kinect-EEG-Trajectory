@@ -361,15 +361,27 @@ class Recording:
                 continue                                # alvo incompleto
             if valid_target.size and valid_target.mean() < self.ktt_valid_min:
                 continue                                # alvo sem medida real
+            # (C, T): `load_rows` devolve (T, C), mas o pipeline INTEIRO
+            # (CAR axis=1, z-score axis=2, modelo e o proprio caso vazio
+            # abaixo) usa (C, T). O `.T` que existia aqui trocava os eixos e
+            # fazia o treino receber "1000 canais x 1000 amostras" -- bug
+            # pego em 18/09/2026 gerando sessoes sinteticas para o piloto.
             filtered = np.asarray([scipy.signal.sosfiltfilt(sos, eeg[:, ch])
-                                   for ch in range(eeg.shape[1])]).T
+                                   for ch in range(eeg.shape[1])], np.float64)
             target = st.trajectory_resample(kt_target, self.output_seq_len)
             X.append(filtered)
             Y.append(target)
         if not X:
             return np.zeros((0, len(self.eeg_cols), self.window_n), np.float32), \
                    np.zeros((0, self.output_seq_len, 3), np.float32)
-        return (np.asarray(X, np.float32), np.asarray(Y, np.float32))
+        x_epocas = np.asarray(X, np.float32)
+        y_epocas = np.asarray(Y, np.float32)
+        esperado = (len(self.eeg_cols), self.window_n)
+        if x_epocas.shape[1:] != esperado:
+            raise ValueError(
+                f"janela com forma {x_epocas.shape[1:]} != (canais, amostras) "
+                f"{esperado}: eixo trocado no carregamento.")
+        return x_epocas, y_epocas
 
 
 def _to_float(text):

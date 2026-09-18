@@ -42,6 +42,15 @@ legacy/
 gravacoes/
 *_priming/
 
+
+# Piloto sintetico (sessoes ficticias, logs e checkpoints de teste)
+gravacoes_sinteticas/
+_textos_pdf/
+_*.log
+_*.err
+_*.pt
+_*.csv
+
 # Dataset WAY-EEG-GAL (5,4 GB) e caches binarios (.mat/.dat): NUNCA versionar
 WAY-EEG-GAL/
 *.mat

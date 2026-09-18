@@ -376,6 +376,119 @@ DUVIDAS REGISTRADAS PARA O ARTIGO
   (um `git add -A` tentou versionar os 5,4 GB; corrigido, e o `git gc
   --prune=now` devolveu o `.git` de 908 MB para 10,6 MB).
 
+14. SESSAO 2026-09-18 - 7 ARTIGOS, PILOTO SINTETICO E BUG DE EIXOS
+
+(a) LEITURA DOS 7 ARTIGOS (PDFs do Citavi) - a duvida da janela e o estado da arte
+- Ferramenta nova: `tools/analisa_pdfs_janelas.py` (PyMuPDF, ligaduras expandidas,
+  console UTF-8; modos: relatorio por categoria, `--digest`, `--texto-completo`).
+- SAND (Fu 2026) - a RESPOSTA: a entrada do modelo e' "T=960 x C=32" a 100 Hz =
+  9,6 s, ou seja o TRIAL INTEIRO. A frase "[2-3] s pos-estimulo" e' da ANALISE
+  TEMPO-FREQUENCIA (Fig. 2a), nao da entrada. Consequencias: o SAND e'
+  offline/trial-level (5-fold CV), gasta 2,27 s de inferencia por janela
+  (Tabela III) e usa P4 no dorso da mao = `kin[:,[21,25,29]]` (o nosso KT_*),
+  alem de uma base propria com Leap Motion. Ele NAO faz tempo real.
+- Tang 2024 (EMBC): janela causal [t-Dt, t] com Dt = 0,5/1/2/2,5 s a 100 Hz ->
+  2,5 s foi o MELHOR e 2 s foi ESCOLHIDO (custo). A nossa janela de 2 s esta
+  respaldada por terceiros.
+- Korik 2019 (Front. Neurorobot.): unico com controle ONLINE de MI (dois bracos
+  virtuais, 45% +- 5% vs 33% ao acaso); features de band power em janela de
+  250 ms (passo 8,33 ms), mLR/KRR e LATENCIA da janela otimizada.
+- M3T-Attention 2026: janela de 500 amostras (5 s a 100 Hz), strides 500..50;
+  na analise de RM usou o segmento de -0,5 s a +3,5 s (comeca ANTES do evento).
+- E2T 2026 (MI): trial inteiro de 8 s (4000 amostras a 500 Hz); sliding window
+  apenas para augmentacao.
+- MTRT 2023: reconstrucao de ombro/cotovelo/punho com RESTRICOES GEOMETRICAS do
+  membro (mesma ideia do nosso modelo de braco / cinematica inversa).
+- Revisao Wang 2023: MRCP (0,1-3 Hz negativo ANTES do movimento) e MTP-BCI
+  (posicao/velocidade/aceleracao a partir dos ultimos "time lags").
+- Consolidado em `docs/ESTADO_DA_ARTE_JANELAS.md` (tabela, citacoes, DOIs,
+  o que falta na literatura) e `docs/PRE_TREINO_WAY_EEG_GAL.md` (procedimento
+  exato do pre-treinamento, passo a passo, com o que ja existe x o que falta).
+
+(b) PILOTO SEM O g.NAUTILUS - ondas ficticias em formato real
+- `tools/gerar_sessao_sintetica.py` gera sessoes no formato EXATO do Programa 1:
+  `<stamp>.csv` (EEG cru), `<stamp>_movimento.csv` (30 Hz, 43 colunas),
+  `<stamp>_eventos.json` (amostra exata + mono_s + origem + meta) e
+  `<stamp>_participante.json`.
+- EEG: mu 10 Hz e beta 20 Hz com ERD ancorado no onset, MRCP (0,5-3 Hz negativo)
+  comecando 1,2 s ANTES do onset, ritmo de repouso, deriva lenta e ruido de 4 uV.
+  Desde 18/09 ha tambem `ganho_direcional`: os canais 9-16 modulam com o alvo em
+  X e os canais 17-24 com o alvo em Z (analogo grosseiro do ERD contralateral).
+  Com `--sem-direcao` o EEG carrega apenas o INSTANTE do movimento.
+- Movimento: trajetoria 3D minimo-jerk (alcance 0,45 s; pega/levanta 0,45 s;
+  segura 0,5 s; retorno 0,6 s), alvo aleatorio por trial e ONSET aleatorio entre
+  0,35 e 0,90 s apos a cue (jitter humano) + ruido de medida de ~1 mm.
+- Uso: `.venv\Scripts\python.exe tools\gerar_sessao_sintetica.py --sessoes 6
+  --trials 24 --out gravacoes_sinteticas` (6 sessoes = 144 trials, ~30 MB cada).
+- Aceito pelo treino na primeira tentativa: "24 eventos -> 24 validos" por sessao.
+- Tambem permite rodar o PARADIGMA sem hardware: `eeg_motor_paradigm.py
+  --source generator --sem-kinect --sem-questionario` (ondas senoidais + ruido).
+
+(c) BUG REAL DE EIXOS - encontrado pelo piloto e corrigido
+- Sintoma: `RuntimeError: Calculated padded input size per channel: (1). Kernel
+  size: (16)` e "Modelo: 1000 canais x 1000 amostras" (esperado 32 x 1000).
+- Causa: `Recording.build_epochs` fazia `np.asarray([...]).T` numa lista de 32
+  sinais de 1000 amostras -> janela (T, C) em vez de (C, T). Como
+  `load_all_epochs` usava `x.shape[1]` como numero de canais, o modelo recebia
+  1000 "canais" e o conv estourava.
+- Por que os 10 testes nao pegaram: o `--selftest` nao passa por CSV/JSON e
+  nenhum teste cobria o caminho de ARQUIVO - e nenhuma gravacao real foi treinada
+  depois da mudanca #1 (movimento em arquivo separado).
+- Correcao: removido o `.T` (a janela passa a (C, T), igual ao caso vazio
+  `(0, C, T)`) + guarda que levanta `ValueError` se a forma nao for
+  (canais, amostras) - falha explicita em vez de erro criptico no conv.
+- Teste de regressao novo: `test_treino_loader.py` (6 casos) -> gera sessoes
+  sinteticas, le pelo caminho de arquivo, confere X (12, 32, 1000),
+  Y (12, 30, 3), montagem, CAR+z-score, treino de 1 epoca, checkpoint lido pelo
+  `SandTrajectoryBCI` (wrapper do tempo real) e a diferenca entre alvo
+  concorrente e preditivo (0,1706 m). Resultado: TREINO_LOADER_OK 6/6.
+
+(d) TESTE A/B DAS DECISOES + BASELINE TRIVIAL (6 sessoes sinteticas x 24 trials,
+    validacao = 1 sessao, 20 epocas)
+- Versao 1 do gerador (alvos todos no mesmo lado; baseline medio muito forte):
+    cue concorrente   (778)             val 0,7275 | PCC 0,739/0,310/0,771
+    onset concorrente (795, -0,5 s)     val 0,5011 | PCC 0,863/0,488/0,866
+    onset preditivo   (alvo +1,5..2,5)  val 0,5049 | PCC 0,865/0,593/0,879
+    baseline do alvo medio (sem EEG):   0,892/0,762/0,922 ... 0,968/0,897/0,979
+  -> ancorar no onset melhorou x e z com a MESMA janela de 2 s (efeito do jitter
+     do tempo de reacao) -- MAS o modelo NAO superava o baseline trivial.
+- Versao 2 (atual): objetos distribuidos na mesa (alvos laterais bimodais) e
+  ganho_direcional no EEG (canais 9-16 = X, 17-24 = Z):
+    cue concorrente                      val 0,5546 | PCC 0,764/0,608/0,819
+    onset concorrente (-0,5 s)           val 0,6645 | PCC 0,767/0,475/0,742
+    onset preditivo (+1,5..2,5)          val 0,6957 | PCC 0,549/0,575/0,826
+    baseline: x -0,047 / -0,105 / -0,144 ; y 0,762/0,822/0,897 ; z 0,922/0,959/0,979
+  -> em X (unica dimensao codificada) o modelo faz 0,55-0,77 contra baseline ~0 =
+     DECODIFICACAO REAL; em Y e Z (nao codificados) fica abaixo do baseline, como
+     esperado (o correto seria convergir para a media). Na versao 2 o ganho da
+     ancoragem no onset ficou dentro do ruido (0,764 x 0,767): honesto e' dizer
+     que ela NAO piora e ajuda quando o jitter importa.
+- Armadilha registrada para a dissertacao: PCC 0,86 era BOM na versao 1 e RUIM na
+  versao 2 -- a leitura so' existe comparando com o baseline do alvo medio
+  (tools/compara_alvos.py, que reporta baseline + amplitude do alvo por eixo).
+
+(e) UTILITARIOS NOVOS DESTA SESSAO
+- tools/gerar_sessao_sintetica.py  piloto sem g.Nautilus (formato real + ERD/MRCP
+  + direcao do alvo + onset aleatorio)
+- tools/compara_alvos.py           baseline do alvo medio e amplitude por eixo
+- tools/analisa_pdfs_janelas.py    extracao dos PDFs (janela/alvo/pre-processamento)
+- test_treino_loader.py            regressao do caminho de arquivo (6 casos)
+- docs/ESTADO_DA_ARTE_JANELAS.md   estado da arte (7 artigos) + secoes 4 e 5
+- docs/PRE_TREINO_WAY_EEG_GAL.md   procedimento exato do pre-treinamento
+- .gitignore: gravacoes_sinteticas/, _textos_pdf/, _*.log, _*.err, _*.pt, _*.csv
+
+(f) PROXIMOS PASSOS (na ordem sugerida)
+1. sessao piloto com o g.Nautilus (ensaiar antes com --source generator
+   --sem-kinect); validar o limiar do MovementOnsetDetector no dado real
+   (planejado: tools/analisa_onset.py);
+2. decidir a janela (2 s @500 Hz hoje) e congelar `--target-start-sec`;
+3. implementar o pre-treinamento conforme docs/PRE_TREINO_WAY_EEG_GAL.md
+   (cache -> LOSO -> --init-from);
+4. ao reportar PCC, SEMPRE incluir o baseline do alvo medio da MESMA condicao.
+- PENDENCIA DE SEGURANCA: a chave da API DeepSeek colada no chat continua
+  exposta -- revogar.
+
+
 ================================================================================
  FIM DO DOCUMENTO (atualizar ao final de cada sessao de desenvolvimento)
 ================================================================================

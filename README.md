@@ -88,9 +88,17 @@ _demo_trial.py        demo da plataforma gráfica com a webcam
 gravacoes/            sessoes gravadas (ignorado pelo git; --pasta-sessoes)
 data/                 dados antigos/BCI IV e resultados de treino anteriores
 results/              saídas de execuções de teste
-docs/                 histórico, críticas, imagens e MIGRACAO_FORA_DO_ONEDRIVE.md
+docs/                 histórico, críticas e documentos de decisão
+                      (ESTADO_DA_ARTE_JANELAS.md, PRE_TREINO_WAY_EEG_GAL.md,
+                      ANALISE_PAPER_JANELA_ALVO_E_VIDEO.md,
+                      MIGRACAO_FORA_DO_ONEDRIVE.md, PUBLICAR_NO_GITHUB.md)
 tools/                utilitários e a ferramenta autônoma do Kinect
-                      (kinect_groundtruth_tool.py: calibração/diagnóstico)
+                      (kinect_groundtruth_tool.py: calibração/diagnóstico,
+                      gerar_sessao_sintetica.py: piloto sem hardware,
+                      compara_alvos.py: baseline do alvo medio,
+                      analisa_pdfs_janelas.py: extracao dos artigos,
+                      inventario_way_eeg_gal.py, publicar.ps1, limpeza_admin.ps1)
+gravacoes_sinteticas/ sessoes FICTICIAS do piloto (ignorado pelo git)
 legacy/               zip do código legado (subir no Drive manualmente)
 ```
 
@@ -149,6 +157,27 @@ Sem `--target-start-sec` o alvo é **concorrente** (descreve a própria janela);
 com ele, o alvo passa a ser a trajetória **futura** — e o checkpoint registra
 `target_concurrente`/`target_start_sec` para a análise.
 
+### Piloto sem hardware (ondas fictícias)
+
+Para ensaiar/validar o pipeline inteiro (formato dos arquivos, marcadores, janelas,
+alvos, treino, checkpoint, inferência) antes de ter o g.Nautilus em mãos:
+
+```powershell
+# sessões fictícias no formato real (CSV + _movimento.csv + _eventos.json)
+.venv\Scripts\python.exe tools\gerar_sessao_sintetica.py --sessoes 6 --trials 24
+# treino em cima delas (mesmos comandos do treino real, só muda --data)
+.venv\Scripts\python.exe sand_traj_treino.py --data gravacoes_sinteticas `
+       --event-code 795 --window-start-sec -0.5 --window-sec 2.0
+# baseline trivial (trajetória média, sem EEG): obrigatório para ler qualquer PCC
+.venv\Scripts\python.exe tools\compara_alvos.py --data gravacoes_sinteticas --max-sessoes 2
+```
+
+O EEG sintético traz ERD de mu/beta, MRCP 1,2 s antes do onset e um ganho por
+canal que codifica a lateralidade do alvo; o movimento é mínimo-jerk com onset
+aleatório 0,35–0,90 s após a cue. Para rodar o **paradigma** sem EEG/Kinect:
+`python eeg_motor_paradigm.py --source generator --sem-kinect --sem-questionario`.
+Resultados e limites declarados: `docs/ESTADO_DA_ARTE_JANELAS.md` (seção 5).
+
 ## Testes
 
 ```powershell
@@ -170,3 +199,5 @@ python _demo_trial.py       # demo da plataforma gráfica com a webcam
 | `test_hand_calib.py` | calibração 2D→2D da mão (sintética) |
 | `test_stereo_solve.py` | reparo da ordem dos cantos do tabuleiro no stereo |
 | `test_sand_traj.py` | rede/alvo/normalizador do SAND de trajetória |
+| `test_move_onset.py` | detector de início do movimento (`MovementOnsetDetector`) e coluna `KT_onset` |
+| `test_treino_loader.py` | leitura dos arquivos no treino: X (N, canais, amostras), montagem, CAR/z-score, 1 época, checkpoint + `SandTrajectoryBCI`, alvo concorrente × preditivo |
