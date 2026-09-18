@@ -63,9 +63,9 @@ Consequências diretas para o nosso projeto:
 | --- | --- | --- | --- | --- |
 | **SAND** (Fu et al., IEEE, 2026) | ME (grasp-and-lift, WAY-EEG-GAL) + base própria (bola→alvo, Leap Motion) | **T = 960 × C = 32 a 100 Hz = 9,6 s (trial inteiro)**; banda 0,1–40 Hz; ICA/ICLabel; min-max | trajetória 2D/3D (PCC); alinhamento por DTW | **não** — offline, 5-fold CV, 2,27 s por janela |
 | **Korik et al.** (Front. Neurorobot., 2019) | **MI** — imaginar trajetória 3D do braço para mover **dois braços virtuais** | **band power** em janela deslizante de **250 ms**, passo **8,33 ms** (mu 8–12, low beta 12–18, high beta, low gamma); regressão mLR/KRR | trajetória 3D imaginada → classificação do alvo alcançado | **SIM — controle online com MI; referência mais próxima do nosso objetivo** (acurácia 45 % ± 5 % vs 33,3 % ao acaso) |
-| **Tang et al.** (EMBC, 2024) | pega contínua (grasp) | **janela causal [t−Δt, t]**; Δt testado **0,5 / 1 / 2 / 2,5 s** a **100 Hz** | posições das juntas (mão/dedos), R e regressão linear + redes | **sim** (causal, "the corresponding EEG period within [t−Δt, t] is extracted as the feature window") |
-| **E2T** (Kwon et al., IEEE TNSRE, 2026) | **MI** (imaginação) | **trial inteiro de 8 s = 4 000 amostras a 500 Hz** ("covering the entire movement epoch from 0 to 8 seconds"); *sliding window* só para **augmentação** (+ ruído gaussiano) | velocidade → trajetória 3D (fully-DoF) | treino offline |
-| **MTRT** (Wang et al., IEEE TNSRE, 2023) | ME (linguagem de sinais chinesa) | reconstrução por *transformer* com **restrições geométricas** do membro ("human upper limb bone geometry properties as reconstruction constraints") | trajetória de **ombro, cotovelo e punho** | offline |
+| **Tang et al.** (EMBC, 2024) | pega contínua (grasp), **ambas as mãos**, 20 sujeitos | **janela causal [t−Δt, t]**: em cada amostra da luva no instante `t` o vetor de entrada é o EEG dos últimos Δt s; Δt testado **0,5 / 1 / 2 / 2,5 s** a **100 Hz** | 8 juntas PIP/DIP dos dedos (polegar fora) | treino **offline** (SGD/MSE); a formulação causal *permite* online, mas não há teste em tempo real |
+| **E2T** (Kwon et al., IEEE TNSRE, 2026) | **MI** e ME (mesma base) | trial de 8 s = 4 000 amostras a 500 Hz, mas **a entrada é uma janela de 3 s (1 500 amostras) com passo de 0,5 s (250 amostras) DENTRO de cada trial** — augmentação + continuidade temporal | velocidade quadro-a-quadro → integrada em trajetória 3D | **offline** (leave-one-task-out, NRMSE); sem teste online nem robô |
+| **MTRT** (Wang et al., IEEE TNSRE, 2023) | ME (linguagem de sinais chinesa, **ambos os braços**) | transformer sobre EEG; **restrições geométricas só na função de perda** (não na arquitetura nem na inferência) | trajetória de **ombro, cotovelo e punho** | offline |
 | **M3T-Attention** (Zhu et al., Cogn. Neurodyn., 2026) | ME (trajetória 3D da mão) | **500 amostras a 100 Hz = 5 s** (C = 18 canais; FIR 0,5–12 Hz; min-max); *strides* testados **500, 400, 300, 250, 200, 100 e 50** amostras | trajetória 3D de saída com 5 s | offline (sliding window para augmentação/continuidade) |
 | **Wang et al. (revisão)** (Front. Neurosci., 2023) | revisão de reconstrução de trajetória | vários (ex.: 2 400 amostras); discute **MRCP** e o MTP-BCI ("predict the current motion state, such as position, speed, acceleration ... from the EEG characteristics of the **last several time lags**") | posição/velocidade/aceleração | revisão |
 
@@ -121,6 +121,85 @@ Três evidências independentes:
 | Alvo | mesma janela (concorrente) ou trial inteiro | **concorrente (diagnóstico) + preditivo (+1,5 a +2,5 s)** |
 | Online | minoria (Korik 2019, Tang 2024) | **objetivo do projeto** (`sand_traj_tempo_real.py`) |
 | Ground truth | sensor inercial/óptico (P4, Leap Motion) | **Kinect + MediaPipe + fusão IMU/MPU6050** |
+### 2.4 Verificações feitas no texto integral (dúvidas levantadas em 18/09)
+
+**(a) SAND — os "2,27 s" NÃO são uma janela; são o TEMPO DE INFERÊNCIA.**
+Transcrição: "Furthermore, FFT-Attention accelerates **inference time to 2.27
+seconds**, down from 43.68 seconds." e a Tabela III tem as colunas
+"Parameters | **Runtime** | ... 2.27 s ... 43.68 s". Ou seja: a janela é
+**T = 960 × 32 @ 100 Hz = 9,6 s** e o modelo leva **2,27 s de CPU/GPU para
+produzir a previsão de uma janela**. É exatamente isso que impede o uso em
+tempo real: um atraso de 2,27 s por previsão num controle de prótese é inviável
+(e o trial inteiro tem 9,43 s). Nós medimos **6–10 ms** por janela de 2 s em CPU.
+
+**(b) Tang 2024 — NÃO ancorou antes do movimento: a janela é causal para trás.**
+Transcrição: "To construct a feature window, **every sample point of the glove
+data at time t is extracted as a pivot point**. Then, the corresponding EEG
+period within **[t − Δt, t]** is extracted as the feature window, where Δt is
+the predetermined window length."
+Leitura: a janela **termina no instante `t`** e olha só para o passado — é um
+formato de *streaming* (por isso "permite" online), mas **não** é uma janela de
+planejamento motor. No instante em que a pega começa, a janela ainda contém
+sobretudo repouso; perto do movimento ela contém pré-movimento **de forma
+desalinhada** (mesmo problema de jitter que a nossa âncora de onset resolve).
+O protocolo deles também não tem cue por movimento: "Every trial began with a
+**10-second rest period**, followed by a **10-second motor execution task
+phase** ... a **metronome cue** ... **5-7 grasps** ... Each grasp last for
+**2 ± 0,5 seconds**" (20 sujeitos, 64 canais a 1000 Hz, luvas MANUS Prime II a
+54 Hz, 0,5–20 Hz, reamostrado a 100 Hz, ICA; alvo = 8 juntas PIP/DIP, polegar
+fora). O treino é **offline** ("The training of neural networks is conducted
+offline ... minimizing the mean squared error loss").
+
+**(c) E2T 2026 — entrada de 3 s, avaliação offline; não há controle de prótese.**
+Transcrição: "overlapping subwindows of length **L (1500 samples)** are extracted
+with a stride **S (250 samples)** ... each segment preserves temporal continuity
+over a **3-second window**" (dentro do trial de 8 s = 4000 amostras a 500 Hz).
+E a avaliação: "**leave-one-task-out** cross-validation strategy was employed".
+O "real-time" aparece só como **afirmação de potencial** ("enabling real-time
+trajectory prediction", "feasibility for real-world deployment in assistive
+neuroprosthetic systems with a reduced calibration session") — **não** há
+experimento online, nem robô, nem voluntário em malha fechada. Detalhe muito
+relevante para nós: eles usaram **Kinect v2 a 30 Hz** como ground truth e
+**interpolaram linearmente para 500 Hz** para casar com o EEG ("due to the
+Kinect's limited frame rate of 30 Hz, the raw kinematic data lacked sufficient
+temporal resolution... linear interpolation was applied to reconstruct hand
+trajectories at 500 Hz").
+
+**(d) MTRT 2023 — a restrição geométrica é SÓ na função de perda.**
+Transcrição: "The geometric constraints of skeleton points are **only used as
+loss functions to train the model, not as data**. When the training of the model
+is completed, the model can be **directly used** to reconstruct the motion
+trajectory of EEG data."
+Como é feita: os comprimentos de braço são tratados como **constantes**
+("The spatial distances between the shoulder joint point and the elbow joint
+point, the elbow joint point and the wrist joint point are set as **constants L1
+and L2** in the whole movement process") e, como eles gravam **os dois braços**,
+impõem simetria ("L1_left = L1_right, L2_left = L2_right"). Duas perdas:
+
+| Nome | Fórmula (conceito) | O que garante |
+| --- | --- | --- |
+| **L_DCL** (limb distance change-less loss) | média de (len′ᵢ − lenᵢ)² | que o comprimento de braço **previsto** seja igual ao real |
+| **L_RDE** (left-right distance equal) | (L1_left − L1_right)² + (L2_left − L2_right)² | que os dois braços tenham comprimentos **iguais** entre si |
+
+Perda final: **TRL = MSE + 1/(2σ₁²)·L_DCL + 1/(2σ₂²)·L_RDE + 1/(2σ₃²)·MSE(σ₃)**
+— os pesos `1/(2σ²)` são aprendidos (formulação de incerteza multi-tarefa de
+Kendall), ou seja, o modelo **descobre sozinho** quanto pesar a geometria.
+
+Comparação direta com o nosso projeto: o MTRT usa a geometria do membro como
+**restrição suave (perda)**; nós usamos como **modelo rígido** (`ArmLinkModel`,
+cinemática inversa de 2 elos, profundidade somada do Kinect + IMU). São
+estratégias complementares — e a nossa é verificável por construção, enquanto a
+deles depende de o treino respeitar a restrição.
+
+**(e) Sobre os 3 artigos "preditivos" e a frase de tempo real.** Nenhum dos sete
+trabalhos demonstra controle online: SAND e E2T fazem *trial-level* com métricas
+offline (PCC/NRMSE), M3T usa janela deslizante mas para augmentação/continuidade
+dentro de dados gravados, e só Korik 2019 (MI, 2 braços virtuais, 45 % vs 33 %)
+e Tang 2024 (janela causal, treino offline) descrevem algo compatível com
+streaming. Isto é importante para a dissertação: **o diferencial online do nosso
+sistema não tem concorrente direto na lista** — o mais próximo é Korik.
+
+
 ## 3. Como citar (DOIs)
 
 - Fu, R.; Fang, Y.; Xu, F.; Hua, C.; Hua, C. **SAND: Spectral-Attention Neural
