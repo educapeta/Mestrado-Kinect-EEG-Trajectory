@@ -60,7 +60,6 @@ if ($LASTEXITCODE -ne 0) { Write-Host 'falha no git add' -ForegroundColor Red; e
 git commit -m $Mensagem
 if ($LASTEXITCODE -ne 0) { Write-Host 'falha no git commit' -ForegroundColor Red; exit 1 }
 
-# 4) push
 if ($SemPublicar) {
     Write-Host 'Commit feito localmente (-SemPublicar: nada foi enviado ao GitHub).' -ForegroundColor Yellow
     exit 0
@@ -70,6 +69,22 @@ if (-not (git remote)) {
     Write-Host '  git remote add origin https://github.com/educapeta/Mestrado-Kinect-EEG-Trajectory.git'
     exit 1
 }
+
+# 4) integrar o que houver no GitHub ANTES de enviar
+#    (acontece quando voce edita um arquivo pelo site do GitHub: o remoto fica
+#    "na frente" e o push seria recusado com "fetch first")
+$branch = (git rev-parse --abbrev-ref HEAD).Trim()
+Write-Host "--- integrando o que estiver no GitHub (git pull --rebase origin $branch) ---" -ForegroundColor Cyan
+git pull --rebase origin $branch
+if ($LASTEXITCODE -ne 0) {
+    Write-Host 'CONFLITO ao integrar as mudancas do GitHub: o rebase foi cancelado.' -ForegroundColor Red
+    Write-Host 'Nada foi publicado. Seu commit esta salvo localmente; resolva o conflito' -ForegroundColor Red
+    Write-Host '(ou me chame) e rode o script de novo.' -ForegroundColor Red
+    git rebase --abort
+    exit 1
+}
+
+# 5) push
 git push
 if ($LASTEXITCODE -eq 0) {
     Write-Host 'Publicado no GitHub com sucesso.' -ForegroundColor Green

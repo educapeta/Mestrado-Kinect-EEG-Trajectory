@@ -85,7 +85,45 @@ os 2 modelos `.task` (7,5 + 5,5 MB; garantem que o clone funcione offline).
 Verificado antes de publicar: **nenhuma chave de API** e **nenhum dado de
 participante** está versionado.
 
-## 4. Cuidados que valem para sempre
+## 4. Atualizando depois (um comando: `tools/publicar.ps1`)
+
+```powershell
+cd C:\Mestradopy
+powershell -ExecutionPolicy Bypass -File tools\publicar.ps1 "descreva a mudanca em uma linha"
+```
+
+> O `-ExecutionPolicy Bypass` é necessário porque o Windows está com a política
+> **Restricted** (bloqueia scripts). Se preferir, rode **uma vez**
+> `Set-ExecutionPolicy -Scope CurrentUser RemoteSigned` e depois use só
+> `.\tools\publicar.ps1 "mensagem"`.
+
+O script faz, em ordem:
+1. mostra o que mudou desde o último commit;
+2. **bloqueia** se algum arquivo novo passar de 50 MB (protege contra subir dado
+   de sessão por engano);
+3. `git add -A` + `git commit -m "mensagem"`;
+4. `git pull --rebase` (integra o que você editou **pelo site do GitHub**) e
+   `git push`.
+
+Se houver conflito, ele **cancela tudo** e avisa — nada é perdido: o commit fica
+salvo localmente.
+
+### "Editei algo pelo site do GitHub e agora o push é recusado"
+Isso é normal: o repositório remoto ficou "na frente" do seu computador
+(`rejected ... fetch first`). A correção é integrar antes de enviar:
+
+```powershell
+git pull --rebase origin main
+git push
+```
+
+O script acima já faz isso sozinho.
+
+### Pelo VS Code (sem terminal)
+Aba **Source Control** (Ctrl+Shift+G) → escreva a mensagem → **Commit** →
+**Sync Changes**.
+
+## 5. Cuidados que valem para sempre
 
 1. **Nunca** commite chave de API/token (DeepSeek, Cline, etc.). Se colar uma em
    um arquivo e commitar, ela fica no histórico — teria que reescrever o
