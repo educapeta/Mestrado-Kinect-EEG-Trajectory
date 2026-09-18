@@ -44,7 +44,8 @@ from gpype.backend.core.i_port import IPort
 
 import sand_trajectory_model as st
 import eeg_motor_paradigm as emp
-from imu import ImuReceiver
+from imu import (ImuReceiver, KalmanTrajectory, accel_no_referencial,
+                 integra_velocidade)
 
 PORT_IN = gp.Constants.Defaults.PORT_IN
 PORT_OUT = gp.Constants.Defaults.PORT_OUT
@@ -105,7 +106,7 @@ class SANDTrajWindowNode(INode):
     """
 
     def __init__(self, sand, state, interval_s=0.5, logger=None,
-                 tag="SAND-TRAJ", **kwargs):
+                 tag="SAND-TRAJ", imu=None, **kwargs):
         super().__init__(input_ports=[IPort.Configuration()], **kwargs)
         self._sand = sand
         self._state = state
@@ -113,6 +114,20 @@ class SANDTrajWindowNode(INode):
         self._logger = logger
         self._tag = tag
         self._window = int(sand.n_timesteps)
+        self._imu = imu
+        self._kalman = None
+        self._dt_grade = 1.0
+        if str(sand.cfg.get("alvo", "posicao")) == "velocidade":
+            # Alvo em m/s: a posicao vem da integracao ancorada pelo filtro de
+            # Kalman, que tambem usa a ACELERACAO do MPU6050 (medida direta da
+            # derivada segunda: evita o crescimento quadratico do erro).
+            self._kalman = KalmanTrajectory()
+            inicio = float(sand.cfg.get("target_start_sec", 0.0))
+            fim = float(sand.cfg.get("target_end_sec",
+                                     inicio + float(sand.cfg.get("window_sec",
+                                                                 2.0))))
+            pontos = max(int(sand.cfg.get("output_seq_len", 30)) - 1, 1)
+            self._dt_grade = max((fim - inicio) / pontos, 1e-3)
         self._buffer = None
         self._counter = 0
         self._next_at = None
@@ -140,7 +155,10 @@ class SANDTrajWindowNode(INode):
         self._worker.start()
         print(f"[{self._tag}] janela {self._window} amostras "
               f"({self._window / fs:.2f} s) a cada {self._interval_s:g} s "
-              "(inferencia assincrona)", flush=True)
+              "(inferencia assincrona)"
+              + (f" | alvo em VELOCIDADE (m/s): filtro de Kalman + aceleracao "
+                 f"do IMU, grade {self._dt_grade * 1e3:.0f} ms"
+                 if self._kalman is not None else ""), flush=True)
         return super().setup(data, port_context_in)
 
     def step(self, data):
@@ -179,17 +197,29 @@ class SANDTrajWindowNode(INode):
                     traj_time=time.monotonic())
                 continue
             elapsed = time.perf_counter() - started
+            if self._kalman is not None:
+                # Alvo em m/s -> converte para POSICAO (integracao + Kalman) e
+                # recalcula "quanto movimento" na mesma unidade (metros) do alvo
+                # de posicao, para o log/CSV continuarem comparaveis.
+                trajectory = self._posicao_da_predicao(trajectory)
+                movement = float(np.std(np.asarray(trajectory), axis=0).mean())
             span = float(np.linalg.norm(trajectory[-1] - trajectory[0]))
             self._state.publish_motion(
                 traj=np.asarray(trajectory, np.float64),
                 traj_valid=1, traj_move=float(movement),
                 traj_span=span, traj_time=time.monotonic())
             origin = self._origin_vector()
+            extra = ""
+            if self._kalman is not None:
+                posicao = self._kalman.position
+                extra = (f" | KF pos=({posicao[0]:+.3f},{posicao[1]:+.3f},"
+                         f"{posicao[2]:+.3f}) "
+                         f"bias={np.abs(self._kalman.bias).max():.3f} m/s^2")
             print(f"[{self._tag}] mov={movement:.3f} m extensao={span:.3f} m "
                   f"| p0=({trajectory[0][0]:+.2f},{trajectory[0][1]:+.2f},"
                   f"{trajectory[0][2]:+.2f}) pN=({trajectory[-1][0]:+.2f},"
                   f"{trajectory[-1][1]:+.2f},{trajectory[-1][2]:+.2f}) "
-                  f"[{elapsed * 1e3:.0f} ms]", flush=True)
+                  f"{extra}[{elapsed * 1e3:.0f} ms]", flush=True)
             if self._logger:
                 self._logger.log(movement, span, trajectory, origin, elapsed)
 
@@ -198,6 +228,42 @@ class SANDTrajWindowNode(INode):
             if self._state.origin_ready and self._state.origin_xyz is not None:
                 return np.asarray(self._state.origin_xyz, np.float64)
         return np.zeros(3, np.float64)
+
+    def _posicao_medida(self):
+        """Punho medido (m) no referencial da origem, ou None se indisponivel.
+
+        `state.motion["x/y/z"]` estao em camera space ABSOLUTO; subtraimos a
+        origem para ficar na MESMA referencia do alvo do modelo.
+        """
+        with self._state.lock:
+            motion = dict(self._state.motion)
+        valores = [motion.get("x"), motion.get("y"), motion.get("z")]
+        if any(valor is None for valor in valores):
+            return None
+        valores = np.asarray(valores, np.float64)
+        if not np.isfinite(valores).all():
+            return None
+        return valores - self._origin_vector()
+
+    def _posicao_da_predicao(self, trajectory):
+        """Saida do modelo -> trajetoria de POSICAO (m) para overlay/log/CSV.
+
+        Com alvo de POSICAO devolve o proprio resultado. Com alvo de VELOCIDADE
+        (m/s) integra a velocidade a partir da posicao do filtro de Kalman, que
+        funde: aceleracao medida (MPU6050), velocidade decodificada (EEG) e a
+        posicao do punho vista pelo Kinect (ancora lenta).
+        """
+        velocidade = np.asarray(trajectory, np.float64)
+        if self._kalman is None:
+            return velocidade
+        amostra = self._imu.get_latest() if self._imu is not None else None
+        aceleracao = accel_no_referencial(amostra)
+        medida = self._posicao_medida()
+        posicao = self._kalman.step(accel_m_s2=aceleracao,
+                                    velocidade_m_s=velocidade[-1],
+                                    posicao_m=medida)
+        return integra_velocidade(velocidade, self._dt_grade,
+                                  posicao_inicial=posicao)
 
     def stop(self):
         self._stop_worker.set()
@@ -363,13 +429,19 @@ def main():
         f_lo=float(sand.cfg.get("f_lo", st.DEFAULT_F_LO)),
         f_hi=float(sand.cfg.get("f_hi", st.DEFAULT_F_HI)))
     pipeline.connect(source, bandpass)
+    #: UM unico ImuReceiver para o processo inteiro: o no' de inferencia (filtro de
+    #: Kalman da trajetoria) e o rastreador do Kinect leem a MESMA amostra. Antes
+    #: o receiver era criado dentro do TrackingThread e nunca recebia start() --
+    #: em modo headless o IMU ficava morto e a zeragem nunca acontecia.
+    imu = ImuReceiver(4210)
+    imu.start()
     pipeline.connect(bandpass, SANDTrajWindowNode(
-        sand, state, interval_s=args.interval, logger=logger))
+        sand, state, interval_s=args.interval, logger=logger, imu=imu))
 
     tracking = None
     if not headless:
         tracking = emp.TrackingThread(
-            state, ImuReceiver(4210), with_kinect=not args.sem_kinect,
+            state, imu, with_kinect=not args.sem_kinect,
             use_ik=False,
             aux_indices=tuple(
                 int(index) for index in

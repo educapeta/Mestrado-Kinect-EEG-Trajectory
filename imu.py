@@ -288,3 +288,202 @@ class PositionFusion:
             if self._camera_lost_frames > 3:
                 self._camera_window = []        # janela velha nao vale
         return self.position.copy()
+
+
+# =============================================================================
+# Fundir a VELOCIDADE decodificada da EEG com a ACELERACAO do MPU6050
+# =============================================================================
+def accel_no_referencial(sample, bias_g=None, up_axis=UP_AXIS,
+                         gravity=GRAVITY_MPS2):
+    """Aceleracao do IMU em m/s^2, rodada para o referencial da ORIGEM.
+
+    Mesma convencao do `PositionFusion`: subtrai o bias (em g), converte para
+    m/s^2, roda pela atitude medida (roll/pitch/yaw) e remove a gravidade no eixo
+    vertical da origem (`up_axis`). Sem amostra devolve `None`.
+    """
+    if sample is None:
+        return None
+    bias = np.zeros(3) if bias_g is None else np.asarray(bias_g, np.float64)
+    accel = rotation_matrix(sample.roll_deg, sample.pitch_deg, sample.yaw_deg) \
+        @ ((np.asarray(sample.accel_g, np.float64) - bias) * gravity)
+    accel[up_axis] -= gravity
+    return accel
+
+
+def integra_velocidade(velocidade, dt_s, posicao_inicial=None):
+    """Posicoes (T, 3) por integracao TRAPEZOIDAL de uma velocidade (T, 3).
+
+    Usada para desenhar a trajetoria prevista quando o modelo devolve m/s
+    (`--alvo velocidade`): a posicao vem da integral da velocidade, e o filtro de
+    Kalman (`KalmanTrajectory`) e' quem ancora essa integracao.
+    """
+    velocidade = np.asarray(velocidade, np.float64)
+    if velocidade.ndim != 2 or velocidade.shape[1] != 3:
+        raise ValueError(f"velocidade precisa ser (T, 3); veio "
+                         f"{velocidade.shape}")
+    if not np.isfinite(dt_s) or float(dt_s) <= 0:
+        raise ValueError(f"intervalo entre amostras invalido: {dt_s}")
+    inicio = (np.zeros(3, np.float64) if posicao_inicial is None
+              else np.asarray(posicao_inicial, np.float64).reshape(3))
+    if velocidade.shape[0] == 1:
+        return inicio.reshape(1, 3).copy()
+    passos = 0.5 * (velocidade[1:] + velocidade[:-1]) * float(dt_s)
+    return np.vstack([inicio.reshape(1, 3),
+                      inicio.reshape(1, 3) + np.cumsum(passos, axis=0)])
+
+
+class KalmanTrajectory:
+    """Filtro de Kalman (3 estados por eixo) para a posicao do punho.
+
+    Estado por eixo: ``[posicao (m), velocidade (m/s), bias de aceleracao]``.
+
+    - **predicao**: modelo de aceleracao constante, com a aceleracao **medida**
+      pelo MPU6050 como entrada de controle (descontado o bias estimado);
+    - **medidas**: a velocidade **decodificada da EEG** (a cada inferencia) e,
+      opcionalmente, a posicao do Kinect/cameras como ancora lenta.
+
+    Por que nao integrar a aceleracao direto (o argumento do erro quadratico):
+    integrar duas vezes faz o erro de posicao crescer com ``t^2`` e explodir com
+    o bias do acelerometro -- 1 cm/s^2 de bias da' 2 cm em 2 s e 50 cm em 10 s.
+    Com o filtro o bias entra no ESTADO (e' estimado) e a velocidade da EEG
+    ancora a integracao, deixando o erro **limitado**.
+    """
+
+    def __init__(self, sigma_accel=0.5, sigma_bias=0.02, sigma_vel_eeg=0.25,
+                 sigma_pos_camera=0.02, up_axis=UP_AXIS):
+        self.sigma_accel = float(sigma_accel)
+        self.sigma_bias = float(sigma_bias)
+        self.sigma_vel_eeg = float(sigma_vel_eeg)
+        self.sigma_pos_camera = float(sigma_pos_camera)
+        self.up_axis = int(up_axis)
+        self._x = None
+        self._P = None
+        self._ultima_accel = None
+        self._ultimo = None
+        self.reset()
+
+    def reset(self, position=None, velocity=None, bias=None):
+        """Reinicia o estado (zeragem do IMU, novo trial, perda de medida)."""
+        inicio = np.zeros(3, np.float64) if position is None \
+            else np.asarray(position, np.float64).reshape(3)
+        velocidade = np.zeros(3, np.float64) if velocity is None \
+            else np.asarray(velocity, np.float64).reshape(3)
+        bias = np.zeros(3, np.float64) if bias is None \
+            else np.asarray(bias, np.float64).reshape(3)
+        self._x = [np.array([inicio[eixo], velocidade[eixo], bias[eixo]])
+                   for eixo in range(3)]
+        #: Covariancia inicial: posicao incerta (quem mostra e' o modelo),
+        #: velocidade e bias razoavelmente confiaveis.
+        self._P = [np.diag([1.0, 0.5 ** 2, 0.2 ** 2]) for _ in range(3)]
+        self._ultimo = None
+        return self.position
+
+    # ------------------------------------------------------------- matrizes
+    def _transicao(self, dt):
+        return np.array([[1.0, dt, -0.5 * dt * dt],
+                         [0.0, 1.0, -dt],
+                         [0.0, 0.0, 1.0]])
+
+    def _ruido(self, dt):
+        """Q = B*sigma_accel^2*B^T + diag(0, 0, sigma_bias^2).
+
+        O primeiro termo vem da incerteza da aceleracao medida (entra pelo vetor
+        de controle B); o segundo permite que o bias estime lentamente.
+        """
+        vetor = np.array([0.5 * dt * dt, dt, 0.0]) * self.sigma_accel
+        return np.outer(vetor, vetor) \
+            + np.diag([0.0, 0.0, self.sigma_bias ** 2])
+
+    def _corrige(self, eixo, linha, medida, variancia):
+        x = self._x[eixo]
+        P = self._P[eixo]
+        S = float(linha @ P @ linha) + float(variancia)
+        if not np.isfinite(S) or S <= 0:
+            return
+        ganho = (P @ linha) / S
+        self._x[eixo] = x + ganho * (float(medida) - float(linha @ x))
+        self._P[eixo] = (np.eye(3) - np.outer(ganho, linha)) @ P
+
+
+    # ---------------------------------------------------------------- passo
+    def step(self, dt_s=None, accel_m_s2=None, velocidade_m_s=None,
+             posicao_m=None):
+        """Avanca o filtro. `dt_s=None` usa o relogio entre chamadas.
+
+        `accel_m_s2` (3,) aceleracao medida (m/s^2, referencial da origem);
+        `velocidade_m_s` (3,) medicao decodificada da EEG; `posicao_m` (3,)
+        ancora lenta (Kinect/cameras). Devolve a posicao filtrada (3,).
+        """
+        agora = time.monotonic()
+        if dt_s is None:
+            dt_s = 0.0 if self._ultimo is None else (agora - self._ultimo)
+        self._ultimo = agora
+        dt = float(np.clip(dt_s, 1e-3, 0.5))
+        controle = (np.zeros(3, np.float64) if accel_m_s2 is None
+                    else np.asarray(accel_m_s2, np.float64).reshape(3))
+        self._ultima_accel = controle
+        F = self._transicao(dt)
+        B = np.array([0.5 * dt * dt, dt, 0.0])
+        Q = self._ruido(dt)
+        for eixo in range(3):
+            self._x[eixo] = F @ self._x[eixo] + B * controle[eixo]
+            self._P[eixo] = F @ self._P[eixo] @ F.T + Q
+        if velocidade_m_s is not None:
+            velocidade = np.asarray(velocidade_m_s, np.float64).reshape(3)
+            linha = np.array([0.0, 1.0, 0.0])
+            for eixo in range(3):
+                if np.isfinite(velocidade[eixo]):
+                    self._corrige(eixo, linha, velocidade[eixo],
+                                  self.sigma_vel_eeg ** 2)
+        if posicao_m is not None:
+            posicao = np.asarray(posicao_m, np.float64).reshape(3)
+            linha = np.array([1.0, 0.0, 0.0])
+            for eixo in range(3):
+                if np.isfinite(posicao[eixo]):
+                    self._corrige(eixo, linha, posicao[eixo],
+                                  self.sigma_pos_camera ** 2)
+        return self.position
+
+    # ------------------------------------------------------------ consultas
+    def _estado(self, indice):
+        return np.array([self._x[eixo][indice] for eixo in range(3)])
+
+    @property
+    def position(self):
+        return self._estado(0)
+
+    @property
+    def velocity(self):
+        return self._estado(1)
+
+    @property
+    def bias(self):
+        return self._estado(2)
+
+    @property
+    def acceleration_est(self):
+        """Aceleracao estimada atual: ultimo controle medido MENOS o bias."""
+        if self._ultima_accel is None:
+            return -self._estado(2)
+        return self._ultima_accel - self._estado(2)
+
+    def predizer(self, horizonte_s, passos=10):
+        """Trajetoria futura (passos, 3) com a aceleracao estimada atual.
+
+        Serve para desenhar a trajetoria prevista a frente do instante atual no
+        overlay. Com aceleracao estimada nula e' uma reta (velocidade constante).
+        """
+        passos = max(2, int(passos))
+        horizonte = float(horizonte_s)
+        if horizonte <= 0:
+            raise ValueError(f"horizonte invalido: {horizonte_s}")
+        aceleracao = self.acceleration_est
+        posicao, velocidade = self.position, self.velocity
+        return np.array([posicao + velocidade * t + 0.5 * aceleracao * t * t
+                         for t in np.linspace(0.0, horizonte, passos)])
+
+
+# =============================================================================
+# imu.py -- IMU do ESP32 por UDP, fusao por zeragem (PositionFusion) e filtro de
+# Kalman de trajetoria (velocidade da EEG + aceleracao do MPU6050).
+# =============================================================================

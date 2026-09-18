@@ -635,6 +635,55 @@ DUVIDAS REGISTRADAS PARA O ARTIGO
 6. fechar com o orientador o novo comprimento do home e da pausa.
 
 
+17. SESSAO 2026-09-18 (parte 4) - FILTRO DE KALMAN (velocidade EEG + aceleracao)
+
+(a) IMPLEMENTADO em imu.py (fonte unica do IMU)
+- `accel_no_referencial(sample, bias_g)`: aceleracao em m/s^2 rodada para o
+  referencial da origem (mesma convencao do PositionFusion: bias em g, rotacao
+  pela atitude, gravidade removida no eixo UP_AXIS).
+- `integra_velocidade(velocidade (T,3), dt, posicao_inicial)`: integral
+  trapezoidal -> posicoes (T,3). E' o que transforma a saida do modelo (m/s) em
+  trajetoria para o overlay.
+- `KalmanTrajectory`: 3 estados por eixo [posicao, velocidade, BIAS de
+  aceleracao]; predicao por aceleracao constante com a aceleracao do MPU6050
+  como ENTRADA DE CONTROLE; medidas = velocidade decodificada da EEG (a cada
+  inferencia) + posicao do punho vista pelo Kinect (ancora lenta, opcional).
+  Propriedades position/velocity/bias/acceleration_est e predizer(horizonte).
+- Por que assim (o argumento do erro quadratico, medido no teste): com 5 cm/s^2
+  de bias do acelerometro, a integracao dupla da' 10 cm de erro em 2 s e 2,50 m
+  em 10 s (x25 do erro ao quintuplicar o tempo = t^2); com o filtro + velocidade
+  da EEG: 5,8 cm em 10 s = 43x menor, e o bias foi estimado (0,052 vs 0,05).
+  Suavizacao da velocidade: RMSE 0,096 -> 0,019 m/s (5,1x). Hold (punho parado
+  com medidas zero): desvio de 6 mm em 10 s (sem deriva).
+- Teste: test_kalman_trajectory.py -> KALMAN_TRAJ_OK 8/8.
+
+(b) LIGADO NO TEMPO REAL (sand_traj_tempo_real.py)
+- O no' de inferencia detecta `alvo == "velocidade"` no checkpoint, cria o
+  filtro, le a aceleracao do ImuReceiver, usa a ULTIMA velocidade prevista como
+  medida e a posicao do punho (Kinect, referencial da origem) como ancora lenta;
+  entrega ao overlay/log a trajetoria ja' em METROS (integrada + filtrada) e
+  recalcula o "quanto movimento" (traj_move) em metros, para o log/CSV
+  continuarem comparaveis com a formulacao de posicao.
+- O log ganhou `| KF pos=(x,y,z) bias=... m/s^2`.
+- BUG CORRIGIDO DE LAMBUJA: o ImuReceiver era criado DENTRO do TrackingThread e
+  nunca recebia start() -- o IMU estava morto no tempo real (zeragem e ancora por
+  acelerometro nao aconteciam). Agora ha UM receiver por processo, iniciado em
+  main() e compartilhado entre o rastreador e o no' de inferencia.
+- Validacao: `_smoke_sand_traj.py` (caminho de posicao) OK e um smoke manual com
+  checkpoint de velocidade: o no' imprimiu `| KF pos=(...) bias=0.007 m/s^2` e a
+  trajetoria saiu em metros.
+- `run_training` passou a gravar `target_end_sec` no checkpoint (o tempo real
+  precisa do intervalo da grade do alvo).
+
+(c) PENDENCIAS
+- A aceleracao BRUTA do MPU6050 NAO e' gravada no CSV de movimento (so' rpy e a
+  posicao fusionada). Para validar o filtro offline nas sessoes reais, vale
+  acrescentar IMU_acc_x/y/z_g (45 -> 48 colunas) -- exige atualizar o contrato de
+  colunas em test_paradigm_protocol.py e test_arm_csv.py.
+- Falta o `--fs-alvo` (decimacao) para o experimento de contexto longo.
+- Chave da API DeepSeek continua exposta -- REVOGAR.
+
+
 
 ================================================================================
  FIM DO DOCUMENTO (atualizar ao final de cada sessao de desenvolvimento)

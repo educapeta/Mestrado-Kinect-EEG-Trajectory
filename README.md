@@ -161,7 +161,16 @@ python sand_traj_treino.py --data gravacoes --event-code 795 `
 python sand_traj_treino.py --data gravacoes --event-code 795 `
        --window-start-sec -0.5 --window-sec 2.0 `
        --peso-anatomico 0.1 --peso-angulo-cotovelo 0.005
+
+# Alvo de VELOCIDADE (m/s) — o que os trials de repouso/IDLE exigem:
+python sand_traj_treino.py --data gravacoes --event-code 795 `
+       --window-start-sec -0.5 --window-sec 2.0 --alvo velocidade
 ```
+
+Com `--alvo velocidade` o modelo prevê **m/s** e o tempo real
+(`sand_traj_tempo_real.py`) reconstrói a **posição** integrando a velocidade num
+**filtro de Kalman** que usa a **aceleração do MPU6050** como medida direta
+(`imu.KalmanTrajectory`); o log mostra `| KF pos=(...) bias=... m/s^2`.
 
 Sem `--target-start-sec` o alvo é **concorrente** (descreve a própria janela);
 com ele, o alvo passa a ser a trajetória **futura** — e o checkpoint registra
@@ -214,3 +223,4 @@ python _demo_trial.py       # demo da plataforma gráfica com a webcam
 | `test_treino_loader.py` | leitura dos arquivos no treino: X (N, canais, amostras), montagem, CAR/z-score, 1 época, checkpoint + `SandTrajectoryBCI`, alvo concorrente × preditivo |
 | `test_anatomical_reg.py` | regularizador anatômico: lei dos cossenos, consistência com a IK do projeto, envelope + gradiente, ângulo medido, limites articulares, NaN seguro, colunas `ARM_*` no caminho de arquivo, treino com o termo |
 | `test_alvo_velocidade.py` | alvo de velocidade (`--alvo velocidade`): rampa/senoide, punho parado → 0 (caso do trial IDLE), gradiente no caminho de arquivo, treino + checkpoint registrando a formulação |
+| `test_kalman_trajectory.py` | filtro de Kalman da trajetória: referência da aceleração (g → m/s², rotação, gravidade, bias), integração trapezoidal, IDLE sem deriva, erro **quadrático** do bias (10 cm/2 s e 2,50 m/10 s na integração dupla × 5,8 cm com o filtro), suavização, degrau, predição |

@@ -224,7 +224,62 @@ E duas regras de método que valem mais que qualquer arquitetura:
 - **declarar o filtro, a taxa e a causalidade** em qualquer número comparado com
   o SAND/E2T (offline zero-phase versus causal muda o resultado).
 
-## 8. Regularizador anatômico: implementação, A/B e como usar
+## 8. Integração da velocidade com a aceleração do MPU6050 (filtro de Kalman)
+
+Implementado em 18/09 no `imu.py` (fonte única do IMU) e ligado no tempo real.
+
+**Por que velocidade e acelerômetro juntos.** O modelo passou a prever
+**velocidade** (`--alvo velocidade`, seção 1.2 do doc de protocolo) e a posição
+tem de ser reconstruída. As duas rotas ruins:
+
+- integrar a **posição que o modelo prevê** diretamente: perde a dinâmica e
+  herda a estereotipia do alvo;
+- integrar a **aceleração do IMU duas vezes**: o erro de posição cresce com
+  **t²** e o bias do acelerômetro manda nesse erro.
+
+**O argumento do erro quadrático, medido** (`test_kalman_trajectory.py`, caso 5):
+com um bias realista de **5 cm/s²** (MPU6050 sem zeragem),
+
+| | erro de posição |
+| --- | --- |
+| Integração dupla da aceleração | **10 cm em 2 s** e **2,50 m em 10 s** (×25 ao quintuplicar o tempo = t²) |
+| Filtro de Kalman + velocidade da EEG | **5,8 cm em 10 s** → **43× menor**, e o bias foi **estimado** (0,052 contra 0,05 m/s²) |
+
+Como o filtro é construído (`KalmanTrajectory`, 3 estados por eixo:
+`[posição, velocidade, bias de aceleração]`):
+
+```
+predicao : p <- p + v*dt + 0.5*(a_medido - bias)*dt^2 ;  v <- v + (a_medido - bias)*dt
+medidas  : velocidade decodificada da EEG (a cada inferencia, sigma_vel_eeg)
+           posicao do punho vista pelo Kinect (ancora lenta, sigma_pos_camera)
+```
+
+Ou seja: a **aceleração entra como medida direta** (não como posição integrada) e
+o **bias é um estado** — é isso que impede o crescimento quadrático. Com medidas
+de velocidade ruidosas (σ = 0,1 m/s) o filtro entrega RMSE **5,1× menor** que a
+medida crua (caso 6) e em regime de **hold** o desvio fica em milímetros em 10 s
+(caso 3) — o que resolve o problema do "sustentar gesto" discutido na seção 5.
+
+No tempo real (`sand_traj_tempo_real.py`): quando o checkpoint diz
+`alvo = velocidade`, o nó de inferência cria o filtro, lê a aceleração do
+`ImuReceiver`, usa a **última velocidade prevista** como medida e a **posição do
+punho** (Kinect, no referencial da origem) como âncora lenta, e entrega ao
+overlay/log a trajetória já em **metros** (integrada e filtrada). O log ganhou
+`| KF pos=(...) bias=.... m/s^2`.
+
+> ⚠️ **Bug corrigido no caminho**: o `ImuReceiver` era criado *dentro* do
+> `TrackingThread` e **nunca recebia `start()`** — na prática o IMU estava morto
+> no tempo real (a zeragem e a âncora por acelerômetro não aconteciam). Agora há
+> **um** receiver por processo, iniciado em `main()` e compartilhado entre o
+> rastreador e o nó de inferência.
+
+Efeito colateral desejado: como o IMU passa a funcionar, a **zeragem** por
+movimento parado (bias + âncora espacial, que já existia no `PositionFusion`)
+volta a alimentar o filtro — é ela que mantém o bias pequeno de verdade em uso
+real.
+
+
+## 9. Regularizador anatômico: implementação, A/B e como usar
 
 Implementado em 18/09 (`st.AnatomicalRegularizer`, `test_anatomical_reg.py` 8/8),
 seguindo o MTRT: **geometria como perda, não como arquitetura**. Como o alvo é o

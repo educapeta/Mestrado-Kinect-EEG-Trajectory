@@ -97,6 +97,6 @@ Leitura e recomendações:
 | 1 | condição **IDLE**: código 817, `--com-repouso`, cue neutra, sem vídeo de priming, sem onset | `eeg_motor_paradigm.py` + `build_trial_list` + `test_paradigm_protocol.py` | balanceamento sugerido: 1 IDLE a cada 6 trials de movimento |
 | 2 | **âncora mista**: ancorar em 778 (cue) e "reancorar" no 795 quando ele existir na janela | `sand_traj_treino.py` | sem isso o IDLE fica fora do dataset (não tem onset) |
 | 3 | **filtro causal** no treino (igual ao tempo real) | `sand_traj_treino.py` | tira o viés otimista do `sosfiltfilt` |
-| 4 | **integração Kalman/α-β** da velocidade no tempo real | `sand_traj_tempo_real.py` | + `from_normalized` deixa de devolver posição e passa a devolver m/s |
+| 4 | **integração Kalman/α-β** da velocidade no tempo real — ✅ **FEITO 18/09** (`imu.KalmanTrajectory`, com a aceleração do MPU6050; teste 8/8) | `imu.py` + `sand_traj_tempo_real.py` | a posição do overlay já sai integrada e filtrada; o log mostra `KF pos=(...) bias=...` |
 | 5 | **taxa de falso movimento** nos períodos de baseline (olhos abertos/fechados) | `tools/` | métrica que os 7 artigos não reportam |
 | 6 | alongar home/pausa conforme a seção 3 | protocolo | decisão a fechar com o orientador |

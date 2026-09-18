@@ -798,6 +798,14 @@ def run_training(args, x_train, y_train, x_val, y_val, channel_map,
         #: Formulacao do alvo: "posicao" (m) ou "velocidade" (m/s). Com
         #: velocidade, a posicao no tempo real vem de integracao (Kalman).
         "alvo": str(getattr(args, "alvo", "posicao")),
+        #: Fim do alvo em relacao ao evento (s) -- usado pelo tempo real para
+        #: saber o intervalo da grade e o horizonte de predicao.
+        "target_end_sec": (float(args.target_end_sec)
+                           if args.target_end_sec is not None
+                           else float(args.target_start_sec
+                                      if args.target_start_sec is not None
+                                      else args.window_start_sec)
+                           + float(args.window_sec)),
         #: Alvo concorrente (descreve a janela) OU preditivo (o futuro).
         "target_concurrente": args.target_start_sec is None,
         "target_start_sec": (float(args.window_start_sec)
