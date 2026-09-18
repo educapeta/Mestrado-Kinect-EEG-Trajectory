@@ -237,8 +237,13 @@ tem de ser reconstruída. As duas rotas ruins:
 - integrar a **aceleração do IMU duas vezes**: o erro de posição cresce com
   **t²** e o bias do acelerômetro manda nesse erro.
 
-**O argumento do erro quadrático, medido** (`test_kalman_trajectory.py`, caso 5):
-com um bias realista de **5 cm/s²** (MPU6050 sem zeragem),
+**O argumento do erro quadrático, medido** (`test_kalman_trajectory.py`, caso 5).
+A lei é simples e é **só integração**: um erro **constante** na **aceleração**
+(bias ε) produz erro **linear** na velocidade (ε·t) e **quadrático** na
+**posição** (½·ε·t²). O erro está na posição — a aceleração não melhora nem
+piora; quem amplifica é a dupla integração. Com ε = **5 cm/s²** (≈5 mg, típico de
+MPU6050 sem zeragem) e integrando a aceleração duas vezes (o teste verifica a
+integração numérica contra a fórmula fechada):
 
 | | erro de posição |
 | --- | --- |
@@ -254,11 +259,20 @@ medidas  : velocidade decodificada da EEG (a cada inferencia, sigma_vel_eeg)
            posicao do punho vista pelo Kinect (ancora lenta, sigma_pos_camera)
 ```
 
-Ou seja: a **aceleração entra como medida direta** (não como posição integrada) e
-o **bias é um estado** — é isso que impede o crescimento quadrático. Com medidas
-de velocidade ruidosas (σ = 0,1 m/s) o filtro entrega RMSE **5,1× menor** que a
-medida crua (caso 6) e em regime de **hold** o desvio fica em milímetros em 10 s
-(caso 3) — o que resolve o problema do "sustentar gesto" discutido na seção 5.
+**O que o filtro faz — e o que ele NÃO faz** (importante para não vender demais):
+ele **não** melhora a medição da aceleração (o MPU6050 continua com o bias dele).
+Ele faz duas coisas: (1) o **bias é um estado**, então a parte *sistemática* do
+erro é absorvida em vez de integrar; (2) a integração é **ancorada por uma medida
+independente** (velocidade da EEG, e a posição do Kinect como âncora lenta), de
+modo que o erro **não acumula indefinidamente** — ele é reiniciado a cada
+atualização.
+
+Daí sai uma alavanca de projeto que vale registrar: entre duas atualizações o erro
+volta a crescer como **½·ε·T²**, com `T` = intervalo de atualização. Com
+ε = 5 cm/s²: `T = 0,5 s` → **6 mm**; `T = 2 s` → **10 cm**. Ou seja, a **cadência
+de inferência** importa quadraticamente — mais um argumento para passo de 0,1–0,5 s
+(seção 4) e para decimar o EEG em vez de alongar o passo.
+
 
 No tempo real (`sand_traj_tempo_real.py`): quando o checkpoint diz
 `alvo = velocidade`, o nó de inferência cria o filtro, lê a aceleração do

@@ -98,11 +98,30 @@ filtro = simula(KalmanTrajectory(), 40, dt=0.05,
 esperado = 0.2 * 40 * 0.05
 assert abs(filtro.position[0] - esperado) < 0.01, (filtro.position, esperado)
 # 5) o argumento do ERRO QUADRATICO: bias do acelerometro sem e com o filtro
+#
+# Lei do erro (e' so' a integracao): um erro CONSTANTE na ACELERACAO (bias eps)
+# vira erro LINEAR na velocidade (eps*t) e QUADRATICO na POSICAO (0.5*eps*t^2).
+# O erro esta' na POSICAO -- a aceleracao nao melhora nem piora; quem amplifica e'
+# a dupla integracao.
 bias = 0.05                       # m/s^2 (5 mg: tipico de MPU6050 sem zeragem)
 dt = 0.02
 horizonte = 10.0
-# (a) integracao dupla "ingenua" (so' IMU): p(t) = 0.5 * bias * t^2
+# (a) integracao dupla NUMERICA do acelerometro com bias, sem nenhum filtro
+posicao_dupla = np.zeros(3)
+velocidade_dupla = np.zeros(3)
+for _ in range(int(horizonte / dt)):
+    velocidade_dupla += np.full(3, bias) * dt
+    posicao_dupla += velocidade_dupla * dt
 naive = {t: 0.5 * bias * t ** 2 for t in (2.0, 5.0, 10.0)}
+# A integracao NUMERICA reproduz a lei fisica 0.5*eps*t^2 mais o termo de
+# discretizacao do esquema de Euler (0.5*eps*t*dt, aqui 5 mm) -- a lei fisica e'
+# o limite dt -> 0.
+esperado_euler = 0.5 * bias * horizonte ** 2 + 0.5 * bias * horizonte * dt
+assert abs(float(posicao_dupla[0]) - esperado_euler) < 1e-9, \
+    (posicao_dupla, esperado_euler)
+assert abs(float(posicao_dupla[0]) - naive[10.0]) < 0.01, posicao_dupla
+# e o erro cresce com t^2: 5x mais tempo -> 25x mais erro
+assert abs(naive[10.0] / naive[2.0] - 25.0) < 1e-9, naive
 # (b) o MESMO bias com o filtro + velocidade decodificada a cada 0,5 s
 filtro = KalmanTrajectory()
 rng = np.random.default_rng(1)
