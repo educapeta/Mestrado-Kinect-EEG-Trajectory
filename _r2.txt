@@ -1,0 +1,5 @@
+erro 3D mediano: 1.80 mm | max: 5.34 mm
+reprojecao mediana: 0.24 px | max: 0.63 px
+ruido 2.0 px -> erro 3D mediano: 9.12 mm | reproj mediana: 1.36 px
+CALIBRACAO REAL -> erro 3D mediano: 0.62 mm | reproj mediana: 0.12 px
+TESTE TRIANGULACAO 3D: OK

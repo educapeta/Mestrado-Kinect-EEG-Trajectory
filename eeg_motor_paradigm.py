@@ -159,11 +159,26 @@ BASELINE_REST_SEC = 60.0          # baseline: 1 min repouso ativo
 
 SLOWMO_SPEED = 0.5                # camera lenta do video de priming
 SLOWMO_CAPTURE_FPS = 30.0         # taxa de captura dos quadros do video
-SLOWMO_BUFFER_SEC = 2.5           # buffer circular de quadros (s) - PRECISA
-                                  # cobrir SLOWMO_END_LAG_SEC + SLOWMO_SPAN_SEC
-                                  # (senao o clipe de priming sai truncado)
+SLOWMO_BUFFER_SEC = 4.0           # buffer circular de quadros (s) - PRECISA
+                                  # cobrir: (ate' o fim da ME) + SLOWMO_SPAN_SEC
+                                  # quando o clipe e' ancorado no ONSET. Com o
+                                  # onset ~0,3-1,5 s apos a cue e a pausa
+                                  # comecando a 4 s, [onset, onset+1 s] cabe em
+                                  # [pedido-4 s, pedido]. RAM: 4 s x 30 fps x
+                                  # 640x360x3 B ~ 83 MB.
 SLOWMO_SPAN_SEC = 1.0             # trecho do movimento mostrado (s reais)
 SLOWMO_END_LAG_SEC = 1.0          # ignora o fim da ME (mao ja parada)
+#: Deteccao do INICIO DO MOVIMENTO (onset) pela velocidade do punho 3D.
+#: Motivo cientifico: o planejamento motor comeca 500-1000 ms ANTES do
+#: movimento visivel (potencial de prontidao) e, ~500-350 ms antes, o cortex
+#: pre-motor / area motora suplementar organizam a sequencia do movimento.
+#: Por isso a janela de interesse do EEG deve comecar ~0,5 s ANTES do onset
+#: detectado, e nao num instante fixo pos-cue:
+#:     python sand_traj_treino.py --data ... --event-code 795 \
+#:            --window-start-sec -0.5 --window-sec 2.0
+MOVE_ONSET_SPEED_MPS = 0.030      # limiar de velocidade do punho (m/s)
+MOVE_ONSET_CONSEC = 3             # amostras acima do limiar (~100 ms a 30 fps)
+MOVE_ONSET_MIN_TRAVEL_M = 0.005   # deslocamento minimo desde a cue (anti-ruido)
 #: Landmark do MediaPipe Hands usado como posicao da mao (9 = centro da palma,
 #: conforme a metodologia de aquisicao; 0 = pulso).
 HAND_TRACK_LANDMARK = 9
@@ -202,6 +217,10 @@ CODE_BLOCK_END = 791
 CODE_PAUSE_START = 792
 CODE_PAUSE_END = 793
 CODE_SLOWMO_START = 794
+#: INICIO DO MOVIMENTO (onset) detectado pelo Kinect durante a ME. Usado para
+#: ancorar a janela de EEG 0,5 s ANTES do movimento (planejamento motor) e o
+#: clipe do priming no inicio real do movimento.
+CODE_MOVE_ONSET = 795
 #: Vigia do link (#15): queda/retorno da entrega de amostras do amplificador.
 CODE_LINK_LOST = 899
 CODE_LINK_OK = 898
@@ -224,6 +243,7 @@ CODE_NAMES = {
     CODE_EYES_CLOSED: "baseline olhos fechados",
     CODE_LINK_LOST: "LINK EEG PERDIDO (sem amostras novas)",
     CODE_LINK_OK: "link EEG recuperado",
+    CODE_MOVE_ONSET: "INICIO DO MOVIMENTO (onset detectado pelo Kinect)",
     CODE_BASELINE_REST: "baseline repouso ativo",
     CODE_TRIAL: "inicio do trial (repouso/home)",
     CODE_ORIGIN_START: "inicio calibracao de origem",
@@ -305,7 +325,7 @@ PALM_COLUMNS = [
 ]
 MOTION_COLUMNS = (KT_COLUMNS + IMU_COLUMNS + ["KTT_valid"]
                   + ARM_COLUMNS + PALM_COLUMNS
-                  + ["KT_hand", "KT_src"])
+                  + ["KT_hand", "KT_src", "KT_onset"])
 N_MOTION_COLS = len(MOTION_COLUMNS)
 #: Codigo numerico da FONTE da posicao 3D (coluna KT_src), para a analise
 #: saber se cada amostra veio de MEDIDA real (triangulacao/depth do Kinect ou
@@ -367,7 +387,7 @@ class SharedState:
             "x": np.nan, "y": np.nan, "z": np.nan,
             "roll": np.nan, "pitch": np.nan, "yaw": np.nan,
             "valid": 0, "src": "",
-            "hand": 0, "src_code": 0,
+            "hand": 0, "src_code": 0, "onset": 0,
             "esp_ts_us": np.nan, "pc_time": np.nan,
             # --- fusao IMU + cameras (zeragem) ---
             "imu_pos": _nan3(), "imu_vel": np.nan, "zero_lock": 0,
@@ -523,6 +543,90 @@ class SharedState:
             return self.quit_requested
 
 
+class MovementOnsetDetector:
+    """Detecta o INICIO DO MOVIMENTO (onset) pela velocidade do punho 3D.
+
+    Motivo cientifico (protocolo): o planejamento motor comeca 500-1000 ms ANTES
+    do movimento visivel (potencial de prontidao) e ~500-350 ms antes o cortex
+    pre-motor / area motora suplementar organizam a sequencia do movimento. Por
+    isso a janela de EEG de interesse deve comecar ~0,5 s ANTES do onset
+    detectado -- e nao num instante fixo pos-cue (que depende de quanto o
+    participante demora para reagir).
+
+    Como funciona:
+      - so' vale na fase ME (o chamador zera a deteccao nas fases HOME/origem);
+      - calcula a velocidade (m/s) entre amostras consecutivas do punho 3D;
+      - exige `consec` amostras consecutivas acima de `speed_mps` E um
+        deslocamento acumulado >= `min_travel_m` desde o inicio da ME (o que
+        rejeita ruido/piscadas de triangulacao com a mao parada);
+      - ao disparar, guarda o instante (relogio monotonic) e o numero de
+        amostras desde a cue, e nunca dispara de novo na mesma trial.
+    """
+
+    def __init__(self, speed_mps=MOVE_ONSET_SPEED_MPS,
+                 consec=MOVE_ONSET_CONSEC,
+                 min_travel_m=MOVE_ONSET_MIN_TRAVEL_M):
+        self._speed = float(speed_mps)
+        self._consec = int(consec)
+        self._min_travel = float(min_travel_m)
+        self.reset()
+
+    def reset(self):
+        """Reinicia para uma nova trial (chamar nas fases HOME/origem)."""
+        self.armed = False          # ja' viu a fase ME?
+        self.detected = False
+        self.onset_time = None      # time.monotonic() do onset
+        self.onset_index = 0        # amostras desde o inicio da ME
+        self._run = 0
+        self._last_time = None
+        self._last_position = None
+        self._first_position = None
+        self.samples = 0
+
+    def update(self, time_s, position, phase_me):
+        """Recebe (t, posicao 3D ou None, esta' na fase ME?).
+
+        Devolve True EXATAMENTE na amostra em que o onset e' detectado.
+        """
+        if not phase_me:
+            return False
+        if self.detected:
+            return False
+        if not self.armed:
+            self.armed = True
+            self._run = 0
+            self._last_time = None
+            self._last_position = None
+            self._first_position = None
+        self.samples += 1
+        if position is None or time_s is None:
+            self._last_time, self._last_position = None, None
+            return False
+        position = np.asarray(position, np.float64).reshape(3)
+        if not np.isfinite(position).all():
+            self._last_time, self._last_position = None, None
+            return False
+        if self._first_position is None:
+            self._first_position = position.copy()
+        travel = float(np.linalg.norm(position - self._first_position))
+        speed = 0.0
+        if self._last_time is not None and self._last_position is not None:
+            dt = float(time_s) - float(self._last_time)
+            if dt > 1e-6:
+                speed = float(np.linalg.norm(position - self._last_position)) / dt
+        self._last_time, self._last_position = float(time_s), position
+        if speed >= self._speed and travel >= self._min_travel:
+            self._run += 1
+        else:
+            self._run = 0
+        if self._run >= self._consec:
+            self.detected = True
+            self.onset_time = float(time_s)
+            self.onset_index = self.samples
+            return True
+        return False
+
+
 class TrackingThread(threading.Thread):
     """Rodape de kinect_imu_groundtruth rodando em thread propria.
 
@@ -537,14 +641,20 @@ class TrackingThread(threading.Thread):
     WINDOW_NAME = "Tracking (overlay Kinect) - MI"
 
     def __init__(self, state, imu, with_kinect=True, use_ik=True,
-                 aux_indices=(0, 1), use_zeroing=True):
+                 aux_indices=(0, 1), use_zeroing=True, marker_queue=None,
+                 use_onset=True):
         super().__init__(daemon=True)
         self.state = state
         self.imu = imu
+        self.marker_queue = marker_queue    # p/ publicar o marcador 795 (onset)
         self.with_kinect = with_kinect
         self.use_ik = use_ik
         self.aux_indices = tuple(int(index) for index in aux_indices)
         self.use_zeroing = bool(use_zeroing)
+        #: Deteccao do INICIO DO MOVIMENTO (ancora da janela e do priming).
+        self.onset_detector = MovementOnsetDetector() if use_onset else None
+        self.onset_time = None              # monotonic do onset da trial atual
+        self._onset_flag_frames = 0
         self.running = True
         self.mode = "kinect" if with_kinect else "imu_only"
         self.tracker = None
@@ -780,6 +890,22 @@ class TrackingThread(threading.Thread):
 
             # ---- video do movimento (priming da pausa em 0,5x) ----
             self._buffer_frame(color)
+            # ---- INICIO DO MOVIMENTO (onset): marca nos dados + ancora o clipe
+            if phase in (PHASE_HOME, PHASE_ORIGIN) and self.onset_detector:
+                self.onset_detector.reset()     # nova trial: zera a deteccao
+                self.onset_time = None
+            if self.onset_detector is not None and self.onset_detector.update(
+                    time.monotonic(), wrist3d, phase == PHASE_ME):
+                self.onset_time = self.onset_detector.onset_time
+                self._onset_flag_frames = 2
+                self._emit_onset_marker()
+                print(f"[onset] INICIO DO MOVIMENTO detectado "
+                      f"({self.onset_detector.onset_index} amostras apos a cue, "
+                      f"limiar {MOVE_ONSET_SPEED_MPS:g} m/s)", flush=True)
+            onset_flag = 0
+            if self._onset_flag_frames > 0:
+                onset_flag = 1
+                self._onset_flag_frames -= 1
             if wrist3d is not None:
                 self._traj_history.append(
                     (time.monotonic(), np.asarray(wrist3d, np.float64)))
@@ -799,7 +925,8 @@ class TrackingThread(threading.Thread):
                 wrist3d, source, imu, arm=arm, arm_side=arm_side, palm=palm,
                 imu_fused=imu_fused, zero_lock=zero_lock, fusion=self.fusion,
                 aux_used=aux_used,
-                hand_side=self.tracker.last_hand_side))
+                hand_side=self.tracker.last_hand_side,
+                onset_flag=onset_flag))
 
             if display is not None:
                 cv2.imshow(self.WINDOW_NAME, display)
@@ -1046,7 +1173,7 @@ class TrackingThread(threading.Thread):
 
     def _motion_payload(self, wrist3d, source, imu, arm=None, arm_side=0,
                         palm=None, imu_fused=None, zero_lock=0,
-                        fusion=None, aux_used=None, hand_side=""):
+                        fusion=None, aux_used=None, hand_side="", onset_flag=0):
         """Monta os campos publicados no SharedState (movimento + braco + palma)."""
         payload = {
             "x": np.nan if wrist3d is None else float(wrist3d[0]),
@@ -1062,6 +1189,8 @@ class TrackingThread(threading.Thread):
             # as duas visiveis) contaminaria o alvo do SAND sem deixar rastro.
             "hand": self._hand_code(hand_side),
             "src_code": kt_src_code(source),
+            # 1 na(s) amostra(s) em que o INICIO DO MOVIMENTO foi detectado.
+            "onset": int(onset_flag),
             "esp_ts_us": np.nan if imu is None else float(imu.timestamp_us),
             "pc_time": time.monotonic(),
             "imu_pos": (np.asarray(imu_fused, np.float64)
@@ -1196,12 +1325,38 @@ class TrackingThread(threading.Thread):
         self._frame_buffer.append(
             (time.monotonic(), np.ascontiguousarray(small)))
 
+    def _emit_onset_marker(self):
+        """Publica o marcador CODE_MOVE_ONSET (795) na fila do muxer.
+
+        O muxer fixa o codigo no CSV de EEG na amostra exata do evento, o que
+        permite recortar a janela de EEG [onset - 0,5 s, onset + 1,5 s] no
+        treino (`--event-code 795 --window-start-sec -0.5`).
+        """
+        if self.marker_queue is None:
+            return
+        try:
+            self.marker_queue.put({
+                "code": CODE_MOVE_ONSET,
+                "nome": CODE_NAMES.get(CODE_MOVE_ONSET, "inicio do movimento"),
+                "hora": time.strftime("%H:%M:%S"),
+                "monotonic_s": round(time.monotonic(), 6),
+                "origem": "tracking",
+            })
+        except Exception as exc:            # fila cheia/indisponivel: nao trava
+            print(f"[onset] falha ao publicar o marcador 795: {exc}", flush=True)
+
     def _clip_window(self, request_time):
         """Intervalo (t0, t1) do movimento mostrado no video de priming.
 
-        Descarta o finalzinho da ME (a mao ja esta parada depois da preensao)
-        e pega o trecho central da trajetoria, que e' o momento de interesse.
+        ANCORADO NO ONSET (opcao A do protocolo): o clipe comeca no INICIO DO
+        MOVIMENTO detectado pelo Kinect (nao num instante fixo pos-cue) e mostra
+        SLOWMO_SPAN_SEC segundos a partir dele; em 0,5x isso ocupa
+        ~2x o tempo real e cabe na pausa de 2 s. Se o onset nao foi detectado
+        (Kinect perdeu a mao, movimento muito lento), cai no recuo fixo do fim
+        da ME (comportamento antigo).
         """
+        if self.onset_time is not None:
+            return self.onset_time, self.onset_time + SLOWMO_SPAN_SEC
         t1 = request_time - SLOWMO_END_LAG_SEC
         return t1 - SLOWMO_SPAN_SEC, t1
 
@@ -2071,6 +2226,9 @@ def build_motion_row(motion, origin, orpy):
     # Lateralidade da mao usada na amostra (0/1/2) e a FONTE da posicao 3D
     # (1=triangulado, 2=depth do Kinect, 3=esqueleto SDK, 4=modelo, ...).
     row += [float(motion.get("hand", 0)), float(motion.get("src_code", 0))]
+    # 1 na(s) amostra(s) em que o INICIO DO MOVIMENTO foi detectado (item do
+    # protocolo: ancora da janela de planejamento motor e do clipe de priming).
+    row += [float(motion.get("onset", 0))]
     return row
 
 
@@ -2744,6 +2902,9 @@ def parse_args():
                              "'D:\\Mestrado_Dados\\gravacoes'.")
     parser.add_argument("--sem-questionario", action="store_true",
                         help="Nao pergunta os dados do participante no fim.")
+    parser.add_argument("--sem-onset", action="store_true",
+                        help="Desativa a deteccao do INICIO DO MOVIMENTO "
+                             "(marcador 795 + clipe ancorado no onset).")
     parser.add_argument("--sem-painel-impedancia", action="store_true",
                         help="Nao mede/mostra o painel de impedancias na "
                              "preparacao.")
@@ -3040,7 +3201,9 @@ def main():
                                   int(index) for index in
                                   str(args.aux_cameras).split(",")
                                   if index.strip().lstrip("-").isdigit()),
-                              use_zeroing=not args.sem_zeroing)
+                              use_zeroing=not args.sem_zeroing,
+                              marker_queue=marker_queue,
+                              use_onset=not args.sem_onset)
     window = StimulusWindow(full_screen=args.tela_cheia,
                             on_close=lambda: controller.stop())
     controller = _ParadigmController(

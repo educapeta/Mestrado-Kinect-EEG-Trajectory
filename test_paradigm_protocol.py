@@ -62,6 +62,7 @@ codigos = {
     "pausa_ini": p.CODE_PAUSE_START, "pausa_fim": p.CODE_PAUSE_END,
     "video": p.CODE_SLOWMO_START,
     "link_perdido": p.CODE_LINK_LOST, "link_ok": p.CODE_LINK_OK,
+    "movimento_onset": p.CODE_MOVE_ONSET,
 }
 assert len(set(codigos.values())) == len(codigos), "codigo de marcador repetido"
 for nome, valor in codigos.items():
@@ -79,18 +80,18 @@ assert len(set(todos)) == len(todos), "colisao entre codigos de mao/condicao"
 # 4) Contrato de colunas: padrao = EEG cru (34) + movimento separado (42)
 # ---------------------------------------------------------------------------
 assert p.MOTION_IN_EEG_CSV is False, "o padrao deve ser EEG CRU + movimento fora"
-assert p.N_MOTION_COLS == 42, p.N_MOTION_COLS
+assert p.N_MOTION_COLS == 43, p.N_MOTION_COLS
 mov_cols = list(p.MOTION_COLUMNS)
-assert mov_cols[-2:] == ["KT_hand", "KT_src"], mov_cols[-2:]
+assert mov_cols[-3:] == ["KT_hand", "KT_src", "KT_onset"], mov_cols[-3:]
 assert len(mov_cols) == len(set(mov_cols)), "colunas de movimento duplicadas"
 n_eeg = 32
 eeg_header = (["Time"] + [f"EEG_Ch{i + 1:02d}" for i in range(n_eeg)]
               + ["Marker"])
 assert len(eeg_header) == 34, len(eeg_header)
 assert eeg_header[-1] == "Marker" and "KT_x_m" not in eeg_header
-mov_header = ["t_mono_s", "t_wall_s"] + mov_cols
-assert len(mov_header) == 44, len(mov_header)
-assert mov_header[2] == "KT_x_m" and mov_header[-1] == "KT_src"
+mov_header = ["t_mono_s", "t_epoch_s"] + mov_cols
+assert len(mov_header) == 45, len(mov_header)
+assert mov_header[2] == "KT_x_m" and mov_header[-1] == "KT_onset"
 
 # ---------------------------------------------------------------------------
 # 5) Vigia do link (#15)
@@ -187,6 +188,7 @@ valores_guardados, texto_guardado = estado2.impedance_snapshot()
 assert valores_guardados == [1.5, 2.5] and texto_guardado == "tabela"
 movimento, _fase, _cue, _msg = estado2.snapshot()
 assert movimento["hand"] == 0 and movimento["src_code"] == 0
+assert movimento["onset"] == 0
 # a coluna KT_src distingue MEDIDA real de ESTIMATIVA
 assert p.kt_src_code("triangulado_laptop") == 1
 assert p.kt_src_code("kinect_depth") == 2
@@ -264,10 +266,32 @@ try:
     # amostra 560 -> t0_abs + 1.12 s -> linha 34 (medida real, 0.34 m)
     assert abs(kt[60, 0] - 0.34) < 1e-6, kt[60]
     assert valid[60] == 1.0, valid[55:65]
+
+    # 9b) ALVO PREDITIVO: com --target-start-sec o alvo deixa de ser a propria
+    #     janela e passa a ser a trajetoria FUTURA (o que controle de protese
+    #     exige). No CSV sintetico KT_x cresce 0.01 por linha de movimento
+    #     (30 Hz): o alvo deslocado em 1 s deve comecar ~0.30 m mais adiante.
+    preditivo = st.Recording(caminho_eeg, caminho_json, fs=fs_teste,
+                             window_n=1000, output_seq_len=30,
+                             event_code=p.CODE_ME_START, ktt_valid_min=1.0,
+                             f_lo=1.0, f_hi=30.0,
+                             start_offset=int(-1.0 * fs_teste),
+                             target_offset=int(1.0 * fs_teste),
+                             target_n=int(1.0 * fs_teste))
+    preditivo._parse_header()
+    _eeg_p, _kt_p, valid_p = preditivo.load_rows(550, 300)
+    assert valid_p.mean() > 0.5, valid_p.mean()
+    assert preditivo.target_offset == 500 and preditivo.target_n == 500
+    # a amostra 550 do EEG cai em t0_abs+1.1 s -> linha 33 do movimento
+    # (KT_x = 0.33 m); o alvo comeca na linha 63 do movimento (KT_x = 0.63 m)
+    assert abs(_kt_p[0, 0] - 0.33) < 1e-6, _kt_p[0]
+    _, kt_alvo, _v = preditivo.load_rows(550 + 500, 30)
+    assert abs(kt_alvo[0, 0] - 0.63) < 1e-6, kt_alvo[0]
 finally:
     shutil.rmtree(pasta_teste, ignore_errors=True)
 
 print("PARADIGM_OK: 9/9 blocos (trials balanceados, trial de 12 s, codigos "
-      "unicos, EEG de 34 colunas + movimento de 44 a 30 Hz, vigia 899/898, "
-      "painel de impedancias, questionario, KT_src e integracao com o treino)")
+      "unicos, EEG de 34 colunas + movimento de 45 a 30 Hz (com KT_onset), "
+      "vigia 899/898, painel de impedancias, questionario, KT_src e integracao "
+      "com o treino)")
 sys.exit(0)

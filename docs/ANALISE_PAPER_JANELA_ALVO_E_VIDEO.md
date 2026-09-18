@@ -209,7 +209,35 @@ o teste honesto é comparar (a) do zero × (b) pré-treinado e afinado, sempre c
 
 ---
 
-## 8. Nota de manutenção (incidente evitado)
+## 9. DECISÃO IMPLEMENTADA (2026-09-18)
+
+A partir da crítica acima e da cronologia do planejamento motor, o sistema passou
+a **detectar o início do movimento** e a ancorar tudo nele:
+
+1. **Detecção pelo Kinect** (`MovementOnsetDetector`, na thread de tracking):
+   velocidade do punho 3D, 3 amostras acima de 0,03 m/s **e** deslocamento ≥ 5 mm
+   desde a cue (rejeita ruído com a mão parada); válido só na fase ME.
+2. **Marcação nos dados**: marcador **795** no CSV de EEG (amostra exata) e
+   coluna **`KT_onset`** = 1 no CSV de movimento → a janela de EEG pode ser
+   recortada em `[onset − 0,5 s, onset + 1,5 s]`.
+3. **Janela recomendada** (planejamento motor): `--event-code 795
+   --window-start-sec -0.5 --window-sec 2.0`.
+4. **Alvo concorrente ou preditivo**: `--target-start-sec/--target-end-sec`
+   (padrão = concorrente; com deslocamento = o modelo prevê o futuro, que é o
+   requisito de controle de prótese).
+5. **Vídeo de priming ancorado no onset** (opção A): o clipe começa no início
+   real do movimento (1 s a 0,5× na pausa de 2 s), com buffer de quadros de 4 s.
+
+Validação: `test_move_onset.py` 7/7; `test_arm_csv.py` 5/5 (43 colunas de
+movimento); `test_paradigm_protocol.py` 9/9 (inclui a verificação do alvo
+preditivo no bloco 9b).
+
+**Continua em aberto:** (i) confirmar no artigo se a janela [2,3] s pós-estímulo
+é a entrada do modelo ou só a janela de análise, e qual é o alvo; (ii) reavaliar
+na fase online se 2 s de janela bastam para um controle fluido, ou se uma janela
+móvel de 3–4 s entrega mais informação.
+
+## 10. Nota de manutenção (incidente evitado)
 
 Durante esta análise, um `git add -A` chegou a preparar os **5,4 GB** do
 WAY-EEG-GAL (o dataset não estava no `.gitignore`). O processo foi interrompido, o

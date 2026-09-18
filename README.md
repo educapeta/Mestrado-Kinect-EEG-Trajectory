@@ -100,7 +100,7 @@ legacy/               zip do código legado (subir no Drive manualmente)
 | Arquivo | Conteúdo |
 |---|---|
 | `gravacao_MEMI_<stamp>.csv` | **EEG cru** (µV, sem filtros) a 500 Hz: `Time, EEG_Ch01..32, Marker` — 34 colunas, ~281 B/amostra (≈440 MB por sessão de 50 min) |
-| `gravacao_MEMI_<stamp>_movimento.csv` | Movimento a 30 Hz (44 colunas): `t_mono_s, t_epoch_s` (**absolutos**) + as 42 de `MOTION_COLUMNS` (KT_* da mão ativa, IMU_* roll/pitch/yaw + posição fusionada, ZERO_lock, KTT_valid, ARM_* da IK, PALM_* da palma, KT_hand, KT_src) |
+| `gravacao_MEMI_<stamp>_movimento.csv` | Movimento a 30 Hz (45 colunas): `t_mono_s, t_epoch_s` (**absolutos**) + as 43 de `MOTION_COLUMNS` (KT_* da mão ativa, IMU_* roll/pitch/yaw + posição fusionada, ZERO_lock, KTT_valid, ARM_* da IK, PALM_* da palma, KT_hand, KT_src, KT_onset) |
 | `gravacao_MEMI_<stamp>_eventos.json` | Marcadores com a **amostra exata** do EEG + metadados (`meta`: participante, sessão, unidades, versões dos pacotes, **sha1 das calibrações**, ordem dos trials, tempos de fase) |
 | `gravacao_MEMI_<stamp>_participante.json` | Questionário do fim da sessão (ID, idade, sexo, dominância, sono, cafeína, observações) |
 | `gravacao_MEMI_<stamp>_priming/tNNN_<condicao>.avi` | Clipe de priming 0,5× com a trajetória 3D sobreposta (~200–400 kB/trial) |
@@ -124,8 +124,30 @@ amostra↔relógio — alinhe por ela, não por suposição de taxa.
 | 276 / 277 / 784 | baseline olhos abertos / fechados / repouso ativo | 769 / 770 | cue mão esquerda / direita |
 | 790 / 791 | início / fim de bloco | 778/779, 780/781 | início/fim ME, início/fim MI |
 | 792 / 793 | início / fim da pausa | 811–816 | condição (objeto × mão) |
-| 794 | início do vídeo 0,5× | 500 / 501 | início / fim da calibração de origem |
-| 898 / 899 | link EEG recuperado / **LINK EEG PERDIDO** (vigia) | | |
+| 794 | início do vídeo 0,5× | **795** | **início do movimento (onset detectado pelo Kinect)** |
+| 500 / 501 | início / fim da calibração de origem | 898 / 899 | link EEG recuperado / **LINK EEG PERDIDO** (vigia) |
+
+## Treino do SAND de trajetória (como recortar a janela e o alvo)
+
+A aquisição marca o **início do movimento** (marcador 795 + coluna `KT_onset`), o
+que permite ancorar a janela de EEG no **planejamento motor** (o planejamento
+começa 500–1000 ms antes do movimento visível; a organização da sequência,
+~500–350 ms antes). Por isso a janela recomendada começa **0,5 s antes** do onset:
+
+```powershell
+# Alvo CONCORRENTE, janela ancorada no planejamento (recomendado hoje):
+python sand_traj_treino.py --data gravacoes --event-code 795 `
+       --window-start-sec -0.5 --window-sec 2.0
+
+# Alvo PREDITIVO (o que o controle de prótese exige: prever o futuro):
+python sand_traj_treino.py --data gravacoes --event-code 795 `
+       --window-start-sec -0.5 --window-sec 2.0 `
+       --target-start-sec 1.5 --target-end-sec 2.5
+```
+
+Sem `--target-start-sec` o alvo é **concorrente** (descreve a própria janela);
+com ele, o alvo passa a ser a trajetória **futura** — e o checkpoint registra
+`target_concurrente`/`target_start_sec` para a análise.
 
 ## Testes
 

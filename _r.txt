@@ -1,0 +1,6 @@
+ARM_IK: casos 1-4 OK
+[braco] elos calibrados: ombro->cotovelo=0.330 m, cotovelo->punho=0.260 m, alcance maximo=0.590 m (amostras: 60, lado right)
+[braco] AVISO: 5 amostras de elos (minimo 30); modelo NAO calibrado -> sem IK nesta sessao (colunas ARM_* vem do esqueleto cru)
+ARM_IK: casos 5-7 OK
+ARM_IK: casos 8 OK
+ARM_IK_OK: 8/8 casos

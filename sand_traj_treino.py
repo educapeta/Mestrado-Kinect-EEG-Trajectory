@@ -62,7 +62,17 @@ def parse_args():
     parser.add_argument("--output-seq-len", type=int,
                         default=st.DEFAULT_OUTPUT_SEQ_LEN)
     parser.add_argument("--window-start-sec", type=float, default=0.0,
-                        help="Deslocamento do inicio da janela pos-evento (s)")
+                        help="Deslocamento do inicio da janela pos-evento (s). "
+                             "Para ancorar no planejamento motor use "
+                             "--event-code 795 --window-start-sec -0.5")
+    parser.add_argument("--target-start-sec", type=float, default=None,
+                        help="Inicio do ALVO em relacao ao evento (s). Padrao = "
+                             "inicio da janela (alvo CONCORRENTE, descreve a "
+                             "propria janela). Para alvo PREDITIVO (controle de "
+                             "protese) use, p.ex., --target-start-sec 1.5")
+    parser.add_argument("--target-end-sec", type=float, default=None,
+                        help="Fim do ALVO em relacao ao evento (s). Padrao = "
+                             "fim da janela (ou target-start + window-sec)")
     parser.add_argument("--channel-count", type=int, default=32,
                         help="Total de canais do dispositivo (selftest/CSV)")
     parser.add_argument("--channels", default=None,
@@ -178,7 +188,8 @@ class Recording:
     """Uma gravacao (CSV + eventos): colunas, dados e marcadores na memoria."""
 
     def __init__(self, csv_path, events_path, fs, window_n, output_seq_len,
-                 event_code, ktt_valid_min, f_lo, f_hi, start_offset=0):
+                 event_code, ktt_valid_min, f_lo, f_hi, start_offset=0,
+                 target_offset=None, target_n=None):
         self.path = csv_path
         self.events_path = events_path
         self.fs = float(fs)
@@ -187,6 +198,11 @@ class Recording:
         self.event_code = int(event_code)
         self.ktt_valid_min = float(ktt_valid_min)
         self.start_offset = int(start_offset)
+        #: Inicio do ALVO (amostras) em relacao ao EVENTO. None = concorrente
+        #: (igual ao inicio da janela). target_n None = mesmo tamanho da janela.
+        self.target_offset = (int(start_offset) if target_offset is None
+                              else int(target_offset))
+        self.target_n = int(window_n if target_n is None else target_n)
         self.f_lo, self.f_hi = float(f_lo), float(f_hi)
         self.header = None
         self.eeg_cols = []
@@ -316,20 +332,38 @@ class Recording:
                 valid[lidas:] = 0.0
         return eeg, kt, valid
 
-    def build_epochs(self, start_samples):
-        """Monta (X (N,C,T) filtrado, Y (N,seq,3)) para cada inicio pedido."""
+    def build_epochs(self, event_samples):
+        """Monta (X (N,C,T) filtrado, Y (N,seq,3)) para cada evento pedido.
+
+        `event_samples` = amostras do EEG dos eventos ancoras (ex.: 795 = inicio
+        do movimento). A partir de cada evento:
+          - X = janela de EEG [evento + start_offset, + window_n);
+          - Y = trajetoria do punho [evento + target_offset, + target_n)
+            reamostrada em output_seq_len pontos.
+        Com target_offset == start_offset e target_n == window_n o alvo e'
+        CONCORRENTE (descreve a propria janela); com target_offset maior (ex.:
+        +1,5 s) o alvo e' PREDITIVO (a trajetoria do futuro, o que controle de
+        protese exige).
+        """
         sos = scipy.signal.butter(4, [self.f_lo, self.f_hi], btype="bandpass",
                                   fs=self.fs, output="sos")
         X, Y = [], []
-        for start in start_samples:
+        for evento in event_samples:
+            start = evento + self.start_offset
             eeg, kt, valid = self.load_rows(start, self.window_n)
             if valid.size and valid.mean() < self.ktt_valid_min:
                 continue                                # Kinect perdeu a mao
-            if not np.isfinite(eeg).all() or not np.isfinite(kt).all():
+            if not np.isfinite(eeg).all():
                 continue
+            _, kt_target, valid_target = self.load_rows(
+                evento + self.target_offset, self.target_n)
+            if kt_target.size == 0 or not np.isfinite(kt_target).all():
+                continue                                # alvo incompleto
+            if valid_target.size and valid_target.mean() < self.ktt_valid_min:
+                continue                                # alvo sem medida real
             filtered = np.asarray([scipy.signal.sosfiltfilt(sos, eeg[:, ch])
                                    for ch in range(eeg.shape[1])]).T
-            target = st.trajectory_resample(kt, self.output_seq_len)
+            target = st.trajectory_resample(kt_target, self.output_seq_len)
             X.append(filtered)
             Y.append(target)
         if not X:
@@ -414,21 +448,39 @@ def load_all_epochs(recordings, args):
     quando a gravacao nao registrou origem).
     """
     X_all, Y_all, sessions, origins = [], [], [], []
+    # Alvo: CONCORRENTE (padrao) ou PREDITIVO (--target-start-sec/--target-end-sec)
+    window_start = float(args.window_start_sec)
+    if args.target_start_sec is None:
+        target_start = window_start
+        target_end = window_start + float(args.window_sec)
+    else:
+        target_start = float(args.target_start_sec)
+        target_end = (target_start + float(args.window_sec)
+                      if args.target_end_sec is None
+                      else float(args.target_end_sec))
+    print(f"Janela de EEG: [{window_start:+.2f} s, "
+          f"{window_start + float(args.window_sec):+.2f} s] em relacao ao "
+          f"evento {args.event_code} | ALVO: [{target_start:+.2f} s, "
+          f"{target_end:+.2f} s] "
+          f"({'CONCORRENTE (descreve a janela)' if target_start == window_start else 'PREDITIVO (o futuro)'})",
+          flush=True)
     for session, (csv_path, events_path) in enumerate(recordings):
         record = Recording(csv_path, events_path, args.fs,
                            int(args.window_sec * args.fs),
                            args.output_seq_len, args.event_code,
                            args.ktt_valid_min, args.f_lo, args.f_hi,
-                           start_offset=int(args.window_start_sec * args.fs))
+                           start_offset=int(window_start * args.fs),
+                           target_offset=int(target_start * args.fs),
+                           target_n=max(1, int((target_end - target_start)
+                                               * args.fs)))
         record._parse_header()
-        starts = [sample + record.start_offset
-                  for sample in record.list_event_samples()]
-        x_rec, y_rec = record.build_epochs(starts)
+        eventos = record.list_event_samples()
+        x_rec, y_rec = record.build_epochs(eventos)
         origin = record.recording_origin()
         origins.append(np.nan if origin is None else origin)
         if x_rec.shape[0]:
             print(f"{os.path.basename(csv_path)}: {x_rec.shape[0]} trials "
-                  f"({len(starts)} eventos -> {x_rec.shape[0]} validos)")
+                  f"({len(eventos)} eventos -> {x_rec.shape[0]} validos)")
             X_all.append(x_rec)
             Y_all.append(y_rec)
             sessions.append(np.full(x_rec.shape[0], session, dtype=int))
@@ -566,6 +618,11 @@ def run_training(args, x_train, y_train, x_val, y_val, channel_map,
         "window_start_sec": float(args.window_start_sec),
         "window_sec": args.window_sec,
         "event_code": args.event_code,
+        #: Alvo concorrente (descreve a janela) OU preditivo (o futuro).
+        "target_concurrente": args.target_start_sec is None,
+        "target_start_sec": (float(args.window_start_sec)
+                             if args.target_start_sec is None
+                             else float(args.target_start_sec)),
         "meta_origin_m": ((meta or {}).get("origin_xyz_m")
                           if meta else None),
     }

@@ -5,7 +5,7 @@ mesmo caminho do RecordingMuxer (_motion_row, que monta a linha do CSV) e
 confere coluna a coluna:
 
 1. Ordem/tamanho: MOTION_COLUMNS = KT(3) + IMU(7) + KTT_valid(1) +
-   ARM(18) + PALM(11) + KT_hand/KT_src(2) = 42, e o cabecalho do CSV.
+   ARM(18) + PALM(11) + KT_hand/KT_src/KT_onset(3) = 43, e o cabecalho do CSV.
 2. Posicoes do braco sao RELATIVAS a origem; KT_* e IMU_* tambem.
 3. Angulos articulares e versores da palma sao ABSOLUTOS (origem nao muda).
 4. Sem medida -> NaN e flags de validade em 0 (nunca 0.0 fingindo ser medido).
@@ -20,7 +20,7 @@ import kinect_imu_groundtruth as kig
 
 row_keys = p.MOTION_COLUMNS
 assert len(row_keys) == len(set(row_keys)), "colunas duplicadas"
-assert p.N_MOTION_COLS == 42, f"N_MOTION_COLS={p.N_MOTION_COLS}"
+assert p.N_MOTION_COLS == 43, f"N_MOTION_COLS={p.N_MOTION_COLS}"
 assert len(p.KT_COLUMNS) == 3 and len(p.IMU_COLUMNS) == 7
 assert len(p.ARM_COLUMNS) == 18, len(p.ARM_COLUMNS)
 assert len(p.PALM_COLUMNS) == 11, len(p.PALM_COLUMNS)
@@ -35,8 +35,9 @@ assert header[39] == "IMU_pos_x_m", header[36:44]
 assert header[41] == "IMU_pos_z_m"
 assert header[42] == "ZERO_lock" and header[43] == "KTT_valid"
 assert header[44] == "ARM_shoulder_x_m"
-assert header[-4] == "PALM_valid" and header[-3] == "KT_hand"
-assert header[-2] == "KT_src" and header[-1] == "Marker"
+assert header[-5] == "PALM_valid" and header[-4] == "KT_hand"
+assert header[-3] == "KT_src" and header[-2] == "KT_onset"
+assert header[-1] == "Marker"
 
 
 def motion_dict(arm=True, palm=True):
@@ -125,6 +126,12 @@ motion_lado["hand"] = kig.HAND_SIDE_CODE["left"]          # 2 = esquerda
 motion_lado["src_code"] = p.kt_src_code("triangulado_laptop")
 col_lado = dict(zip(row_keys, p.build_motion_row(motion_lado, origin, orpy)))
 assert col_lado["KT_hand"] == 2.0 and col_lado["KT_src"] == 1.0
+# KT_onset = 1 apenas nas amostras em que o INICIO DO MOVIMENTO foi detectado
+motion_onset = motion_dict()
+motion_onset["onset"] = 1
+col_onset = dict(zip(row_keys,
+                     p.build_motion_row(motion_onset, origin, orpy)))
+assert col_onset["KT_onset"] == 1.0 and col["KT_onset"] == 0.0
 
 
 # ---------------------------------------------------------------------------
@@ -179,13 +186,13 @@ assert col4["PALM_valid"] == 1
 
 
 # ---------------------------------------------------------------------------
-# 5) Largura total: Time(1) + EEG(32) + 42 movimento + Marker(1) = 76 colunas.
+# 5) Largura total: Time(1) + EEG(32) + 43 movimento + Marker(1) = 77 colunas.
 #    (Com o movimento em arquivo separado o CSV de EEG sai com 34 colunas;
 #    aqui medimos o formato EMBUTIDO, que o muxer anuncia quando write_motion.)
 # ---------------------------------------------------------------------------
-assert n_eeg + p.N_MOTION_COLS + 1 == 75        # canais que o muxer anuncia
-assert 1 + n_eeg + p.N_MOTION_COLS + 1 == 76    # + a coluna Time do CsvWriter
-assert len(header) == 76, len(header)
-print("ARM_CSV_OK: 5/5 blocos (42 colunas de movimento; formato embutido de "
-      "76 colunas; padrao = 34 colunas + CSV de movimento separado)")
+assert n_eeg + p.N_MOTION_COLS + 1 == 76        # canais que o muxer anuncia
+assert 1 + n_eeg + p.N_MOTION_COLS + 1 == 77    # + a coluna Time do CsvWriter
+assert len(header) == 77, len(header)
+print("ARM_CSV_OK: 5/5 blocos (43 colunas de movimento; formato embutido de "
+      "77 colunas; padrao = 34 colunas + CSV de movimento separado)")
 sys.exit(0)

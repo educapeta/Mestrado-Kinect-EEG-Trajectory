@@ -292,6 +292,90 @@ RESULTADO
 - A identidade local do commit ficou 'Educapeta <educapeta@users.noreply.github.com>';
   ajuste com:  git config user.email "seu@email"
 
+--------------------------------------------------------------------------------
+12. JANELA ANCORADA NO INICIO DO MOVIMENTO (onset) - DECISAO DE PROTOCOLO
+--------------------------------------------------------------------------------
+CRITICA DO AUTOR DO PROJETO AO ARTIGO SAND (Fu et al., 2026)
+  O artigo usa "EEG signals from the 2-3 second post-stimulus window" (1 s de
+  EEG, de 2 a 3 s depois do estimulo). Critica registrada: apos o estimulo,
+  ~300 ms depois o cerebro ja' inicia o planejamento e a decisao motora; exigir
+  2 s para reagir descreve um participante muito lento e DESCARTA justamente o
+  trecho de PLANEJAMENTO motor. Uma janela mais longa -- ou uma janela movel de
+  3-4 s -- tem mais informacao. Cronologia usada como justificativa
+  (neurociencia classica):
+    - 1000 a 500 ms ANTES do movimento: potencial de prontidao (readiness
+      potential) no cortex e areas de associacao (preparacao inconsciente);
+    - ~500 a 350 ms ANTES: cortex pre-motor e area motora suplementar organizam
+      a SEQUENCIA e a estrategia do movimento;
+    - ~200 ms ANTES: consciencia da intencao de se mover (tempo "W");
+    - 0 ms: execucao (contracao muscular visivel).
+  DECISAO: a janela de interesse comeca ~0,5 s ANTES do movimento (momento da
+  organizacao da sequencia), e nao num instante fixo pos-cue.
+
+IMPLEMENTADO (2026-09-18)
+  (a) DETECCAO DO ONSET pelo Kinect na thread de tracking
+      - classe `MovementOnsetDetector`: velocidade do punho 3D (m/s), exigindo
+        MOVE_ONSET_CONSEC=3 amostras acima de MOVE_ONSET_SPEED_MPS=0.03 m/s E
+        deslocamento acumulado >= MOVE_ONSET_MIN_TRAVEL_M=5 mm desde a cue
+        (rejeita ruido de triangulacao com a mao parada);
+      - so' vale na fase ME; zera nas fases HOME/origem (1 deteccao por trial);
+      - ao disparar: marcador CODE_MOVE_ONSET = 795 na fila do muxer (gravado na
+        amostra EXATA do EEG) + coluna `KT_onset` = 1 no CSV de movimento
+        (MOTION_COLUMNS 42 -> 43; CSV de movimento 44 -> 45 colunas);
+      - `--sem-onset` desativa (diagnostico).
+  (b) JANELA ANCORADA no onset:
+        python sand_traj_treino.py --data gravacoes --event-code 795 \
+               --window-start-sec -0.5 --window-sec 2.0
+      => EEG de [onset-0,5 s, onset+1,5 s] com alvo na trajetoria do mesmo trecho.
+  (c) ALVO PREDITIVO (a mira do projeto: controle de protese por EEG)
+      - novos parametros `--target-start-sec` / `--target-end-sec` (relativos ao
+        EVENTO). Padrao = CONCORRENTE (descreve a propria janela);
+      - exemplo PREDITIVO: `--target-start-sec 1.5 --target-end-sec 2.5` =
+        prever a trajetoria de 1 s que comeca 1,5 s apos o onset;
+      - o checkpoint grava `target_concurrente` e `target_start_sec`.
+  (d) VIDEO DE PRIMING ancorado no onset (opcao A, aprovada pelo autor)
+      - o clipe comeca no INICIO REAL do movimento (antes: recorte fixo 2-3 s
+        pos-cue) e mostra 1 s em 0,5x durante a pausa de 2 s (MI continua limpa);
+      - buffer circular de quadros 2,5 s -> 4,0 s (RAM ~83 MB) para conter
+        [onset, onset+1 s] no momento do pedido;
+      - fallback para o recorte fixo quando o onset nao e' detectado.
+
+VALIDACAO
+  - `test_move_onset.py` (novo) 7/7: mao parada nao dispara; movimento dispara 1x;
+    pico de ruido isolado nao conta; fora da ME nunca dispara; None/NaN nao
+    travam; reset entre trials; coluna KT_onset presente;
+  - `test_arm_csv.py` 5/5 (43 colunas de movimento; formato embutido de 77);
+  - `test_paradigm_protocol.py` 9/9, agora com o bloco 9b que verifica o ALVO
+    PREDITIVO (o alvo deslocado 1 s comeca 0,30 m adiante no CSV sintetico);
+  - smoke do Programa 1: EXIT=0.
+
+DUVIDAS REGISTRADAS PARA O ARTIGO
+  - A janela [2,3] s pos-estimulo e' a ENTRADA do modelo ou apenas a janela de
+    ANALISE? E o alvo e' o mesmo intervalo ou o movimento completo?
+  - Na fase online, reavaliar se 2 s de janela bastam para um controle fluido
+    (decisao conscientemente adiada).
+
+--------------------------------------------------------------------------------
+13. WAY-EEG-GAL NO DISCO: INVENTARIO E PLANO DE PRE-TREINO
+--------------------------------------------------------------------------------
+- 12 sujeitos x 9 series = 120 .mat (5,38 GB) em `WAY-EEG-GAL/` + o
+  `SAND_cache/` gerado pelo codigo legado: 3.528 janelas (32, 960) + alvo
+  (30, 3), com variantes LOSO (rotulo de sujeito).
+- Cada `ws.win` = 34 lifts de 9,43 s: `eeg (4714, 32)` em uV a 500 Hz,
+  `kin (4714, 45)` (posicoes Px1-4/Py1-4/Pz1-4 + angulos/forcas/torques),
+  `emg (37712, 5)`, `LEDon = +2,0 s`, `LEDoff = +6,43 s`, peso/superficie.
+- ALVO do artigo: `kin[:, [21,25,29]]` = Px4, Py4, Pz4 = **sensor de posicao 4**
+  (o "P4 position sensor": P4 = sensor 4, nao o eletrodo P4 nem o sujeito 4).
+- A montagem de 32 canais inclui os canais do artigo: F3=3, F4=5, FC1=8, C3=12,
+  Cz=13, C4=14, CP1=18, CP2=19 (indices 0-based).
+- Plano: (1) inventario ✅ (`tools/inventario_way_eeg_gal.py`); (2) carregador
+  `--dataset waygal` no treino; (3) pre-treino com LOSO interno ao dataset;
+  (4) fine-tuning com `--init-from`. Detalhes em
+  `docs/ANALISE_PAPER_JANELA_ALVO_E_VIDEO.md`.
+- ⚠️ `WAY-EEG-GAL/`, `*.mat`, `*.dat`, `SAND_cache/` foram para o `.gitignore`
+  (um `git add -A` tentou versionar os 5,4 GB; corrigido, e o `git gc
+  --prune=now` devolveu o `.git` de 908 MB para 10,6 MB).
+
 ================================================================================
  FIM DO DOCUMENTO (atualizar ao final de cada sessao de desenvolvimento)
 ================================================================================
