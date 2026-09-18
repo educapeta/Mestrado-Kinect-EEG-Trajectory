@@ -91,7 +91,7 @@ results/              saídas de execuções de teste
 docs/                 histórico, críticas e documentos de decisão
                       (ESTADO_DA_ARTE_JANELAS.md, ARQUITETURA_ONLINE_JANELA_
                       HORIZONTE_E_MCU.md, PROTOCOLO_IDLE_VELOCIDADE_E_CONTEXTO.md,
-                      PRE_TREINO_WAY_EEG_GAL.md,
+                      IMU_DUPLO_ESP32_DESENHO.md, PRE_TREINO_WAY_EEG_GAL.md,
                       ANALISE_PAPER_JANELA_ALVO_E_VIDEO.md,
                       MIGRACAO_FORA_DO_ONEDRIVE.md, PUBLICAR_NO_GITHUB.md)
 tools/                utilitários e a ferramenta autônoma do Kinect
@@ -224,3 +224,4 @@ python _demo_trial.py       # demo da plataforma gráfica com a webcam
 | `test_anatomical_reg.py` | regularizador anatômico: lei dos cossenos, consistência com a IK do projeto, envelope + gradiente, ângulo medido, limites articulares, NaN seguro, colunas `ARM_*` no caminho de arquivo, treino com o termo |
 | `test_alvo_velocidade.py` | alvo de velocidade (`--alvo velocidade`): rampa/senoide, punho parado → 0 (caso do trial IDLE), gradiente no caminho de arquivo, treino + checkpoint registrando a formulação |
 | `test_kalman_trajectory.py` | filtro de Kalman da trajetória: referência da aceleração (g → m/s², rotação, gravidade, bias), integração trapezoidal, IDLE sem deriva, erro **quadrático** do bias (10 cm/2 s e 2,50 m/10 s na integração dupla × 5,8 cm com o filtro), suavização, degrau, predição |
+| `test_imu_bank.py` | dois IMUs (um por mão): parse das portas, convenção dos lados (1=dir/4210, 2=esq/4211), atribuição por porta com dois emissores UDP falsos, fusões independentes, resumo/parada |

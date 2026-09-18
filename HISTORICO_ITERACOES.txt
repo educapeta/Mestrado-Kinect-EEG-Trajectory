@@ -684,6 +684,53 @@ DUVIDAS REGISTRADAS PARA O ARTIGO
 - Chave da API DeepSeek continua exposta -- REVOGAR.
 
 
+18. SESSAO 2026-09-18 (parte 5) - DOIS IMUs (um por mao): DESENHO E BASE
+
+(a) PROBLEMA QUE ISSO RESOLVE (e que estava silencioso no protocolo)
+- Hoje ha UM IMU e o protocolo ALTERNA as maos a cada trial: em metade dos trials
+  o IMU esta' na mao que NAO executa, e as colunas IMU_* nao dizem de qual mao
+  sao (dado ambiguo). Com dois MPU6050 (um por mao, talvez um ESP32 para cada):
+  (1) o IMU passa a ser o da mao CERTA em todos os trials;
+  (2) cada sensor tem o SEU bias e a SUA zeragem;
+  (3) a mao que nao executa vira REFERENCIA DE REPOUSO medida por hardware --
+      e' o que da substancia a taxa de falso movimento (metrica do artigo).
+
+(b) IMPLEMENTADO: ImuBank em imu.py
+- `ImuBank(portas)`: um ImuReceiver + um PositionFusion POR LADO (nunca misturar
+  os relogios dos dois ESP32 no mesmo filtro); `start/stop`, `amostra(lado)`,
+  `idade_s(lado)`, `accel_no_referencial(lado)`, `atualiza_fusao(lado, pos)`,
+  `resumo()`.
+- `IMU_PORTAS_PADRAO = {1: 4210, 2: 4211}` e `parse_portas_imu("4210,4211")`
+  (aceita tambem 'lado:porta'). Lado 1 = direita, 2 = esquerda, a MESMA
+  convencao de ARM_SIDE_CODE/KT_hand.
+- Teste: test_imu_bank.py -> IMU_BANK_OK 5/5, com DOIS emissores UDP falsos
+  (dois "ESP32"): confirma a atribuicao por porta (direita: +9,807 m/s^2 com 2 g;
+  esquerda inclinada 30 graus e parada: 4,2e-16 m/s^2 -- a convencao de rotacao
+  do projeto esta' correta), a independencia das fusoes e o resumo/parada.
+
+(c) ESPECIFICACAO (docs/IMU_DUPLO_ESP32_DESENHO.md)
+- Rede recomendada: um ESP32 por mao e UMA PORTA POR LADO (4210 direita, 4211
+  esquerda) -> o firmware muda a porta de destino e nao ha ambiguidade.
+  Alternativa: um ESP32 com dois MPU e um ID no pacote ('lado,t_us,roll,...').
+- Armadilhas documentadas: (1) relogios independentes; (2) bias/zeragem por
+  sensor; (3) vigia de idade da amostra (no espirito do LinkWatchdog 899/898);
+  (4) ordem dos lados; (5) pacotes fora de ordem e o descarte de dt invalido.
+- DECISAO PENDENTE (colunas do CSV): A) 7 colunas + IMU_hand = 46 colunas;
+  B) blocos por lado (~56); C) recomendada: A + abraco enxuto do contralateral
+  (IMU_hand + 7 do lado ativo + IMU_ctrl_acc_xyz + ZERO_lock_ctrl = 52).
+  Qualquer opcao deve incluir a ACELERACAO BRUTA (IMU_acc_*), hoje descartada --
+  sem ela nao da' para validar o filtro de Kalman offline no dado real.
+
+(d) PENDENCIAS (checklist do doc, secao 6)
+1. firmware: porta por lado ou ID no pacote;
+2. decidir as colunas e ajustar IMU_COLUMNS/build_motion_row;
+3. atualizar o contrato de colunas (test_paradigm_protocol, test_arm_csv);
+4. ligar o ImuBank no TrackingThread (fusao por lado) e publicar o lado ATIVO no
+   bloco principal;
+5. tempo real: um KalmanTrajectory por lado, usando a aceleracao do lado ativo;
+6. taxa de falso movimento com o contralateral como referencia.
+
+
 
 ================================================================================
  FIM DO DOCUMENTO (atualizar ao final de cada sessao de desenvolvimento)

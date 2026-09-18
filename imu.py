@@ -483,7 +483,107 @@ class KalmanTrajectory:
                          for t in np.linspace(0.0, horizonte, passos)])
 
 
-# =============================================================================
-# imu.py -- IMU do ESP32 por UDP, fusao por zeragem (PositionFusion) e filtro de
-# Kalman de trajetoria (velocidade da EEG + aceleracao do MPU6050).
-# =============================================================================
+#: Portas UDP padrao por lado (convencao do projeto: 1 = direita, 2 = esquerda,
+#: igual a ARM_SIDE_CODE em eeg_motor_paradigm.py).
+IMU_PORTAS_PADRAO = {1: 4210, 2: 4211}
+
+
+def parse_portas_imu(texto):
+    """'4210' -> [(1, 4210)]; '4210,4211' -> [(1,4210), (2,4211)].
+
+    Aceita tambem o formato explicito 'lado:porta' (ex.: '1:4210,2:4311').
+    """
+    itens = [item.strip() for item in str(texto).split(",") if item.strip()]
+    if not itens:
+        raise ValueError("nenhuma porta de IMU informada")
+    saida = []
+    for indice, item in enumerate(itens):
+        if ":" in item:
+            lado, porta = item.split(":", 1)
+            lado, porta = int(lado), int(porta)
+        else:
+            lado = list(IMU_PORTAS_PADRAO)[indice] if len(itens) > 1 else 1
+            porta = int(item)
+        if lado not in IMU_PORTAS_PADRAO:
+            raise ValueError(f"lado {lado} desconhecido (use 1=direita, "
+                             "2=esquerda)")
+        saida.append((lado, porta))
+    return saida
+
+
+class ImuBank:
+    """Conjunto de IMUs (um por mao), cada um com receptor e fusao PROPRIOS.
+
+    Motivo (hardware de 18/09): havera dois MPU6050, um em cada mao, cada um com
+    o seu ESP32. Cada dispositivo tem o **seu relogio** (`timestamp_us`), entao
+    amostras de lados diferentes NUNCA entram no mesmo filtro: cada lado tem o
+    seu `ImuReceiver` (porta propria) e o seu `PositionFusion` (bias e zeragem
+    independentes). Assim o protocolo, que alterna as maos a cada trial, passa a
+    ter o IMU da mao CERTA -- e o lado que nao esta executando vira referencia de
+    repouso para a taxa de falso movimento.
+    """
+
+    def __init__(self, portas=None):
+        self.portas = parse_portas_imu(portas or "4210,4211")
+        self.receivers = {lado: ImuReceiver(porta)
+                          for lado, porta in self.portas}
+        self.fusoes = {lado: PositionFusion() for lado, _ in self.portas}
+        self._iniciado = False
+        self.contagem = {lado: 0 for lado, _ in self.portas}
+
+    # ---------------------------------------------------------------- ciclo
+    def start(self):
+        if self._iniciado:
+            return
+        for receiver in self.receivers.values():
+            receiver.start()
+        self._iniciado = True
+
+    def stop(self):
+        for receiver in self.receivers.values():
+            try:
+                receiver.stop()
+            except Exception:
+                pass
+        self._iniciado = False
+
+    # -------------------------------------------------------------- consulta
+    @property
+    def lados(self):
+        return list(self.receivers)
+
+    def amostra(self, lado):
+        """Ultima amostra do lado (None se ainda nao chegou nada)."""
+        receiver = self.receivers.get(int(lado))
+        return None if receiver is None else receiver.get_latest()
+
+    def idade_s(self, lado):
+        """Idade da ultima amostra do lado (s), ou None sem amostra."""
+        amostra = self.amostra(lado)
+        return None if amostra is None else (time.monotonic()
+                                             - amostra.received_at)
+
+    def accel_no_referencial(self, lado, bias_g=None):
+        """Aceleracao do lado (m/s^2, referencial da origem) ou None."""
+        return accel_no_referencial(self.amostra(lado), bias_g)
+
+    def atualiza_fusao(self, lado, posicao_camera=None):
+        """Roda a fusao (zeragem) do lado; devolve (posicao, zero_lock)."""
+        lado = int(lado)
+        amostra = self.amostra(lado)
+        fusao = self.fusoes[lado]
+        posicao = fusao.update(amostra, posicao_camera)
+        if amostra is not None:
+            self.contagem[lado] += 1
+        return posicao, int(fusao.zero_lock)
+
+    def resumo(self):
+        """Uma linha por lado: porta, contagem e idade da ultima amostra."""
+        partes = []
+        for lado, porta in self.portas:
+            idade = self.idade_s(lado)
+            nome = "direita" if lado == 1 else "esquerda"
+            partes.append(f"{nome}(udp {porta}): {self.contagem[lado]} amostras"
+                          + ("" if idade is None else f", ultima ha "
+                             f"{idade:.2f} s"))
+        return " | ".join(partes)
