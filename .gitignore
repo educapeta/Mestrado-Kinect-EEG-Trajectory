@@ -39,3 +39,9 @@ docs/*.log
 legacy/
 gravacoes/
 *_priming/
+
+# Dataset WAY-EEG-GAL (5,4 GB) e caches binarios (.mat/.dat): NUNCA versionar
+WAY-EEG-GAL/
+*.mat
+*.dat
+SAND_cache/
