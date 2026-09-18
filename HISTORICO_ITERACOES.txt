@@ -570,6 +570,71 @@ DUVIDAS REGISTRADAS PARA O ARTIGO
 - Chave da API DeepSeek colada no chat continua exposta -- REVOGAR.
 
 
+16. SESSAO 2026-09-18 (parte 3) - CONDICAO IDLE, ALVO DE VELOCIDADE E CONTEXTO
+
+(a) DECISOES DE PROTOCOLO (docs/PROTOCOLO_IDLE_VELOCIDADE_E_CONTEXTO.md)
+- Adicionar a condicao IDLE (nenhum movimento, nenhuma mao) -- a implementar
+  (codigo 817 proposto, balanceamento sugerido 1 IDLE a cada 6 trials).
+- Adotar o ALVO DE VELOCIDADE (m/s) como formulacao principal:
+  (1) a mesma trajetoria pode ser feita em velocidades/intensidades muito
+      diferentes e o alvo de posicao nao carrega essa informacao;
+  (2) no IDLE o alvo de velocidade e' ZERO (informacao real), enquanto posicao
+      constante cai no baseline trivial (0,90-0,98 medidos);
+  (3) e' o que o controle de protese consome: integrar com Kalman/alfa-beta
+      devolve a posicao E filtra tremor em hold.
+- O cue do IDLE TEM de existir; o cuidado e' igualar a SALIENCIA SENSORIAL
+  (posicao/duracao/contraste/luminancia), senao a discriminacao vem da tela
+  (occipital) e nao da intencao motora. Controle obrigatorio: treinar/avaliar o
+  mesmo pipeline na janela de PRE-MOVIMENTO ([cue-0,5, cue+0,5]); se discrimina
+  antes do movimento, e' visual.
+
+(b) IMPLEMENTADO: --alvo velocidade
+- st.velocity_from_trajectory (gradiente central na grade reamostrada, m/s);
+  Recording(alvo=...); CLI --alvo {posicao,velocidade}; o checkpoint grava
+  "alvo" (a inferencia precisa saber que deve integrar, nao plotar direto) e o
+  log imprime "Formulacao do alvo".
+- Teste novo: test_alvo_velocidade.py -> ALVO_VELOCIDADE_OK 5/5 (rampa exata,
+  senoide 0,5 Hz/0,12 m -> pico 0,375 m/s vs teorico 0,377; punho parado -> 0
+  exato, que e' o caso do trial IDLE; no caminho de arquivo o alvo de velocidade
+  e' identico ao gradiente do alvo de posicao; treino + checkpoint).
+- Retrospectiva: o primeiro erro do teste foi MEU (np.gradient no axis=0, isto
+  e', somando atraves das JANELAS em vez do tempo dentro da janela, que e' o
+  axis=1) -- o loader estava correto.
+
+(c) OCUPACAO DE CONTEXTO MEDIDA (tools/diagnostico_contexto.py)
+    Estrutura do trial hoje: home 2 s -> ME 4 s -> pausa 2 s -> MI 4 s.
+    contexto | ME (ancora no onset, offset -0,5 s) | MI (janela de 4 s)
+      1,0 s  | OK                                  | OK
+      2,0 s  | invade 0,50 s do trial anterior     | OK
+      3,0 s  | invade 1,50 s                       | 1,00 s de ME do mesmo trial (33%)
+      4,0 s  | invade 2,50 s                       | 2,00 s (50%)
+      6,0 s  | invade 4,50 s                       | 4,00 s (67%)
+      8,0 s  | invade 6,50 s                       | 6,00 s (75%)
+- Regras: para contexto C, o home antes do cue precisa ser >= C + 0,5 s (hoje o
+  home de 2 s ja invade 0,5 s com C = 2 s; com C = 4 s o home deve ir a 4,5-5 s).
+  E a PAUSA antes da MI precisa ser >= C, senao a janela da MI inclui a EXECUCAO
+  do mesmo trial (vazamento que faria a MI "acertar" decodificando o movimento
+  executado). Saidas: pausa >= C (recomendado), mascara das amostras da ME na
+  perda, ou contexto curto na MI com a assimetria declarada. Custo de alongar:
+  +1 s de home e +2 s de pausa por trial ~ +25% de duracao de sessao.
+
+(d) FERRAMENTAS NOVAS
+- tools/diagnostico_contexto.py  ocupacao/vazamento de contexto por fase
+- tools/roda_testes.py          roda todas as suites e resume (OK/FALHA)
+- test_alvo_velocidade.py       5 casos do alvo de velocidade
+- docs/PROTOCOLO_IDLE_VELOCIDADE_E_CONTEXTO.md
+- Suite: 14/14 verdes.
+
+(e) PENDENCIAS (ordem)
+1. condicao IDLE (codigo 817, --com-repouso, cue neutra, sem priming video);
+2. ancora mista 778 -> 795 (sem ela o IDLE fica fora do dataset: nao tem onset);
+3. filtro CAUSAL no treino (igual ao tempo real);
+4. integracao Kalman/alfa-beta da velocidade no tempo real;
+5. taxa de falso movimento nos periodos de baseline (metrica que os 7 artigos
+   nao reportam);
+6. fechar com o orientador o novo comprimento do home e da pausa.
+
+
 
 ================================================================================
  FIM DO DOCUMENTO (atualizar ao final de cada sessao de desenvolvimento)

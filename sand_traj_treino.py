@@ -103,6 +103,11 @@ def parse_args():
                              "graus (padrao 15,178)")
     parser.add_argument("--f-lo", type=float, default=st.DEFAULT_F_LO)
     parser.add_argument("--f-hi", type=float, default=st.DEFAULT_F_HI)
+    parser.add_argument("--alvo", choices=["posicao", "velocidade"],
+                        default="posicao",
+                        help="Formulacao do alvo: 'posicao' (m, padrao) ou "
+                             "'velocidade' (m/s -- recomendado para trials de "
+                             "repouso/idle e para controle de protese)")
     parser.add_argument("--ktt-valid-min", type=float, default=0.5,
                         help="Fracao minima de amostras validas (KTT_valid) "
                              "dentro da janela para aceitar o trial")
@@ -243,7 +248,7 @@ class Recording:
 
     def __init__(self, csv_path, events_path, fs, window_n, output_seq_len,
                  event_code, ktt_valid_min, f_lo, f_hi, start_offset=0,
-                 target_offset=None, target_n=None):
+                 target_offset=None, target_n=None, alvo="posicao"):
         self.path = csv_path
         self.events_path = events_path
         self.fs = float(fs)
@@ -257,6 +262,10 @@ class Recording:
         self.target_offset = (int(start_offset) if target_offset is None
                               else int(target_offset))
         self.target_n = int(window_n if target_n is None else target_n)
+        #: Formulacao do ALVO: "posicao" (m, padrao) ou "velocidade" (m/s).
+        #: Velocidade e' o alvo recomendado para trials de repouso/idle (alvo 0)
+        #: e para controle de protese (integrar no tempo real).
+        self.alvo = str(alvo)
         self.f_lo, self.f_hi = float(f_lo), float(f_hi)
         self.header = None
         self.eeg_cols = []
@@ -423,6 +432,13 @@ class Recording:
             filtered = np.asarray([scipy.signal.sosfiltfilt(sos, eeg[:, ch])
                                    for ch in range(eeg.shape[1])], np.float64)
             target = st.trajectory_resample(kt_target, self.output_seq_len)
+            if self.alvo == "velocidade":
+                # Intervalo entre pontos da grade reamostrada (s): a janela do
+                # alvo tem target_n amostras a self.fs, reamostradas em
+                # output_seq_len pontos.
+                intervalo = (self.target_n / self.fs) \
+                    / max(self.output_seq_len - 1, 1)
+                target = st.velocity_from_trajectory(target, intervalo)
             X.append(filtered)
             Y.append(target)
             if com_braco:
@@ -579,6 +595,11 @@ def load_all_epochs(recordings, args, com_braco=False):
           f"{target_end:+.2f} s] "
           f"({'CONCORRENTE (descreve a janela)' if target_start == window_start else 'PREDITIVO (o futuro)'})",
           flush=True)
+    formulacao = getattr(args, "alvo", "posicao")
+    print(f"Formulacao do alvo: {formulacao}"
+          + (" (m/s -- a posicao vem de integracao no tempo real)"
+             if formulacao == "velocidade"
+             else " (m, posicao relativa a origem)"), flush=True)
     for session, (csv_path, events_path) in enumerate(recordings):
         record = Recording(csv_path, events_path, args.fs,
                            int(args.window_sec * args.fs),
@@ -587,7 +608,8 @@ def load_all_epochs(recordings, args, com_braco=False):
                            start_offset=int(window_start * args.fs),
                            target_offset=int(target_start * args.fs),
                            target_n=max(1, int((target_end - target_start)
-                                               * args.fs)))
+                                               * args.fs)),
+                           alvo=getattr(args, "alvo", "posicao"))
         record._parse_header()
         eventos = record.list_event_samples()
         if com_braco:
@@ -773,6 +795,9 @@ def run_training(args, x_train, y_train, x_val, y_val, channel_map,
         "window_start_sec": float(args.window_start_sec),
         "window_sec": args.window_sec,
         "event_code": args.event_code,
+        #: Formulacao do alvo: "posicao" (m) ou "velocidade" (m/s). Com
+        #: velocidade, a posicao no tempo real vem de integracao (Kalman).
+        "alvo": str(getattr(args, "alvo", "posicao")),
         #: Alvo concorrente (descreve a janela) OU preditivo (o futuro).
         "target_concurrente": args.target_start_sec is None,
         "target_start_sec": (float(args.window_start_sec)

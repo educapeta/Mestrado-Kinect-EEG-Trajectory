@@ -159,6 +159,25 @@ def load_checkpoint(path):
     return torch.load(path, map_location="cpu", weights_only=False)
 
 
+def velocity_from_trajectory(trajectory, dt_s):
+    """Velocidade (m/s) por diferencas centrais numa trajetoria reamostrada.
+
+    Motivo (decisao de protocolo de 18/09): a EEG parece codificar melhor a
+    DINAMICA (velocidade/intensidade do movimento) do que a posicao estatica --
+    a mesma trajetoria pode ser feita rapido ou devagar -- e num trial de
+    REPOUSO/idle o alvo de velocidade e' exatamente **zero** (informacao real),
+    enquanto um alvo de posicao constante cai na armadilha do baseline trivial.
+    A posicao e' recuperada integrando a velocidade no tempo real (Kalman ou
+    alfa-beta), que tambem filtra tremor em regime de sustentacao.
+    """
+    trajetoria = np.asarray(trajectory, np.float64)
+    if trajetoria.shape[0] < 2:
+        raise ValueError("velocidade exige pelo menos 2 pontos no alvo.")
+    if not np.isfinite(dt_s) or float(dt_s) <= 0:
+        raise ValueError(f"intervalo entre pontos do alvo invalido: {dt_s}")
+    return np.gradient(trajetoria, float(dt_s), axis=0).astype(np.float32)
+
+
 # =============================================================================
 # Regularizador anatomico (adaptacao do L_DCL/L_RDE do MTRT ao nosso alvo)
 # =============================================================================

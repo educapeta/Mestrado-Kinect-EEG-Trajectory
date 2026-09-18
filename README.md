@@ -90,7 +90,8 @@ data/                 dados antigos/BCI IV e resultados de treino anteriores
 results/              saídas de execuções de teste
 docs/                 histórico, críticas e documentos de decisão
                       (ESTADO_DA_ARTE_JANELAS.md, ARQUITETURA_ONLINE_JANELA_
-                      HORIZONTE_E_MCU.md, PRE_TREINO_WAY_EEG_GAL.md,
+                      HORIZONTE_E_MCU.md, PROTOCOLO_IDLE_VELOCIDADE_E_CONTEXTO.md,
+                      PRE_TREINO_WAY_EEG_GAL.md,
                       ANALISE_PAPER_JANELA_ALVO_E_VIDEO.md,
                       MIGRACAO_FORA_DO_ONEDRIVE.md, PUBLICAR_NO_GITHUB.md)
 tools/                utilitários e a ferramenta autônoma do Kinect
@@ -98,6 +99,8 @@ tools/                utilitários e a ferramenta autônoma do Kinect
                       gerar_sessao_sintetica.py: piloto sem hardware,
                       compara_alvos.py: baseline do alvo medio,
                       mede_custo_modelo.py: FLOPs/tempo por janela,
+                      diagnostico_contexto.py: ocupacao/vazamento de contexto,
+                      roda_testes.py: roda todas as suites e resume,
                       analisa_pdfs_janelas.py: extracao dos artigos,
                       inventario_way_eeg_gal.py, publicar.ps1, limpeza_admin.ps1)
 gravacoes_sinteticas/ sessoes FICTICIAS do piloto (ignorado pelo git)
@@ -210,3 +213,4 @@ python _demo_trial.py       # demo da plataforma gráfica com a webcam
 | `test_move_onset.py` | detector de início do movimento (`MovementOnsetDetector`) e coluna `KT_onset` |
 | `test_treino_loader.py` | leitura dos arquivos no treino: X (N, canais, amostras), montagem, CAR/z-score, 1 época, checkpoint + `SandTrajectoryBCI`, alvo concorrente × preditivo |
 | `test_anatomical_reg.py` | regularizador anatômico: lei dos cossenos, consistência com a IK do projeto, envelope + gradiente, ângulo medido, limites articulares, NaN seguro, colunas `ARM_*` no caminho de arquivo, treino com o termo |
+| `test_alvo_velocidade.py` | alvo de velocidade (`--alvo velocidade`): rampa/senoide, punho parado → 0 (caso do trial IDLE), gradiente no caminho de arquivo, treino + checkpoint registrando a formulação |
