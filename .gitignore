@@ -29,6 +29,8 @@ _ds_body*.json
 *.pid
 _t*.txt
 _tt.txt
+_r*.txt
+_*.txt
 
 # Pastas de trabalho (dados, resultados, documentação e legado não versionados)
 data/
