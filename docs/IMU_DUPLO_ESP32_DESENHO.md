@@ -99,6 +99,31 @@ Custo real de B (e o motivo de ser barato): **o treino não lê coluna de IMU**
 já publica `colunas_movimento` — então a análise deve ser escrita **contra o
 JSON**, não contra nomes fixos.
 
+## 4.1 Como testar as luvas (sem EEG, sem Kinect, sem g.Pype)
+
+```powershell
+# (1) bancada: as duas luvas ligadas -> mostra taxa, jitter, idade e assinatura
+.venv\Scripts\python.exe tools\teste_imu_dois_esp32.py --segundos 20 --gravar _imu.csv
+#     se as duas mandarem para a MESMA porta:
+.venv\Scripts\python.exe tools\teste_imu_dois_esp32.py --porta 4210 --por-remetente
+#     (fixe o mapa se a ordem sair trocada:  --ips "192.168.0.101=1,192.168.0.102=2")
+
+# (2) sessao REAL com as duas luvas (uma porta por lado)
+.venv\Scripts\python.exe eeg_motor_paradigm.py --imu-portas 4210,4211 ...
+
+# (3) sem hardware: dois emissores falsos fazem o papel das luvas
+.venv\Scripts\python.exe tools\emissores_imu_falsos.py --segundos 30
+```
+
+Assinaturas dos emissores falsos: **direita** = `roll +5°` e 1,2 g no eixo vertical;
+**esquerda** = `roll −5°` e 1,0 g — assim da' para ver num relance se os lados
+estao trocados.
+
+Checagens rápidas se algo não chegar: (a) as duas luvas no mesmo Wi-Fi e com o
+**IP do PC** configurado no firmware; (b) **firewall do Windows** liberando UDP
+(entrada) nas portas escolhidas; (c) a porta de destino do firmware (uma por mão
+ou `--por-remetente`); (d) se `idade` sobe e `Hz` cai, é Wi-Fi/bateria.
+
 ## 5. O que já está implementado (18/09)
 
 - `imu.py`: **`ImuBank`** — um `ImuReceiver` + um `PositionFusion` **por lado**,
@@ -112,12 +137,14 @@ JSON**, não contra nomes fixos.
 
 ## 6. O que falta (checklist)
 
-| # | Item | Onde |
-| --- | --- | --- |
-| 1 | firmware: porta por lado (2.1) ou ID no pacote (2.2) | projeto do ESP32 |
-| 2 | decidir as colunas (seção 4) e ajustar `IMU_COLUMNS`/`build_motion_row` | `eeg_motor_paradigm.py` |
-| 3 | atualizar o contrato de colunas nos testes | `test_paradigm_protocol.py`, `test_arm_csv.py` |
-| 4 | ligar o `ImuBank` no `TrackingThread` (fusão por lado) e publicar o lado **ativo** no bloco principal | `eeg_motor_paradigm.py` |
-| 5 | tempo real: um `KalmanTrajectory` por lado, usando a aceleração do **lado ativo** do trial | `sand_traj_tempo_real.py` |
-| 6 | **taxa de falso movimento** usando o contralateral como referência | `tools/` |
+| # | Item | Onde | Status |
+| --- | --- | --- | --- |
+| 1 | firmware: porta por lado (2.1) ou ID no pacote (2.2) | projeto do ESP32 | **com o usuário** |
+| 2 | decidir as colunas (seção 4) e ajustar `IMU_COLUMNS`/`build_motion_row` | `eeg_motor_paradigm.py` | ✅ opção B implementada |
+| 3 | atualizar o contrato de colunas nos testes | `test_arm_csv.py`, `test_paradigm_protocol.py` | ✅ 6/6 e 9/9 |
+| 4 | ligar o `ImuBank` no `TrackingThread` (`--imu-portas`) e publicar `motion["imu"][lado]` | `eeg_motor_paradigm.py` | ✅ (rastreador com Kinect **e** modo `--sem-kinect`) |
+| 5 | tempo real: um `KalmanTrajectory` por lado, com a aceleração do **lado ativo** | `sand_traj_tempo_real.py` | pendente |
+| 6 | **taxa de falso movimento** usando o contralateral como referência | `tools/` | pendente |
+| 7 | bancada: `tools/teste_imu_dois_esp32.py` (2 modos + gravação) e `tools/emissores_imu_falsos.py` | `tools/` | ✅ |
+| 8 | teste da gravação simultânea sem hardware | `test_imu_gravacao_dual.py` (5/5) | ✅ |
 

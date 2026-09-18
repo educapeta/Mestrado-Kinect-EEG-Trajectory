@@ -577,6 +577,57 @@ class ImuBank:
             self.contagem[lado] += 1
         return posicao, int(fusao.zero_lock)
 
+    def amostra_ativa(self, lado=None):
+        """Amostra do lado pedido; sem lado, a MAIS RECENTE entre os lados.
+
+        Usado pelos campos "legados" (um so' IMU) quando ha' mais de um sensor:
+        o bloco por lado e' quem carrega o dado completo.
+        """
+        if lado is not None:
+            return self.amostra(lado)
+        recente, marca = None, -1.0
+        for lado_disponivel in self.lados:
+            amostra = self.amostra(lado_disponivel)
+            if amostra is not None and amostra.received_at > marca:
+                recente, marca = amostra, amostra.received_at
+        return recente
+
+    def get_latest(self):
+        """Alias de `amostra_ativa()`: compatibilidade com quem chamava o
+        `ImuReceiver` diretamente (devolve a amostra mais recente)."""
+        return self.amostra_ativa()
+
+    def blocos_motion(self, lado_ativo=0, posicao_camera=None):
+        """Bloco por lado pronto para `motion["imu"]` (colunas IMU_L_*/IMU_R_*).
+
+        Roda a fusao (zeragem) de CADA lado -- a ancora de camera so' vai para o
+        `lado_ativo`, porque a medida do Kinect e' da mao que esta' sendo
+        rastreada. Devolve `{lado: {"rpy_deg", "accel_g", "pos_m", "valid",
+        "zero_lock"}}`; lados sem amostra saem com valid=0 e NaN.
+        """
+        blocos = {}
+        for lado in self.lados:
+            amostra = self.amostra(lado)
+            ancora = posicao_camera if int(lado) == int(lado_ativo) else None
+            posicao, zero_lock = self.atualiza_fusao(lado, ancora)
+            if amostra is None:
+                blocos[int(lado)] = {"rpy_deg": (np.nan,) * 3,
+                                     "accel_g": np.full(3, np.nan),
+                                     "pos_m": np.full(3, np.nan),
+                                     "valid": 0, "zero_lock": 0}
+                continue
+            blocos[int(lado)] = {
+                "rpy_deg": (float(amostra.roll_deg), float(amostra.pitch_deg),
+                            float(amostra.yaw_deg)),
+                "accel_g": np.asarray(amostra.accel_g, np.float64).reshape(3),
+                "pos_m": np.asarray(posicao, np.float64).reshape(3),
+                "valid": int(np.isfinite(amostra.accel_g).all()
+                             and self.idade_s(lado) is not None
+                             and self.idade_s(lado) < 0.5),
+                "zero_lock": int(zero_lock),
+            }
+        return blocos
+
     def resumo(self):
         """Uma linha por lado: porta, contagem e idade da ultima amostra."""
         partes = []

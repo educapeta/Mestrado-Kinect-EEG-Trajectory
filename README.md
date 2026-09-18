@@ -101,6 +101,8 @@ tools/                utilitários e a ferramenta autônoma do Kinect
                       mede_custo_modelo.py: FLOPs/tempo por janela,
                       diagnostico_contexto.py: ocupacao/vazamento de contexto,
                       roda_testes.py: roda todas as suites e resume,
+                      teste_imu_dois_esp32.py: bancada das duas luvas (UDP),
+                      emissores_imu_falsos.py: luvas falsas para testar sem HW,
                       analisa_pdfs_janelas.py: extracao dos artigos,
                       inventario_way_eeg_gal.py, publicar.ps1, limpeza_admin.ps1)
 gravacoes_sinteticas/ sessoes FICTICIAS do piloto (ignorado pelo git)
@@ -225,3 +227,4 @@ python _demo_trial.py       # demo da plataforma gráfica com a webcam
 | `test_alvo_velocidade.py` | alvo de velocidade (`--alvo velocidade`): rampa/senoide, punho parado → 0 (caso do trial IDLE), gradiente no caminho de arquivo, treino + checkpoint registrando a formulação |
 | `test_kalman_trajectory.py` | filtro de Kalman da trajetória: referência da aceleração (g → m/s², rotação, gravidade, bias), integração trapezoidal, IDLE sem deriva, erro **quadrático** do bias (10 cm/2 s e 2,50 m/10 s na integração dupla × 5,8 cm com o filtro), suavização, degrau, predição |
 | `test_imu_bank.py` | dois IMUs (um por mão): parse das portas, convenção dos lados (1=dir/4210, 2=esq/4211), atribuição por porta com dois emissores UDP falsos, fusões independentes, resumo/parada |
+| `test_imu_gravacao_dual.py` | gravação SIMULTÂNEA dos dois IMUs: dois emissores UDP falsos com assinaturas distintas (dir roll +5°/1,2 g; esq −5°/1,0 g), `blocos_motion()` por lado, linha do CSV com cada lado no seu bloco e `IMU_hand`, lado ausente em NaN/valid=0 |

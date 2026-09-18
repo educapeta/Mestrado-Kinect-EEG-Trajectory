@@ -110,7 +110,7 @@ from PySide6.QtWidgets import (QApplication, QLabel, QMainWindow, QWidget)
 from gpype.backend.core.io_node import IONode
 
 from gpype.common.constants import Constants
-from imu import ImuReceiver
+from imu import ImuBank, ImuReceiver
 
 try:
     import winsound
@@ -940,20 +940,34 @@ class TrackingThread(threading.Thread):
             if pedido is not None:
                 self._publish_slowmo(pedido)
 
-            imu = self.imu.get_latest()
-            imu_fused, zero_lock = None, 0
-            if self.fusion is not None:
-                # zeragem: camera valida (medida 3D) entra na fusao
-                self.fusion.update(imu, wrist3d if wrist3d is not None
-                                   else None)
-                imu_fused = self.fusion.absolute_position
-                zero_lock = int(self.fusion.zero_lock)
+            lado_ativo = ARM_SIDE_CODE.get(self.tracker.last_hand_side, 0)
+            imu_fused, zero_lock, blocos_imu = None, 0, None
+            if hasattr(self.imu, "blocos_motion"):
+                # DOIS IMUs (um por mao): cada lado tem receptor e fusao proprios
+                # -- nunca misturamos os relogios dos dois ESP32 no mesmo filtro.
+                # A ancora de camera vai so' para o lado ATIVO (a mao rastreada).
+                blocos_imu = self.imu.blocos_motion(
+                    lado_ativo=lado_ativo,
+                    posicao_camera=wrist3d if wrist3d is not None else None)
+                lado_legado = lado_ativo if lado_ativo else self.imu.lados[0]
+                imu = self.imu.amostra(lado_legado)
+                bloco_ativo = blocos_imu.get(int(lado_legado), {})
+                imu_fused = bloco_ativo.get("pos_m")
+                zero_lock = int(bloco_ativo.get("zero_lock", 0) or 0)
+            else:
+                imu = self.imu.get_latest()
+                if self.fusion is not None:
+                    # zeragem: camera valida (medida 3D) entra na fusao
+                    self.fusion.update(imu, wrist3d if wrist3d is not None
+                                       else None)
+                    imu_fused = self.fusion.absolute_position
+                    zero_lock = int(self.fusion.zero_lock)
             self.state.publish_motion(**self._motion_payload(
                 wrist3d, source, imu, arm=arm, arm_side=arm_side, palm=palm,
                 imu_fused=imu_fused, zero_lock=zero_lock, fusion=self.fusion,
                 aux_used=aux_used,
                 hand_side=self.tracker.last_hand_side,
-                onset_flag=onset_flag))
+                onset_flag=onset_flag, imu_blocos=blocos_imu))
 
             if display is not None:
                 cv2.imshow(self.WINDOW_NAME, display)
@@ -964,8 +978,14 @@ class TrackingThread(threading.Thread):
     def _loop_imu_only(self):
         """Sem Kinect: publica apenas o ESP32 (KT_*/ARM_*/PALM_* = NaN)."""
         while self.running and not self.state.quit_flag:
-            imu = self.imu.get_latest()
-            payload = self._motion_payload(None, "imu_only", imu)
+            blocos = None
+            if hasattr(self.imu, "blocos_motion"):
+                blocos = self.imu.blocos_motion()
+                imu = self.imu.amostra_ativa()
+            else:
+                imu = self.imu.get_latest()
+            payload = self._motion_payload(None, "imu_only", imu,
+                                           imu_blocos=blocos)
             payload["valid"] = 0
             self.state.publish_motion(**payload)
             time.sleep(0.005)
@@ -1200,7 +1220,8 @@ class TrackingThread(threading.Thread):
 
     def _motion_payload(self, wrist3d, source, imu, arm=None, arm_side=0,
                         palm=None, imu_fused=None, zero_lock=0,
-                        fusion=None, aux_used=None, hand_side="", onset_flag=0):
+                        fusion=None, aux_used=None, hand_side="", onset_flag=0,
+                        imu_blocos=None):
         """Monta os campos publicados no SharedState (movimento + braco + palma)."""
         payload = {
             "x": np.nan if wrist3d is None else float(wrist3d[0]),
@@ -1227,6 +1248,10 @@ class TrackingThread(threading.Thread):
             "zero_lock": int(zero_lock),
             "aux_used": -1 if aux_used is None else int(aux_used),
         }
+        if imu_blocos is not None:
+            #: DOIS IMUs (um por mao): bloco proprio por lado, consumido pelas
+            #: colunas IMU_L_*/IMU_R_* (ver docs/IMU_DUPLO_ESP32_DESENHO.md).
+            payload["imu"] = imu_blocos
         if arm is None:
             payload.update(
                 arm_shoulder=_nan3(), arm_elbow=_nan3(), arm_wrist=_nan3(),
@@ -3051,6 +3076,11 @@ def parse_args():
                               "(1 = direita, 2 = esquerda). Com dois IMUs "
                               "(um por mao) este valor e' ignorado: cada lado "
                               "vai para o seu bloco IMU_L_*/IMU_R_*"))
+    parser.add_argument("--imu-portas", default="4210",
+                        help=("Portas UDP dos IMUs (ESP32), separadas por "
+                              "virgula: '4210' = um IMU (padrao); "
+                              "'4210,4211' = um por mao (direita, esquerda). "
+                              "Aceita o formato explicito '1:4210,2:4211'"))
     parser.add_argument("--impedancia", action="store_true",
                         help="Relatorio de impedancias antes da sessao")
     parser.add_argument("--impedancia-tentativas", type=int, default=3,
@@ -3220,8 +3250,11 @@ def main():
     #: resolve so' as amostras em que a mao ativa e' desconhecida, como as
     #: linhas de base do inicio da sessao).
     state.motion["imu_lado"] = int(getattr(args, "imu_lado", 1) or 1)
-    imu = ImuReceiver(4210)
+    #: ImuBank: '4210' = um IMU (comportamento antigo); '4210,4211' = um por mao
+    #: (cada lado com o SEU receptor e a SUA fusao/zeragem).
+    imu = ImuBank(getattr(args, "imu_portas", "4210"))
     imu.start()
+    print(f"[imu] {imu.resumo()}", flush=True)
 
     app = gp.MainApp(caption="Gravacao ME/MI - Execucao e Imaginacao Motora")
     pipeline = gp.Pipeline()

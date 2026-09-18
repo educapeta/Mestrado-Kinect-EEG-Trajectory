@@ -721,6 +721,36 @@ DUVIDAS REGISTRADAS PARA O ARTIGO
   Qualquer opcao deve incluir a ACELERACAO BRUTA (IMU_acc_*), hoje descartada --
   sem ela nao da' para validar o filtro de Kalman offline no dado real.
 
+(f) LUVAS PRONTAS (dois ESP32 + dois MPU6050) E TESTE DE BANCADA
+- `tools/teste_imu_dois_esp32.py`: bancada (sem EEG/Kinect/g.Pype) que ouve as
+  luvas e mostra por lado: Hz, pacotes, idade da ultima amostra, JITTER, rpy e
+  aceleracao; modos (1) uma porta por lado e (2) porta unica com
+  demultiplexacao pelo REMETENTE (--por-remetente, com --ips para fixar o mapa);
+  --gravar salva as amostras CRUAS dos dois lados num CSV; aceita o pacote de 10
+  campos (forma atual) e o de 11 (com ID do lado). Codigo de saida 1 se faltar
+  lado, com lista de checagens (Wi-Fi, firewall, porta do firmware).
+- `tools/emissores_imu_falsos.py`: luvas FALSAS (um socket por lado, como dois
+  dispositivos) com assinaturas distintas -- direita roll=+5 e 1,2 g; esquerda
+  roll=-5 e 1,0 g -- para testar toda a cadeia sem hardware.
+- `test_imu_gravacao_dual.py` (novo, 5/5): dois emissores -> ImuBank ->
+  blocos_motion() -> build_motion_row(): confirma que cada lado cai no SEU bloco
+  (IMU_L_*/IMU_R_*) com IMU_hand certo e que um lado ausente sai NaN/valid=0.
+- Importante: dois sockets UDP na MESMA porta (mesmo com SO_REUSEADDR) DIVIDEM os
+  datagramas -- por isso o teste usa portas distintas por caso e o modo de porta
+  unica demultiplexa pelo remetente (ip:porta).
+- Paradigma: `--imu-portas` (padrao '4210' = um IMU; '4210,4211' = um por mao) e
+  o `ImuBank` ligado no TrackingThread (nos dois caminhos: com Kinect e
+  --sem-kinect), publicando `motion["imu"][lado]`; a ancora de camera vai so' para
+  o lado ATIVO do trial.
+- Validado sem hardware: modo 1 (duas portas) => direita 4210 a 29,5 Hz e esquerda
+  4211 a 30,0 Hz, jitter ~0,3 ms; modo 2 (porta unica) => os dois remetentes
+  separados corretamente (127.0.0.1:55764 / :55765). 302 amostras gravadas no CSV
+  de bancada.
+- PENDENTE: (a) indicar no firmware a porta de cada luva (ou usar
+  --por-remetente); (b) um KalmanTrajectory por lado no tempo real; (c) taxa de
+  falso movimento com o contralateral.
+
+
 (e) DECISAO DAS COLUNAS (18/09): opcao B, ja' IMPLEMENTADA
 - Medicao: no CSV de movimento ~5,7 B por coluna por linha (30 Hz). Numa sessao
   de 3000 s: movimento 21,8 MiB com 45 colunas; EEG ~305 MiB (14x maior). A opcao
