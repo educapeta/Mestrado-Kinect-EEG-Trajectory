@@ -89,13 +89,15 @@ gravacoes/            sessoes gravadas (ignorado pelo git; --pasta-sessoes)
 data/                 dados antigos/BCI IV e resultados de treino anteriores
 results/              saídas de execuções de teste
 docs/                 histórico, críticas e documentos de decisão
-                      (ESTADO_DA_ARTE_JANELAS.md, PRE_TREINO_WAY_EEG_GAL.md,
+                      (ESTADO_DA_ARTE_JANELAS.md, ARQUITETURA_ONLINE_JANELA_
+                      HORIZONTE_E_MCU.md, PRE_TREINO_WAY_EEG_GAL.md,
                       ANALISE_PAPER_JANELA_ALVO_E_VIDEO.md,
                       MIGRACAO_FORA_DO_ONEDRIVE.md, PUBLICAR_NO_GITHUB.md)
 tools/                utilitários e a ferramenta autônoma do Kinect
                       (kinect_groundtruth_tool.py: calibração/diagnóstico,
                       gerar_sessao_sintetica.py: piloto sem hardware,
                       compara_alvos.py: baseline do alvo medio,
+                      mede_custo_modelo.py: FLOPs/tempo por janela,
                       analisa_pdfs_janelas.py: extracao dos artigos,
                       inventario_way_eeg_gal.py, publicar.ps1, limpeza_admin.ps1)
 gravacoes_sinteticas/ sessoes FICTICIAS do piloto (ignorado pelo git)
@@ -151,6 +153,11 @@ python sand_traj_treino.py --data gravacoes --event-code 795 `
 python sand_traj_treino.py --data gravacoes --event-code 795 `
        --window-start-sec -0.5 --window-sec 2.0 `
        --target-start-sec 1.5 --target-end-sec 2.5
+
+# Com REGULARIZADOR ANATÔMICO (envelope de alcance + limites do cotovelo):
+python sand_traj_treino.py --data gravacoes --event-code 795 `
+       --window-start-sec -0.5 --window-sec 2.0 `
+       --peso-anatomico 0.1 --peso-angulo-cotovelo 0.005
 ```
 
 Sem `--target-start-sec` o alvo é **concorrente** (descreve a própria janela);
@@ -181,6 +188,7 @@ Resultados e limites declarados: `docs/ESTADO_DA_ARTE_JANELAS.md` (seção 5).
 ## Testes
 
 ```powershell
+.venv\Scripts\python.exe tools\roda_testes.py   # roda todas e resume (OK/FALHA)
 foreach ($t in Get-ChildItem test_*.py) { python $t.Name }
 python _smoke_eeg.py        # sessão sintética ponta-a-ponta
 python _smoke_sand_traj.py  # treino + tempo real em modo headless
@@ -201,3 +209,4 @@ python _demo_trial.py       # demo da plataforma gráfica com a webcam
 | `test_sand_traj.py` | rede/alvo/normalizador do SAND de trajetória |
 | `test_move_onset.py` | detector de início do movimento (`MovementOnsetDetector`) e coluna `KT_onset` |
 | `test_treino_loader.py` | leitura dos arquivos no treino: X (N, canais, amostras), montagem, CAR/z-score, 1 época, checkpoint + `SandTrajectoryBCI`, alvo concorrente × preditivo |
+| `test_anatomical_reg.py` | regularizador anatômico: lei dos cossenos, consistência com a IK do projeto, envelope + gradiente, ângulo medido, limites articulares, NaN seguro, colunas `ARM_*` no caminho de arquivo, treino com o termo |

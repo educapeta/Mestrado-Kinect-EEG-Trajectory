@@ -488,6 +488,88 @@ DUVIDAS REGISTRADAS PARA O ARTIGO
 - PENDENCIA DE SEGURANCA: a chave da API DeepSeek colada no chat continua
   exposta -- revogar.
 
+15. SESSAO 2026-09-18 (parte 2) - REGULARIZADOR ANATOMICO E ARQUITETURA ONLINE
+
+(a) REGULARIZADOR ANATOMICO IMPLEMENTADO (idea do MTRT aplicada ao punho)
+- MTRT (Wang 2023) usa comprimentos de elo constantes SO' como funcao de perda
+  (L_DCL + L_RDE, com pesos 1/2sigma^2 aprendidos). No nosso caso o alvo e' o
+  PUNHO, entao o cotovelo nao e' identificavel ponto a ponto: o que a geometria
+  de 2 elos determina univocamente e' o RAIO r = ||punho - ombro|| e, por lei dos
+  cossenos, o angulo do cotovelo implicado. Dai tres termos:
+    1. envelope  : |l1-l2| <= r <= l1+l2 (com margem) -- o braco nao pode
+                   esticar/encolher (a L_DCL do MTRT);
+    2. angulo    : o angulo implicado deve acompanhar o angulo REAL medido pelo
+                   Kinect na janela (regulariza a FORMA, nao so' a posicao);
+    3. limites   : 15-178 graus (posturas impossiveis fora disso).
+- Onde: `st.AnatomicalRegularizer` + `elbow_angle_from_radius` em
+  sand_trajectory_model.py; integrado em train_epoch/run_training; o loader le'
+  as colunas ARM_* do CSV de movimento (MotionTrack.arm_at) e entrega A (N, seq,
+  7) = ombro xyz | angulo | elo1 | elo2 | valid; comprimentos de elo vem das
+  proprias gravacoes (ARM_upper_len_m/ARM_fore_len_m), com --elo1/--elo2 para
+  forcar; tudo registrado no config do checkpoint.
+- Flags: --peso-anatomico (envelope + limites), --peso-angulo-cotovelo,
+  --margem-alcance, --limites-cotovelo, --elo1/--elo2. Sem colunas ARM_* o termo
+  fica inerte e avisa no log (nada quebra).
+- Teste: test_anatomical_reg.py -> ANATOMICAL_REG_OK 8/8 (lei dos cossenos,
+  consistencia com kinect_imu_groundtruth.ArmLinkModel.interior_angle_deg,
+  envelope + gradiente trazendo o punho de 0,70 m para 0,496 m, angulo medido,
+  limites, NaN seguro, ida-e-volta ARM_* pelo caminho de arquivo com erro 0,00
+  grau, treino de 1 epoca com checkpoint).
+- O gerador sintetico passou a escrever as colunas ARM_* coerentes
+  (braco_do_punho: geometria de 2 elos, L1=0,30, L2=0,27), o que permite
+  exercitar o regularizador no piloto sem hardware.
+
+(b) A/B DO REGULARIZADOR (6 sessoes sinteticas, 144 trials, val = 1 sessao,
+    mesmas seed/dados, 20 epocas)
+    config                    val_loss   PCC x/y/z        anat env final
+    lambda = 0 (inativo)       0,6645    0,767/0,475/0,742   -- (nao medido)
+    lambda ~0 (1e-6, mede)     ~1,0*     0,21/0,37/0,62@ep2  ~0,10 (referencia)
+    lambda = 1                 0,5744    0,742/0,547/0,757   8,1e-02
+    lambda = 10                0,7417    0,643/0,365/0,658   4,0e-03
+    lambda = 1 + angulo = 1    1,0042    0,153/0,072/0,154   0,0
+  (*) o run de referencia e' so' para MEDIR a violacao sem influenciar o treino.
+- Leitura: lambda=1 MELHOROU a val_loss e a componente y (regularizacao de
+  verdade), com PCC praticamente igual; lambda=10 reduz a violacao 26x pagando
+  ~0,1 de PCC em x/z; e o peso 1 no termo de ANGULO colapsa o PCC porque a
+  escala dos termos nao e' a do MSE (o termo bruto de angulo vale ~16 contra
+  MSE ~1). Recomendacao registrada: comecar em --peso-anatomico 0.1 e
+  --peso-angulo-cotovelo 0.005, olhando as colunas `anat env/ang/lim` do log.
+
+(c) ARQUITETURA ONLINE: JANELA x HORIZONTE x LATENCIA x MCU
+- `docs/ARQUITETURA_ONLINE_JANELA_HORIZONTE_E_MCU.md` responde as perguntas:
+  1. contexto de entrada e horizonte de predicao sao dimensoes INDEPENDENTES;
+  2. contexto causal NAO entra na latencia de controle (o atraso e' dado pelo
+     passo de atualizacao + inferencia + atuador) -> da' para alongar contexto
+     sem penalizar o controle;
+  3. o que inviabiliza o SAND e' a janela NAO CAUSAL (precisa do trial inteiro)
+     somada a 2,27 s de inferencia;
+  4. custo MEDIDO por janela (tools/mede_custo_modelo.py, 60.427 parametros):
+     2 s @500 Hz = 113,8 MFLOPs | 4 s @100 Hz = 43,2 (0,38x) | 9,6 s @100 Hz =
+     109,1 (0,96x) | 18 s @100 Hz = 208 (1,83x) -> DECIMAR e' a alavanca:
+     4-9,6 s de contexto custam o mesmo (ou menos) que a janela atual de 2 s;
+  5. MCU: pesos INT8 = 59 kB (cabe em Cortex-M4F), entrada INT8 32x960 = 30,7 kB;
+     estimativa 0,05-0,3 s/janela num M7 -> viavel com INT8 e janela de 4-6 s a
+     100 Hz, inviavel em FP32; os gargalos reais sao filtro causal, radio e
+     energia, nao o modelo;
+  6. HOLD (sustentar gesto): a culpa nao e' a janela de 2 s e sim o HORIZONTE e
+     a formulacao do alvo -- em regime constante o baseline do alvo medio vai a
+     0,90-0,98 (medido) e o PCC perde sentido. Solucao: prever VELOCIDADE e
+     integrar (Kalman/alfa-beta) + maquina de estados com deteccao de intencao;
+     metricas de hold: RMSE em regime, jitter, tempo de estabilizacao.
+- Lista de experimentos priorizada (barato -> caro) na secao 7 do documento:
+  (1) decimar para 100 Hz e comparar PCC; (2) contexto de 4-6 s; (3) dois ramos
+  (1 s @500 Hz + 6 s @100 Hz); (4) alvo = velocidade; (5) filtro CAUSAL no
+  treino (hoje o treino usa sosfiltfilt, que nao existe em tempo real);
+  (6) quantizacao INT8 e medicao em MCU.
+
+(d) PENDENCIAS
+- Re-medir o tempo de inferencia com a maquina ociosa (o valor de 49,7 ms da
+  medicao saiu contaminado por 5 processos de treino em paralelo; os FLOPs sao a
+  grandeza comparavel).
+- Implementar `--fs-alvo` (decimacao no carregamento) para o experimento (1).
+- Chave da API DeepSeek colada no chat continua exposta -- REVOGAR.
+
+
 
 ================================================================================
  FIM DO DOCUMENTO (atualizar ao final de cada sessao de desenvolvimento)

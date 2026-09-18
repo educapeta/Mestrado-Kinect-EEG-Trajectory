@@ -82,6 +82,25 @@ def parse_args():
                         help="Desativa a referencia media comum")
     parser.add_argument("--zscore", choices=["window", "dataset"],
                         default="window")
+    # -- regularizador anatomico (MTRT/TNSRE 2023 adaptado ao punho) ---------
+    parser.add_argument("--peso-anatomico", type=float, default=0.0,
+                        help="Peso do termo ANATOMICO (envelope de alcance + "
+                             "limites articulares do cotovelo, via IK de 2 "
+                             "elos). 0 = desligado")
+    parser.add_argument("--peso-angulo-cotovelo", type=float, default=0.0,
+                        help="Peso do termo que aproxima o angulo de cotovelo "
+                             "implicado do angulo MEDIDO pelo Kinect")
+    parser.add_argument("--elo1", type=float, default=None,
+                        help="Comprimento ombro->cotovelo (m). Padrao: medido "
+                             "nas gravacoes (ARM_upper_len_m) ou arm_model.json")
+    parser.add_argument("--elo2", type=float, default=None,
+                        help="Comprimento cotovelo->punho (m); mesmo padrao")
+    parser.add_argument("--margem-alcance", type=float,
+                        default=st.DEFAULT_REACH_MARGIN,
+                        help="Margem (fracao) para dentro do alcance maximo")
+    parser.add_argument("--limites-cotovelo", default=None,
+                        help="Limites articulares do cotovelo 'min,max' em "
+                             "graus (padrao 15,178)")
     parser.add_argument("--f-lo", type=float, default=st.DEFAULT_F_LO)
     parser.add_argument("--f-hi", type=float, default=st.DEFAULT_F_HI)
     parser.add_argument("--ktt-valid-min", type=float, default=0.5,
@@ -116,6 +135,13 @@ def find_recordings(data_dir):
     return results
 
 
+#: Colunas ARM_* lidas do CSV de movimento para o regularizador anatomico:
+#: ombro (m), angulo interno do cotovelo (graus), elos efetivos (m) e validade.
+ARM_TRACK_COLUMNS = ("ARM_shoulder_x_m", "ARM_shoulder_y_m",
+                     "ARM_shoulder_z_m", "ARM_elbow_angle_deg",
+                     "ARM_upper_len_m", "ARM_fore_len_m", "ARM_valid")
+
+
 class MotionTrack:
     """Movimento em arquivo proprio a 30 Hz (Programa 1, item #1).
 
@@ -124,6 +150,9 @@ class MotionTrack:
     (sample_index no EEG, monotonic_s) -- dois eventos definem a reta
     amostra -> tempo. Assim o EEG a 500 Hz e o movimento a 30 Hz ficam no mesmo
     eixo temporal sem supor taxas.
+
+    Le' tambem, quando existem, as colunas `ARM_*` (ombro, angulo do cotovelo e
+    comprimentos de elo) usadas pelo regularizador anatomico do treino.
     """
 
     def __init__(self, path):
@@ -131,6 +160,8 @@ class MotionTrack:
         self.t = None             # t_mono_s (s, absoluto)
         self.kt = None            # (N, 3) m, relativo a origem
         self.src = None           # KT_src (0..8)
+        self.arm = None           # (N, 7) ombro xyz | angulo | elos | valid
+        self.tem_arm = False      # True = colunas ARM_* presentes no arquivo
         self._load()
 
     def _load(self):
@@ -143,7 +174,9 @@ class MotionTrack:
                     raise ValueError(f"{self.path}: falta a coluna "
                                      f"{obrigatoria} no arquivo de movimento.")
             coluna_src = index.get("KT_src")
-            tempos, pontos, fontes = [], [], []
+            colunas_arm = [index.get(nome) for nome in ARM_TRACK_COLUMNS]
+            self.tem_arm = all(posicao is not None for posicao in colunas_arm)
+            tempos, pontos, fontes, bracos = [], [], [], []
             for row in reader:
                 tempos.append(_to_float(row[index["t_mono_s"]]))
                 pontos.append([_to_float(row[index["KT_x_m"]]),
@@ -151,12 +184,17 @@ class MotionTrack:
                                _to_float(row[index["KT_z_m"]])])
                 fontes.append(_to_float(row[coluna_src])
                               if coluna_src is not None else 1.0)
+                if self.tem_arm:
+                    bracos.append([_to_float(row[posicao])
+                                   for posicao in colunas_arm])
         self.t = np.asarray(tempos, np.float64)
         self.kt = np.asarray(pontos, np.float64)
         self.src = np.asarray(fontes, np.float64)
+        self.arm = (np.asarray(bracos, np.float64) if self.tem_arm
+                    else np.full((len(tempos), len(ARM_TRACK_COLUMNS)), np.nan))
         ordem = np.argsort(self.t)
-        self.t, self.kt, self.src = (self.t[ordem], self.kt[ordem],
-                                     self.src[ordem])
+        self.t, self.kt, self.src, self.arm = (self.t[ordem], self.kt[ordem],
+                                               self.src[ordem], self.arm[ordem])
 
     def at(self, times):
         """KT (N,3) e validade por instante (vizinho mais proximo no tempo).
@@ -179,6 +217,22 @@ class MotionTrack:
         """Caminho do CSV de movimento correspondente ao CSV de EEG."""
         raiz, _ = os.path.splitext(str(eeg_csv))
         return raiz + "_movimento.csv"
+
+    def arm_at(self, times):
+        """Braco (N, 7) no vizinho mais proximo: ombro xyz, angulo, elos, valid.
+
+        Sem colunas ARM_* no arquivo, devolve tudo NaN (o regularizador
+        anatomico fica inerte em vez de inventar geometria).
+        """
+        times = np.asarray(times, np.float64)
+        largura = len(ARM_TRACK_COLUMNS)
+        if len(self.t) == 0 or not self.tem_arm:
+            return np.full((len(times), largura), np.nan)
+        posicao = np.clip(np.searchsorted(self.t, times), 1, len(self.t) - 1)
+        esquerda = np.abs(times - self.t[posicao - 1])
+        direita = np.abs(times - self.t[posicao])
+        escolha = np.where(esquerda <= direita, posicao - 1, posicao)
+        return self.arm[escolha]
 
 
 # =============================================================================
@@ -332,7 +386,7 @@ class Recording:
                 valid[lidas:] = 0.0
         return eeg, kt, valid
 
-    def build_epochs(self, event_samples):
+    def build_epochs(self, event_samples, com_braco=False):
         """Monta (X (N,C,T) filtrado, Y (N,seq,3)) para cada evento pedido.
 
         `event_samples` = amostras do EEG dos eventos ancoras (ex.: 795 = inicio
@@ -347,7 +401,7 @@ class Recording:
         """
         sos = scipy.signal.butter(4, [self.f_lo, self.f_hi], btype="bandpass",
                                   fs=self.fs, output="sos")
-        X, Y = [], []
+        X, Y, A = [], [], []
         for evento in event_samples:
             start = evento + self.start_offset
             eeg, kt, valid = self.load_rows(start, self.window_n)
@@ -371,9 +425,16 @@ class Recording:
             target = st.trajectory_resample(kt_target, self.output_seq_len)
             X.append(filtered)
             Y.append(target)
+            if com_braco:
+                # Braco na MESMA grade do alvo (ombro e angulo do cotovelo
+                # medidos), para o regularizador anatomico. Sem colunas ARM_*
+                # vem tudo NaN e o termo fica inerte (mascarado).
+                A.append(self._arm_da_janela(evento))
         if not X:
-            return np.zeros((0, len(self.eeg_cols), self.window_n), np.float32), \
-                   np.zeros((0, self.output_seq_len, 3), np.float32)
+            return (np.zeros((0, len(self.eeg_cols), self.window_n), np.float32),
+                    np.zeros((0, self.output_seq_len, 3), np.float32),
+                    np.zeros((0, self.output_seq_len, len(ARM_TRACK_COLUMNS)),
+                             np.float32))
         x_epocas = np.asarray(X, np.float32)
         y_epocas = np.asarray(Y, np.float32)
         esperado = (len(self.eeg_cols), self.window_n)
@@ -381,7 +442,22 @@ class Recording:
             raise ValueError(
                 f"janela com forma {x_epocas.shape[1:]} != (canais, amostras) "
                 f"{esperado}: eixo trocado no carregamento.")
+        if com_braco:
+            return (x_epocas, y_epocas,
+                    np.asarray(A, np.float32) if A else np.zeros(
+                        (0, self.output_seq_len, len(ARM_TRACK_COLUMNS)),
+                        np.float32))
         return x_epocas, y_epocas
+
+    def _arm_da_janela(self, evento):
+        """Braco (seq, 7) na janela do ALVO, no MESMO grid do alvo do punho."""
+        if self.motion is None or not self.motion.tem_arm:
+            return np.full((self.output_seq_len, len(ARM_TRACK_COLUMNS)), np.nan)
+        a, b = self._sample_to_time()
+        instantes = a * (evento + self.target_offset
+                         + np.arange(self.target_n)) + b
+        linhas = self.motion.arm_at(instantes)
+        return st.trajectory_resample(linhas, self.output_seq_len)
 
 
 def _to_float(text):
@@ -396,32 +472,58 @@ def _to_float(text):
 # Dataset + treino
 # =============================================================================
 class TrajDataset(Dataset):
-    """EEG (C, T) e alvo (seq, 3) ja pre-processados."""
+    """EEG (C, T) e alvo (seq, 3) ja pre-processados.
 
-    def __init__(self, x, y):
+    Com ``a`` (braco medido, (seq, 7)) entrega um terceiro tensor por amostra,
+    consumido pelo regularizador anatomico.
+    """
+
+    def __init__(self, x, y, a=None):
         self.x = torch.from_numpy(np.asarray(x, np.float32))
         self.y = torch.from_numpy(np.asarray(y, np.float32))
+        self.a = None if a is None else torch.from_numpy(np.asarray(a, np.float32))
 
     def __len__(self):
         return self.x.shape[0]
 
     def __getitem__(self, index):
-        return self.x[index], self.y[index]
+        if self.a is None:
+            return self.x[index], self.y[index]
+        return self.x[index], self.y[index], self.a[index]
 
 
-def train_epoch(model, loader, optimizer, criterion, device):
+def _anatomico_do_lote(anatomico, pred, braco):
+    """Termo anatomico do lote: ombro (cols 0-2), angulo (col 3), valid (col 6)."""
+    if anatomico is None or not anatomico.ativo or braco is None:
+        return None
+    ombro = braco[:, :, 0:3]
+    angulo = braco[:, :, 3]
+    mascara = braco[:, :, 6] > 0.5
+    return anatomico.componentes(pred, ombro, angulo, mascara)
+
+
+def train_epoch(model, loader, optimizer, criterion, device, anatomico=None):
+    """Uma epoca. Devolve (perda media total, componentes anatomicos medios)."""
     model.train()
-    total, seen = 0.0, 0
-    for x_batch, y_batch in loader:
-        x_batch = x_batch.to(device)
-        y_batch = y_batch.to(device)
+    total, seen, acumulado = 0.0, 0, {}
+    for lote in loader:
+        x_batch, y_batch = lote[0].to(device), lote[1].to(device)
+        braco = lote[2].to(device) if len(lote) > 2 else None
         optimizer.zero_grad()
-        loss = criterion(model(x_batch), y_batch)
+        pred = model(x_batch)
+        loss = criterion(pred, y_batch)
+        termos = _anatomico_do_lote(anatomico, pred, braco)
+        if termos is not None:
+            loss = loss + termos["total"]
+            for chave, valor in termos.items():
+                acumulado[chave] = acumulado.get(chave, 0.0) \
+                    + float(valor) * x_batch.shape[0]
         loss.backward()
         optimizer.step()
         total += float(loss.item()) * x_batch.shape[0]
         seen += x_batch.shape[0]
-    return total / max(seen, 1)
+    componentes = {chave: valor / max(seen, 1) for chave, valor in acumulado.items()}
+    return total / max(seen, 1), componentes
 
 
 def validate_epoch(model, loader, criterion, device):
@@ -429,9 +531,8 @@ def validate_epoch(model, loader, criterion, device):
     total, seen = 0.0, 0
     all_pred, all_true = [], []
     with torch.no_grad():
-        for x_batch, y_batch in loader:
-            x_batch = x_batch.to(device)
-            y_batch = y_batch.to(device)
+        for lote in loader:
+            x_batch, y_batch = lote[0].to(device), lote[1].to(device)
             pred = model(x_batch)
             total += float(criterion(pred, y_batch).item()) * x_batch.shape[0]
             seen += x_batch.shape[0]
@@ -452,14 +553,16 @@ def validate_epoch(model, loader, criterion, device):
     return total / max(seen, 1), pcc
 
 
-def load_all_epochs(recordings, args):
+def load_all_epochs(recordings, args, com_braco=False):
     """Reune todos os trials das gravacoes em X (N,C,T), Y (N,seq,3) e o
     indice da gravacao de origem de cada trial (sessions, para hold-out).
 
     Devolve tambem as origens absolutas por sessao (origins, (S,3) com NaN
-    quando a gravacao nao registrou origem).
+    quando a gravacao nao registrou origem). Com `com_braco=True` devolve ainda
+    A (N, seq, 7) com ombro/angulo/comprimentos de elo medidos, na mesma grade
+    do alvo -- e' o que o regularizador anatomico consome.
     """
-    X_all, Y_all, sessions, origins = [], [], [], []
+    X_all, Y_all, A_all, sessions, origins = [], [], [], [], []
     # Alvo: CONCORRENTE (padrao) ou PREDITIVO (--target-start-sec/--target-end-sec)
     window_start = float(args.window_start_sec)
     if args.target_start_sec is None:
@@ -487,24 +590,48 @@ def load_all_epochs(recordings, args):
                                                * args.fs)))
         record._parse_header()
         eventos = record.list_event_samples()
-        x_rec, y_rec = record.build_epochs(eventos)
+        if com_braco:
+            x_rec, y_rec, a_rec = record.build_epochs(eventos, True)
+        else:
+            x_rec, y_rec = record.build_epochs(eventos, False)
         origin = record.recording_origin()
         origins.append(np.nan if origin is None else origin)
         if x_rec.shape[0]:
             print(f"{os.path.basename(csv_path)}: {x_rec.shape[0]} trials "
-                  f"({len(eventos)} eventos -> {x_rec.shape[0]} validos)")
+                  f"({len(eventos)} eventos -> {x_rec.shape[0]} validos)",
+                  flush=True)
             X_all.append(x_rec)
             Y_all.append(y_rec)
+            if com_braco:
+                A_all.append(a_rec)
             sessions.append(np.full(x_rec.shape[0], session, dtype=int))
     if not X_all:
         raise RuntimeError(
             "Nenhum trial valido encontrado. Verifique --data (precisa dos "
             "_eventos.json) e o filtro KTT_valid.")
-    return (np.concatenate(X_all), np.concatenate(Y_all),
-            np.concatenate(sessions),
-            np.asarray([origin if isinstance(origin, np.ndarray)
-                        else np.full(3, np.nan) for origin in origins],
-                       np.float64))
+    bracos = (np.concatenate(A_all) if A_all
+              else np.zeros((0, args.output_seq_len, len(ARM_TRACK_COLUMNS)),
+                            np.float32))
+    if com_braco:
+        # Diagnostico: quantas janelas tem ombro/angulo medidos (ARM_valid).
+        if bracos.size:
+            validos = (np.isfinite(bracos[:, :, 0:3]).all(axis=(1, 2))
+                       & (bracos[:, :, 6] > 0.5).all(axis=1))
+            fracao = float(validos.mean()) if validos.size else 0.0
+            print(f"[treino] regularizador anatomico: {validos.sum()}/"
+                  f"{bracos.shape[0]} janelas com braco medido "
+                  f"({fracao * 100:.0f}%)", flush=True)
+            if fracao < 0.5:
+                print("[treino] ATENCAO: menos de metade das janelas tem "
+                      "ARM_valid; o termo anatomico vai agir em poucas "
+                      "amostras (confira o registro do braco no Programa 1).",
+                      flush=True)
+    resultado = (np.concatenate(X_all), np.concatenate(Y_all),
+                 np.concatenate(sessions),
+                 np.asarray([origin if isinstance(origin, np.ndarray)
+                             else np.full(3, np.nan) for origin in origins],
+                            np.float64))
+    return resultado + (bracos,) if com_braco else resultado
 
 
 def synthetic_dataset(args, rng):
@@ -555,8 +682,18 @@ def preprocess_epochs(x_selected, args, mean=None, std=None):
 
 
 def run_training(args, x_train, y_train, x_val, y_val, channel_map,
-                 meta=None):
-    """Treina e devolve o melhor modelo (por perda de validacao)."""
+                 meta=None, anatomico=None, arm_train=None, arm_val=None):
+    """Treina e devolve o melhor modelo (por perda de validacao).
+
+    `anatomico` (st.AnatomicalRegularizer) adiciona a perda geometrica suave;
+    `arm_train`/`arm_val` trazem ombro/angulo do cotovelo medidos por janela.
+    """
+    if anatomico is not None and not anatomico.ativo:
+        anatomico = None
+    if anatomico is not None and (arm_train is None or arm_val is None):
+        print("[treino] AVISO: regularizador anatomico pedido sem dados de "
+              "braco medidos -- termo desativado.", flush=True)
+        anatomico = None
     if args.zscore == "dataset":
         eeg_mean = x_train.mean(axis=(0, 2))
         eeg_std = x_train.std(axis=(0, 2))
@@ -583,9 +720,9 @@ def run_training(args, x_train, y_train, x_val, y_val, channel_map,
         optimizer, mode="min", factor=0.5, patience=5)
     criterion = torch.nn.MSELoss()
 
-    train_loader = DataLoader(TrajDataset(x_train_pp, y_train_n),
+    train_loader = DataLoader(TrajDataset(x_train_pp, y_train_n, arm_train),
                               batch_size=args.batch_size, shuffle=True)
-    val_loader = DataLoader(TrajDataset(x_val_pp, y_val_n),
+    val_loader = DataLoader(TrajDataset(x_val_pp, y_val_n, arm_val),
                             batch_size=args.batch_size, shuffle=False)
 
     parameters = sum(p.numel() for p in model.parameters())
@@ -596,8 +733,9 @@ def run_training(args, x_train, y_train, x_val, y_val, channel_map,
     best_loss, best_pcc, best_state = float("inf"), None, None
     patience, n_without_improvement = 12, 0
     for epoch in range(1, args.epochs + 1):
-        train_loss = train_epoch(model, train_loader, optimizer, criterion,
-                                 device)
+        train_loss, componentes = train_epoch(
+            model, train_loader, optimizer, criterion, device,
+            anatomico=anatomico)
         val_loss, pcc = validate_epoch(model, val_loader, criterion, device)
         scheduler.step(val_loss)
         if val_loss < best_loss:
@@ -607,9 +745,14 @@ def run_training(args, x_train, y_train, x_val, y_val, channel_map,
             n_without_improvement = 0
         else:
             n_without_improvement += 1
+        extra = ""
+        if componentes:
+            extra = (f" | anat env={componentes.get('envelope', 0.0):.2e}"
+                     f" ang={componentes.get('angulo', 0.0):.3f}"
+                     f" lim={componentes.get('limites', 0.0):.2e}")
         print(f"Epoch {epoch:02d}: train={train_loss:.4f} "
               f"val={val_loss:.4f} pcc(x,y,z)="
-              f"{pcc[0]:.3f}/{pcc[1]:.3f}/{pcc[2]:.3f}", flush=True)
+              f"{pcc[0]:.3f}/{pcc[1]:.3f}/{pcc[2]:.3f}{extra}", flush=True)
         if n_without_improvement >= patience:
             print(f"Early stopping na epoca {epoch}.", flush=True)
             break
@@ -637,12 +780,28 @@ def run_training(args, x_train, y_train, x_val, y_val, channel_map,
                              else float(args.target_start_sec)),
         "meta_origin_m": ((meta or {}).get("origin_xyz_m")
                           if meta else None),
+        #: Regularizador anatomico usado no treino (rastreabilidade da analise;
+        #: a inferencia NAO precisa dele).
+        "anatomico": (None if anatomico is None else {
+            "l1_m": float(anatomico.l1), "l2_m": float(anatomico.l2),
+            "peso_envelope": anatomico.peso_envelope,
+            "peso_angulo": anatomico.peso_angulo,
+            "peso_limites": anatomico.peso_limites,
+            "margem": anatomico.margem,
+            "limites_cotovelo_deg": [float(np.rad2deg(anatomico.theta_min)),
+                                     float(np.rad2deg(anatomico.theta_max))],
+            "referencia": "MTRT (IEEE TNSRE 2023) L_DCL adaptado ao punho",
+        }),
     }
     st.save_checkpoint(args.model_out, model, config, normalizer,
                        eeg_mean, eeg_std, meta=meta)
     print(f"[treino] checkpoint salvo em {args.model_out}", flush=True)
     print(f"[treino] melhor val_loss={best_loss:.4f} | PCC "
-          f"x={best_pcc[0]:.3f} y={best_pcc[1]:.3f} z={best_pcc[2]:.3f}",
+          f"x={best_pcc[0]:.3f} y={best_pcc[1]:.3f} z={best_pcc[2]:.3f}"
+          + (f" | anatomico ATIVO (l1={anatomico.l1:.3f} m, "
+             f"l2={anatomico.l2:.3f} m, peso env={anatomico.peso_envelope:g}, "
+             f"peso ang={anatomico.peso_angulo:g})"
+             if anatomico is not None else " | anatomico inativo"),
           flush=True)
     return {"best_val_loss": best_loss,
             "pcc_x": best_pcc[0], "pcc_y": best_pcc[1], "pcc_z": best_pcc[2],
@@ -664,8 +823,71 @@ def build_channel_map(args, n_channels):
     return np.asarray(montage, dtype=int)
 
 
+def resolve_elos(args, braco):
+    """Comprimentos de elo (m): flags -> medido nas gravacoes -> arm_model.json.
+
+    A ordem importa: o que foi MEDIDO nas nossas sessoes (ARM_upper_len_m /
+    ARM_fore_len_m, calculados pelo ArmLinkModel no Programa 1) e' mais
+    confiavel do que um valor de tabela, porque e' o sujeito sentado na
+    cadeira com a calibracao do dia.
+    """
+    l1, l2 = args.elo1, args.elo2
+    fonte = "flags da linha de comando"
+    if (l1 is None or l2 is None) and braco is not None and braco.size:
+        validos = np.asarray(braco)[:, :, 6] > 0.5
+        if validos.any():
+            medido1 = float(np.nanmean(np.asarray(braco)[:, :, 4][validos]))
+            medido2 = float(np.nanmean(np.asarray(braco)[:, :, 5][validos]))
+            if np.isfinite(medido1) and np.isfinite(medido2) and medido1 > 0:
+                l1 = medido1 if l1 is None else l1
+                l2 = medido2 if l2 is None else l2
+                fonte = (f"medido nas gravacoes "
+                         f"({medido1:.3f}/{medido2:.3f} m)")
+    if l1 is None or l2 is None:
+        try:
+            import kinect_imu_groundtruth as kig
+            modelo = kig.ArmLinkModel()
+            if getattr(modelo, "ready", False):
+                l1 = float(modelo.l1) if l1 is None else l1
+                l2 = float(modelo.l2) if l2 is None else l2
+                fonte = "arm_model.json (calibracao do braco)"
+        except Exception:
+            pass
+    if l1 is None:
+        l1 = 0.30                      # adulto tipico, ate' haver calibracao
+    if l2 is None:
+        l2 = 0.27
+    return float(l1), float(l2), fonte
+
+
+def monta_anatomico(args, braco):
+    """Regularizador anatomico conforme as flags (None = desligado)."""
+    if args.peso_anatomico <= 0 and args.peso_angulo_cotovelo <= 0:
+        return None
+    l1, l2, fonte = resolve_elos(args, braco)
+    if args.limites_cotovelo:
+        partes = re.split(r"[,\s]+", str(args.limites_cotovelo).strip())
+        minimo, maximo = float(partes[0]), float(partes[1])
+    else:
+        minimo, maximo = st.DEFAULT_ELBOW_MIN_DEG, st.DEFAULT_ELBOW_MAX_DEG
+    print(f"[treino] elos do braco: l1={l1:.3f} m, l2={l2:.3f} m "
+          f"(fonte: {fonte}) | alcance [{(abs(l1 - l2)):.3f}, "
+          f"{(l1 + l2):.3f}] m | cotovelo em [{minimo:g}, {maximo:g}] graus",
+          flush=True)
+    return st.AnatomicalRegularizer(
+        l1, l2, peso_envelope=args.peso_anatomico,
+        peso_angulo=args.peso_angulo_cotovelo,
+        peso_limites=args.peso_anatomico,
+        margem=args.margem_alcance,
+        angulo_min_deg=minimo, angulo_max_deg=maximo)
+
+
 def main():
     args = parse_args()
+
+    # Regularizador anatomico e braco medido valem so' no caminho de ARQUIVO
+    # (o --selftest nao tem geometria de braco).
+    anatomico, braco_train, braco_val = None, None, None
 
     if args.selftest:
         rng = np.random.default_rng(args.seed)
@@ -687,7 +909,15 @@ def main():
             raise RuntimeError(
                 f"Nenhum par (csv + _eventos.json) em {args.data!r}. Use "
                 "--selftest para validar o pipeline sem gravacoes.")
-        x_all, y_all, sessions, origins = load_all_epochs(recordings, args)
+        # O braco medido so' e' carregado quando o regularizador vai ser usado
+        # (evita ler 7 colunas extra de um CSV de 30 Hz em treino normal).
+        usar_braco = args.peso_anatomico > 0 or args.peso_angulo_cotovelo > 0
+        if usar_braco:
+            x_all, y_all, sessions, origins, braco_all = load_all_epochs(
+                recordings, args, com_braco=True)
+        else:
+            x_all, y_all, sessions, origins = load_all_epochs(recordings, args)
+            braco_all = None
         channel_map = build_channel_map(args, int(x_all.shape[1]))
         x_all = x_all[:, channel_map, :]
         # origem media das sessoes (usada pelo tempo real para projetar sobre
@@ -706,6 +936,9 @@ def main():
         val_idx = np.flatnonzero(val_mask)
         x_train, y_train = x_all[train_idx], y_all[train_idx]
         x_val, y_val = x_all[val_idx], y_all[val_idx]
+        braco_train = (None if braco_all is None else braco_all[train_idx])
+        braco_val = (None if braco_all is None else braco_all[val_idx])
+        anatomico = monta_anatomico(args, braco_all)
         names = [os.path.basename(path) for path, _ev in recordings]
         print(f"Validacao: sessoes {sorted(val_sessions)} "
               f"({[names[i] for i in sorted(val_sessions)]}) | "
@@ -714,7 +947,8 @@ def main():
                 "sessoes": len(recordings), "origin_xyz_m": mean_origin}
 
     results = run_training(args, x_train, y_train, x_val, y_val, channel_map,
-                           meta=meta)
+                           meta=meta, anatomico=anatomico,
+                           arm_train=braco_train, arm_val=braco_val)
     frame = pd.DataFrame([results])
     frame.to_csv(args.results_out, index=False)
     print(f"Resultados salvos em {args.results_out}")

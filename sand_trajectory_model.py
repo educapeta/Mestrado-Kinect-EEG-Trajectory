@@ -160,6 +160,116 @@ def load_checkpoint(path):
 
 
 # =============================================================================
+# Regularizador anatomico (adaptacao do L_DCL/L_RDE do MTRT ao nosso alvo)
+# =============================================================================
+DEFAULT_REACH_MARGIN = 0.02
+DEFAULT_ELBOW_MIN_DEG = 15.0
+DEFAULT_ELBOW_MAX_DEG = 178.0
+DEFAULT_ANGLE_SCALE_DEG = 30.0
+
+
+def elbow_angle_from_radius(radius, l1, l2):
+    """Angulo INTERNO do cotovelo (rad) implicado por ||punho - ombro||.
+
+    Lei dos cossenos: r^2 = l1^2 + l2^2 - 2*l1*l2*cos(theta), logo
+    theta = 180 graus => braco esticado (r = l1 + l2) e
+    theta = 0 graus   => braco dobrado  (r = |l1 - l2|).
+    """
+    cosseno = (l1 ** 2 + l2 ** 2 - np.asarray(radius, np.float64) ** 2) \
+        / (2.0 * l1 * l2)
+    return np.arccos(np.clip(cosseno, -1.0, 1.0))
+
+
+class AnatomicalRegularizer:
+    """Perda anatomica suave para a trajetoria do PUNHO (sem parametros).
+
+    Por que so' o punho: o alvo da rede e' a posicao do punho, entao o cotovelo
+    nao e' identificavel ponto a ponto. O que a geometria de 2 elos determina
+    univocamente e' o RAIO ``r = ||punho - ombro||`` e, por lei dos cossenos, o
+    angulo do cotovelo implicado. Dai os tres termos:
+
+      1. ``envelope``: r tem de ficar em [|l1-l2|, l1+l2] (com margem). Fora
+         disso o braco teria de esticar ou encolher -- e' a "L_DCL" do MTRT;
+      2. ``angulo``  : o angulo implicado deve acompanhar o angulo REAL medido
+         pelo Kinect (regulariza a forma, nao so' a posicao cartesiana);
+      3. ``limites`` : o angulo implicado tem de ficar nos limites articulares
+         (padrao 15-178 graus), evitando posturas impossiveis.
+
+    Referencia: MTRT (Wang et al., IEEE TNSRE 31:2349-2358, 2023) usa comprimentos
+    de elo constantes como **funcao de perda**, nao como arquitetura.
+    """
+
+    def __init__(self, l1, l2, peso_envelope=1.0, peso_angulo=0.0,
+                 peso_limites=1.0, margem=DEFAULT_REACH_MARGIN,
+                 angulo_min_deg=DEFAULT_ELBOW_MIN_DEG,
+                 angulo_max_deg=DEFAULT_ELBOW_MAX_DEG,
+                 escala_angulo_deg=DEFAULT_ANGLE_SCALE_DEG):
+        self.l1 = float(l1)
+        self.l2 = float(l2)
+        if not (0.05 <= self.l1 <= 0.6 and 0.05 <= self.l2 <= 0.6):
+            raise ValueError(f"comprimentos de elo implausiveis: "
+                             f"l1={self.l1} m, l2={self.l2} m")
+        self.peso_envelope = float(peso_envelope)
+        self.peso_angulo = float(peso_angulo)
+        self.peso_limites = float(peso_limites)
+        self.margem = float(margem)
+        self.theta_min = np.deg2rad(float(angulo_min_deg))
+        self.theta_max = np.deg2rad(float(angulo_max_deg))
+        self.escala = np.deg2rad(float(escala_angulo_deg))
+
+    @property
+    def ativo(self):
+        return (self.peso_envelope > 0) or (self.peso_angulo > 0) \
+            or (self.peso_limites > 0)
+
+    def componentes(self, punho, ombro, angulo_real_deg=None, mascara=None):
+        """Termos da perda (tensores escalares) para um lote de trajetorias.
+
+        punho, ombro: (B, S, 3) em metros, no MESMO referencial.
+        angulo_real_deg: (B, S) angulo interno do cotovelo medido (graus).
+        mascara: (B, S) 1 = amostra valida (NaN/invalidos ficam fora da media).
+        """
+        import torch
+
+        valido = torch.isfinite(punho).all(dim=-1) & \
+            torch.isfinite(ombro).all(dim=-1)
+        if mascara is not None:
+            valido = valido & mascara.bool()
+        raio = torch.linalg.norm(punho - ombro, dim=-1)
+        raio = torch.nan_to_num(raio, nan=0.0, posinf=0.0, neginf=0.0)
+
+        r_max = (self.l1 + self.l2) * (1.0 - self.margem)
+        r_min = abs(self.l1 - self.l2) * (1.0 + self.margem)
+        envelope = (torch.clamp(raio - r_max, min=0.0) ** 2
+                    + torch.clamp(r_min - raio, min=0.0) ** 2)
+
+        cosseno = (self.l1 ** 2 + self.l2 ** 2 - raio ** 2) \
+            / (2.0 * self.l1 * self.l2)
+        theta = torch.acos(torch.clamp(cosseno, -1.0 + 1e-6, 1.0 - 1e-6))
+        limites = (torch.clamp(self.theta_min - theta, min=0.0) ** 2
+                   + torch.clamp(theta - self.theta_max, min=0.0) ** 2)
+
+        angulo = torch.zeros_like(envelope)
+        valido_angulo = valido
+        if angulo_real_deg is not None:
+            alvo = torch.nan_to_num(angulo_real_deg, nan=0.0) * np.pi / 180.0
+            valido_angulo = valido & torch.isfinite(angulo_real_deg)
+            angulo = ((theta - alvo) / self.escala) ** 2
+
+        def media(valor, peso_valido):
+            pesos = peso_valido.to(valor.dtype)
+            return (valor * pesos).sum() / pesos.sum().clamp(min=1.0)
+
+        env_m = media(envelope, valido)
+        ang_m = media(angulo, valido_angulo)
+        lim_m = media(limites, valido)
+        total = (self.peso_envelope * env_m + self.peso_angulo * ang_m
+                 + self.peso_limites * lim_m)
+        return {"total": total, "envelope": env_m, "angulo": ang_m,
+                "limites": lim_m}
+
+
+# =============================================================================
 # Wrapper de inferencia
 # =============================================================================
 class SandTrajectoryBCI:

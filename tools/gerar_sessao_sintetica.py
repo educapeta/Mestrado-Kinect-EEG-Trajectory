@@ -52,6 +52,38 @@ HOME_SEC, ME_SEC, PAUSE_SEC, MI_SEC = 2.0, 4.0, 2.0, 4.0
 TRIAL_SEC = HOME_SEC + ME_SEC + PAUSE_SEC + MI_SEC
 T_MONO_START = 1000.0          # relogio monotonico ficticio das sessoes
 
+# Geometria do braco sintetico (modelo de 2 elos) usada para preencher as
+# colunas ARM_* como o ArmLinkModel do Programa 1 faria.
+L1_M, L2_M = 0.30, 0.27                    # ombro->cotovelo, cotovelo->punho
+OMBRO_M = np.array([0.0, -0.28, -0.06])    # ombro relativo ao home (m)
+DOBRA_REF = np.array([0.0, -1.0, 0.0])     # cotovelo tende a ficar abaixo
+
+
+def braco_do_punho(punho, ombro=OMBRO_M, l1=L1_M, l2=L2_M):
+    """(cotovelo, angulo interno, elevacao, azimute) do modelo de 2 elos.
+
+    Mesma matematica do `ArmLinkModel`: o cotovelo fica no plano definido pelo
+    vetor ombro->punho e pela direcao de dobramento de referencia.
+    """
+    ombro = np.asarray(ombro, np.float64)
+    vetor = np.asarray(punho, np.float64) - ombro
+    raio = float(np.linalg.norm(vetor))
+    raio = float(np.clip(raio, abs(l1 - l2) + 1e-6, l1 + l2 - 1e-6))
+    unitario = vetor / max(raio, 1e-9)
+    a = (raio ** 2 + l1 ** 2 - l2 ** 2) / (2.0 * raio)
+    h = max(l1 ** 2 - a ** 2, 0.0) ** 0.5
+    perp = DOBRA_REF - np.dot(DOBRA_REF, unitario) * unitario
+    norma = float(np.linalg.norm(perp))
+    perp = np.array([0.0, 1.0, 0.0]) if norma < 1e-9 else perp / norma
+    cotovelo = ombro + a * unitario + h * perp
+    cosseno = (l1 ** 2 + l2 ** 2 - raio ** 2) / (2.0 * l1 * l2)
+    angulo = float(np.degrees(np.arccos(np.clip(cosseno, -1.0, 1.0))))
+    braco = cotovelo - ombro
+    elevacao = float(np.degrees(np.arcsin(np.clip(
+        -braco[1] / max(np.linalg.norm(braco), 1e-9), -1.0, 1.0))))
+    azimute = float(np.degrees(np.arctan2(braco[0], braco[2])))
+    return cotovelo, angulo, elevacao, azimute
+
 
 def parse_args():
     parser = argparse.ArgumentParser(
@@ -285,6 +317,18 @@ def escreve_movimento_e_eventos(args, prefixo, n, trials, duracao,
                 "pitch": float(4 * np.cos(2 * np.pi * 0.15 * instante)),
                 "yaw": float(10 * np.sin(2 * np.pi * 0.1 * instante)),
                 "zero_lock": 1,
+            })
+            # Braco (ARM_*) coerente com o punho: mesma geometria de 2 elos do
+            # ArmLinkModel, para o regularizador anatomico ter dado real.
+            cotovelo, angulo, elevacao, azimute = braco_do_punho(posicao)
+            movimento.update({
+                "arm_shoulder": OMBRO_M, "arm_elbow": cotovelo,
+                "arm_wrist": posicao, "arm_elbow_angle": angulo,
+                "arm_shoulder_elev": elevacao, "arm_shoulder_azim": azimute,
+                "arm_upper_len": L1_M, "arm_fore_len": L2_M,
+                "arm_valid": 1, "arm_ik": 1, "arm_clamped": 0,
+                "arm_side": emp.ARM_SIDE_CODE.get(
+                    trial["mao"] if trial else "", 0),
             })
             linha = [f"{T_MONO_START + instante:.6f}",
                      f"{T_MONO_START + instante:.6f}"]
