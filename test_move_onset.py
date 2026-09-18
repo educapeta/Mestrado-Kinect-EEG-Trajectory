@@ -77,7 +77,7 @@ for trial in range(2):
     assert d.detected and d.onset_index > 0, f"trial {trial} nao detectou"
 
 # 7) coluna KT_onset
-assert p.N_MOTION_COLS == 43, p.N_MOTION_COLS
+assert p.N_MOTION_COLS == 59, p.N_MOTION_COLS
 assert p.MOTION_COLUMNS[-1] == "KT_onset", p.MOTION_COLUMNS[-1]
 coluna = p.MOTION_COLUMNS.index("KT_onset")
 base = dict(p.SharedState().motion)

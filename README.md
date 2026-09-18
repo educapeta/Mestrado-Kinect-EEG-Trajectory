@@ -113,7 +113,7 @@ legacy/               zip do código legado (subir no Drive manualmente)
 | Arquivo | Conteúdo |
 |---|---|
 | `gravacao_MEMI_<stamp>.csv` | **EEG cru** (µV, sem filtros) a 500 Hz: `Time, EEG_Ch01..32, Marker` — 34 colunas, ~281 B/amostra (≈440 MB por sessão de 50 min) |
-| `gravacao_MEMI_<stamp>_movimento.csv` | Movimento a 30 Hz (45 colunas): `t_mono_s, t_epoch_s` (**absolutos**) + as 43 de `MOTION_COLUMNS` (KT_* da mão ativa, IMU_* roll/pitch/yaw + posição fusionada, ZERO_lock, KTT_valid, ARM_* da IK, PALM_* da palma, KT_hand, KT_src, KT_onset) |
+| `gravacao_MEMI_<stamp>_movimento.csv` | Movimento a 30 Hz (61 colunas), tempos **absolutos**: `t_mono_s, t_epoch_s` + KT (3) + blocos `IMU_L_*`/`IMU_R_*` (11 cada: rpy, aceleração bruta em g, posição fusionada, valid, ZERO_lock) + `IMU_hand` + `KTT_valid` + `ARM_*` (18, IK) + `PALM_*` (11) + `KT_hand`, `KT_src`, `KT_onset` |
 | `gravacao_MEMI_<stamp>_eventos.json` | Marcadores com a **amostra exata** do EEG + metadados (`meta`: participante, sessão, unidades, versões dos pacotes, **sha1 das calibrações**, ordem dos trials, tempos de fase) |
 | `gravacao_MEMI_<stamp>_participante.json` | Questionário do fim da sessão (ID, idade, sexo, dominância, sono, cafeína, observações) |
 | `gravacao_MEMI_<stamp>_priming/tNNN_<condicao>.avi` | Clipe de priming 0,5× com a trajetória 3D sobreposta (~200–400 kB/trial) |

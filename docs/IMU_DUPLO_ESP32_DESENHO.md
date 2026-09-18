@@ -66,21 +66,38 @@ t_us,roll,pitch,yaw,ax,ay,az,gx,gy,gz          # ASCII, 1 datagrama por amostra
 | 4 | **Ordem dos lados** | seguir `ARM_SIDE_CODE` (`1 = direita`, `2 = esquerda`), a **mesma** convenção de `KT_hand`/`ARM_side`, para casar com o trial |
 | 5 | **Pacotes fora de ordem** | o `PositionFusion` já ignora `dt` fora de `(0; 0,1]` s; com jitter isso pode descartar amostras boas — vale contar os descartes |
 
-## 4. Colunas do CSV: a decisão que falta
+## 4. Colunas do CSV: **DECIDIDO — opção B** (blocos por lado)
 
-Hoje o bloco de IMU tem **7 colunas** (`IMU_roll/pitch/yaw_deg`,
-`IMU_pos_x/y/z_m`, `ZERO_lock`) e o movimento tem **45** no total. Três opções:
+Medido nos arquivos reais: o movimento custa ~5,7 B por coluna por linha (30 Hz).
+Numa sessão de 3000 s (250 trials):
 
-| Opção | Colunas | Prós | Contras |
-| --- | --- | --- | --- |
-| **A — manter as 7 + `IMU_hand`** (o IMU "principal" passa a ser o da mão ativa) | **46** | mudança mínima; todo o resto continua válido | perde a evidência do lado contralateral |
-| **B — blocos por lado** (`IMU_L_*`, `IMU_R_*`: rpy + pos + accel bruta + `ZERO_lock` + `IMU_valid`) | ~**56** | dado completo; permite **replay offline do Kalman** com a aceleração crua | quebra o contrato de colunas (2 testes) e toda leitura de `IMU_*` |
-| **C — recomendada: A + bloco contralateral enxuto** (`IMU_hand`, 7 colunas do lado ativo, `IMU_ctrl_acc_x/y/z_g`, `ZERO_lock_ctrl`) | **52** | mantém compatibilidade do bloco antigo e traz a aceleração crua (o que o Kalman precisa para validar offline) + o controle contralateral | exige rotular com clareza na documentação |
+| Esquema | Colunas (arquivo) | Movimento | EEG | Total da sessão |
+| --- | --- | --- | --- | --- |
+| antigo (1 IMU, 7 colunas) | 45 | 21,8 MiB | ~305 MiB | 326 MiB |
+| A (lado ativo + accel) | 52 | 25,2 MiB | ~305 MiB | 329 MiB (+0,9 %) |
+| C (A + contralateral enxuto) | 54 | 26,2 MiB | ~305 MiB | 331 MiB (+1,5 %) |
+| **B (blocos por lado) — ESCOLHIDA** | **61** | **29,6 MiB (+7,8)** | ~305 MiB | **334 MiB (+2,4 %)** |
 
-Ponto que **qualquer** opção deve incluir: a **aceleração bruta** (`IMU_acc_*`).
-Hoje ela é descartada — e sem ela não há como validar o filtro de Kalman offline
-nas sessões reais (o teste sintético existe, mas o dado real não pode ser
-reprocessado).
+**Tamanho não é argumento**: o EEG é ~14× maior que o movimento, e B custa +2,4 %
+da sessão (~+16 MiB por sujeito com 2 sessões). Mais informação ganha.
+
+Implementado em 18/09 (`eeg_motor_paradigm.py`):
+
+- `IMU_COLUMNS = _imu_block("L") + _imu_block("R") + ["IMU_hand"]` — **23 colunas**
+  (11 por lado: rpy, **aceleração bruta em g**, posição fusionada, `valid`,
+  `ZERO_lock`), com `IMU_hand` = 1 direita / 2 esquerda / 0 desconhecido;
+- `MOTION_COLUMNS` = **59** (arquivo: **61** com `t_mono_s`/`t_epoch_s`);
+- `_imu_do_lado()`: lê `motion["imu"][lado]` (dois IMUs) **ou** as chaves legadas
+  (um só IMU → o bloco do lado ativo; com a mão desconhecida, o lado declarado
+  em `--imu-lado`, padrão direita — **nunca duplicando** o mesmo sensor nos dois
+  blocos);
+- a zeragem de orientação é **por lado** (cada sensor declara o seu `orpy_deg`);
+- `test_arm_csv.py` → 6/6 (inclui um caso novo com os dois IMUs independentes).
+
+Custo real de B (e o motivo de ser barato): **o treino não lê coluna de IMU**
+(`MotionTrack` lê só `t_mono_s`, `KT_*`, `KT_src` e `ARM_*`) e o JSON de eventos
+já publica `colunas_movimento` — então a análise deve ser escrita **contra o
+JSON**, não contra nomes fixos.
 
 ## 5. O que já está implementado (18/09)
 

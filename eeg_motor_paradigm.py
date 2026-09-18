@@ -27,9 +27,8 @@ Programa 1 (gravacao offline). Um UNICO processo integra:
      movimento em camera lenta para a fase de priming.
 
 O CSV final tem: Time, EEG_Ch01..ChNN, KT_x_m, KT_y_m, KT_z_m,
-IMU_roll_deg, IMU_pitch_deg, IMU_yaw_deg, IMU_pos_x_m, IMU_pos_y_m,
-IMU_pos_z_m, ZERO_lock, KTT_valid, ARM_* (18 colunas),
-PALM_* (11 colunas), Marker.
+IMU_L_* (11 colunas) + IMU_R_* (11 colunas) + IMU_hand, KTT_valid,
+ARM_* (18 colunas), PALM_* (11 colunas), Marker.
 
 OBS: EEG_ChNN sai em MICROVOLTS (uV). O no CountsToMicrovolts converte os
 counts do ADC de 24 bits com a sensibilidade do aparelho (LSB =
@@ -37,11 +36,19 @@ sensibilidade/2**24 nV) e com a calibracao Factor/Offset de get_scaling();
 use --sem-escala-uv se quiser os counts crus de volta.
 
 KT_*  = mao 3D (landmark 9, m, frame Kinect; RELATIVO a origem),
-IMU_* = angulos do ESP32 (RELATIVOS a origem apos a calibracao) +
-        IMU_pos_* posicao FUSIONADA (acelerometro + cameras), em metros
-        relativos a origem, e ZERO_lock = 1 quando a zeragem esta ativa
-        (camera valida + mao parada: bias do acelerometro corrigido e
-        posicao/velocidade ancoradas na medida da camera),
+IMU_* = DOIS MPU6050, um em cada mao (ver docs/IMU_DUPLO_ESP32_DESENHO.md):
+        IMU_L_* = esquerda e IMU_R_* = direita, cada bloco com
+        rpy (angulos do ESP32, RELATIVO a origem apos a calibracao) +
+        acc_*_g (aceleracao BRUTA em g, o que o filtro de Kalman consome) +
+        pos_*_m (posicao FUSIONADA acelerometro+cameras, m, relativa a origem) +
+        valid + ZERO_lock_L/R (=1 quando a zeragem daquele lado esta ativa:
+        camera valida + mao parada, bias corrigido e posicao/velocidade
+        ancoradas na camera). Cada sensor tem o SEU bias e a SUA zeragem.
+        IMU_hand = qual mao o trial estava executando (1 direita, 2 esquerda,
+        0 desconhecido), a mesma convencao de KT_hand/ARM_side. Com UM so' IMU
+        (sessao antiga ou bancada), o bloco preenchido e' o do lado ativo -- ou
+        o lado declarado em `--imu-lado` quando a mao e' desconhecida -- e o
+        outro lado sai NaN com valid=0,
 KTT_valid = 1 se a medida 3D e do frame atual (0 = fallback/sem medida),
 ARM_* = ombro/cotovelo/punho do esqueleto do SDK, corrigidos pela cinematica
         inversa de elos rigidos (ombro->cotovelo e cotovelo->punho constantes,
@@ -284,17 +291,37 @@ CUE_LABELS = {
 
 # ---------------------------------------------------------------------------
 # Colunas de movimento anexadas ao CSV (ordem = ordem no CSV).
-# As sete primeiras (KT_*, IMU_*, KTT_valid) mantem o formato das gravacoes
-# anteriores; ARM_* e PALM_* sao acrescentadas no fim.
+# Ordem: KT (3) + bloco do IMU de cada lado (11 + 11) + IMU_hand (1) +
+# KTT_valid (1) + ARM_* (18) + PALM_* (11) + KT_hand/KT_src/KT_onset (3).
 # ---------------------------------------------------------------------------
 KT_COLUMNS = ["KT_x_m", "KT_y_m", "KT_z_m"]
-IMU_COLUMNS = [
-    "IMU_roll_deg", "IMU_pitch_deg", "IMU_yaw_deg",
-    # Posicao FUSIONADA (acelerometro + cameras) em metros, relativa a origem
-    # como o KT_*, e o flag de zeragem (1 = câmera valida + mao parada).
-    "IMU_pos_x_m", "IMU_pos_y_m", "IMU_pos_z_m",
-    "ZERO_lock",
-]
+def _imu_block(sufixo):
+    """Colunas do bloco de UM lado (11), na ordem em que a linha e' montada.
+
+    orientacao (rpy, graus, relativa a origem) -> aceleracao BRUTA (g) ->
+    posicao fusionada (m, relativa a origem) -> validade -> zeragem.
+
+    A aceleracao bruta passou a ser gravada porque e' ela que o filtro de Kalman
+    do tempo real consome (m/s^2 apos rodar para o referencial da origem); sem
+    ela nao daria para validar/reprocessar o filtro offline no dado real.
+    """
+    return [
+        f"IMU_{sufixo}_roll_deg", f"IMU_{sufixo}_pitch_deg",
+        f"IMU_{sufixo}_yaw_deg",
+        f"IMU_{sufixo}_acc_x_g", f"IMU_{sufixo}_acc_y_g", f"IMU_{sufixo}_acc_z_g",
+        f"IMU_{sufixo}_pos_x_m", f"IMU_{sufixo}_pos_y_m", f"IMU_{sufixo}_pos_z_m",
+        f"IMU_{sufixo}_valid", f"ZERO_lock_{sufixo}",
+    ]
+
+
+#: DOIS IMUs (um por mao; ver docs/IMU_DUPLO_ESP32_DESENHO.md): um bloco por lado
+#: ("L" = esquerda, "R" = direita) e `IMU_hand` dizendo QUAL lado o trial estava
+#: executando (mesma convencao de ARM_side/KT_hand: 1 direita, 2 esquerda, 0
+#: desconhecido). Cada sensor tem o seu bias e a sua zeragem, e o lado que nao
+#: executa serve de referencia de repouso (taxa de falso movimento).
+#: A posicao fusionada e' relativa a origem (como KT_*); a aceleracao e' a
+#: BRUTA do MPU6050, em g.
+IMU_COLUMNS = _imu_block("L") + _imu_block("R") + ["IMU_hand"]
 # Braco com cinematica inversa de elos rigidos (ArmLinkModel em
 # kinect_imu_groundtruth): juntas em metros RELATIVAS a origem + angulos
 # articulares + comprimentos de elo efetivos + diagnostico da IK.
@@ -2186,6 +2213,64 @@ def _relative3(vector, origin):
     return [float(v) for v in values]
 
 
+def _imu_do_lado(motion, lado, orpy):
+    """Le um lado (1 = direita, 2 = esquerda) do dicionario de movimento.
+
+    Dois IMUs: `motion["imu"][lado] = {"rpy_deg": (r,p,y), "accel_g": (x,y,z),
+    "pos_m": (x,y,z), "valid": 1, "zero_lock": 0}`; o `orpy_deg` do PROPRIO lado
+    (opcional) e' usado na zeragem de orientacao -- cada sensor e' montado com um
+    offset diferente.
+
+    Formato antigo (um IMU): as chaves legadas (roll/pitch/yaw, imu_pos,
+    zero_lock) sao atribuidas ao lado da MAO ATIVA (`motion["hand"]`); o outro
+    lado sai com NaN e valid=0.
+    """
+    por_lado = motion.get("imu") or {}
+    if lado in por_lado:
+        dados = dict(por_lado[lado])
+        rpy = tuple(float(v) for v in
+                    np.asarray(dados.get("rpy_deg", _nan3()),
+                               np.float64).reshape(3))
+        referencia = dados.get("orpy_deg", orpy)
+        if referencia is not None and np.isfinite(rpy).all():
+            rpy = tuple(_wrap180(valor - base) for valor, base
+                        in zip(rpy, np.asarray(referencia, np.float64)))
+        return {"rpy": rpy,
+                "accel_g": dados.get("accel_g", _nan3()),
+                "pos": dados.get("pos_m", _nan3()),
+                "valid": dados.get("valid", 0),
+                "zero_lock": dados.get("zero_lock", 0)}
+    ativo = int(motion.get("hand", 0) or 0)
+    if ativo == 0:
+        # Um so' IMU e mao desconhecida: usa o lado DECLARADO da sessao
+        # (`imu_lado`, padrao 1 = direita). Nunca duplicar o mesmo sensor nos
+        # dois blocos -- isso seria dado mal rotulado.
+        ativo = int(motion.get("imu_lado", 1) or 1)
+    if ativo == int(lado):            # legado: um IMU, atribuido a mao ativa
+        rpy = (motion["roll"], motion["pitch"], motion["yaw"])
+        if orpy is not None and np.isfinite(np.asarray(rpy, np.float64)).all():
+            rpy = tuple(_wrap180(valor - base) for valor, base
+                        in zip(rpy, np.asarray(orpy, np.float64)))
+        return {"rpy": rpy,
+                "accel_g": motion.get("imu_accel_g", _nan3()),
+                "pos": motion.get("imu_pos", _nan3()),
+                "valid": motion.get("valid", 0),
+                "zero_lock": motion.get("zero_lock", 0)}
+    return {"rpy": (np.nan,) * 3, "accel_g": _nan3(), "pos": _nan3(),
+            "valid": 0, "zero_lock": 0}
+
+
+def _bloco_imu(motion, sufixo, origin, orpy):
+    """11 valores do lado `sufixo` ("L" | "R"), na ordem de _imu_block()."""
+    lado = 1 if sufixo == "R" else 2
+    dados = _imu_do_lado(motion, lado, orpy)
+    return (list(dados["rpy"])
+            + [float(valor) for valor in
+               np.asarray(dados["accel_g"], np.float64).reshape(3)]
+            + _relative3(dados["pos"], origin)
+            + [float(dados["valid"]), float(dados["zero_lock"])])
+
+
 def build_motion_row(motion, origin, orpy):
     """Linha de movimento na ORDEM de MOTION_COLUMNS.
 
@@ -2198,15 +2283,15 @@ def build_motion_row(motion, origin, orpy):
     absolutos (transladar a origem nao muda angulo nem versor).
     """
     x, y, z = (motion["x"], motion["y"], motion["z"])
-    r, p, yw = (motion["roll"], motion["pitch"], motion["yaw"])
     if origin is not None:
         x, y, z = x - origin[0], y - origin[1], z - origin[2]
-    if orpy is not None and np.isfinite([r, p, yw]).all():
-        r, p, yw = (_wrap180(r - orpy[0]), _wrap180(p - orpy[1]),
-                    _wrap180(yw - orpy[2]))
-    row = [x, y, z, r, p, yw]
-    row += _relative3(motion.get("imu_pos", _nan3()), origin)
-    row += [float(motion.get("zero_lock", 0)), float(motion["valid"])]
+    # Ordem: KT (3) + bloco de CADA lado (11 + 11) + IMU_hand (1) + KTT_valid (1).
+    # A zeragem de orientacao de cada lado e' feita em `_imu_do_lado` (cada
+    # sensor tem o seu proprio offset de montagem).
+    row = [x, y, z]
+    row += _bloco_imu(motion, "L", origin, orpy)
+    row += _bloco_imu(motion, "R", origin, orpy)
+    row += [float(motion.get("hand", 0)), float(motion["valid"])]
     row += _relative3(motion["arm_shoulder"], origin)
     row += _relative3(motion["arm_elbow"], origin)
     row += _relative3(motion["arm_wrist"], origin)
@@ -2959,7 +3044,13 @@ def parse_args():
                               "'0,1' = webcam do laptop (0) + webcam USB (1)."))
     parser.add_argument("--sem-zeroing", action="store_true",
                         help=("Desativa a zeragem do IMU pelas cameras "
-                              "(colunas IMU_pos_* ficam NaN e ZERO_lock=0)"))
+                              "(colunas IMU_*_pos_* ficam NaN e ZERO_lock_*=0)"))
+    parser.add_argument("--imu-lado", type=int, default=1,
+                        choices=(1, 2),
+                        help=("Lado do UNICO IMU quando a sessao tem so' um "
+                              "(1 = direita, 2 = esquerda). Com dois IMUs "
+                              "(um por mao) este valor e' ignorado: cada lado "
+                              "vai para o seu bloco IMU_L_*/IMU_R_*"))
     parser.add_argument("--impedancia", action="store_true",
                         help="Relatorio de impedancias antes da sessao")
     parser.add_argument("--impedancia-tentativas", type=int, default=3,
@@ -3125,6 +3216,10 @@ def main():
 
     marker_queue = queue.Queue()
     state = SharedState()
+    #: Lado do UNICO IMU (com dois IMUs cada bloco ja' e' rotulado; este valor
+    #: resolve so' as amostras em que a mao ativa e' desconhecida, como as
+    #: linhas de base do inicio da sessao).
+    state.motion["imu_lado"] = int(getattr(args, "imu_lado", 1) or 1)
     imu = ImuReceiver(4210)
     imu.start()
 

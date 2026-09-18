@@ -5,7 +5,7 @@ mesmo caminho do RecordingMuxer (_motion_row, que monta a linha do CSV) e
 confere coluna a coluna:
 
 1. Ordem/tamanho: MOTION_COLUMNS = KT(3) + IMU(7) + KTT_valid(1) +
-   ARM(18) + PALM(11) + KT_hand/KT_src/KT_onset(3) = 43, e o cabecalho do CSV.
+   ARM(18) + PALM(11) + KT_hand/KT_src/KT_onset(3) = 59, e o cabecalho do CSV.
 2. Posicoes do braco sao RELATIVAS a origem; KT_* e IMU_* tambem.
 3. Angulos articulares e versores da palma sao ABSOLUTOS (origem nao muda).
 4. Sem medida -> NaN e flags de validade em 0 (nunca 0.0 fingindo ser medido).
@@ -20,8 +20,8 @@ import kinect_imu_groundtruth as kig
 
 row_keys = p.MOTION_COLUMNS
 assert len(row_keys) == len(set(row_keys)), "colunas duplicadas"
-assert p.N_MOTION_COLS == 43, f"N_MOTION_COLS={p.N_MOTION_COLS}"
-assert len(p.KT_COLUMNS) == 3 and len(p.IMU_COLUMNS) == 7
+assert p.N_MOTION_COLS == 59, f"N_MOTION_COLS={p.N_MOTION_COLS}"
+assert len(p.KT_COLUMNS) == 3 and len(p.IMU_COLUMNS) == 23
 assert len(p.ARM_COLUMNS) == 18, len(p.ARM_COLUMNS)
 assert len(p.PALM_COLUMNS) == 11, len(p.PALM_COLUMNS)
 
@@ -30,11 +30,12 @@ n_eeg = 32
 header = (["Time"] + [f"EEG_Ch{i + 1:02d}" for i in range(n_eeg)]
           + list(row_keys) + ["Marker"])
 assert header[1:33] == [f"EEG_Ch{i + 1:02d}" for i in range(32)]
-assert header[33] == "KT_x_m"
-assert header[39] == "IMU_pos_x_m", header[36:44]
-assert header[41] == "IMU_pos_z_m"
-assert header[42] == "ZERO_lock" and header[43] == "KTT_valid"
-assert header[44] == "ARM_shoulder_x_m"
+base = 1 + n_eeg                       # primeira coluna de movimento
+assert header[base:base + 3] == list(p.KT_COLUMNS)
+assert header[base + 3:base + 14] == p._imu_block("L"), header[base + 3:base + 14]
+assert header[base + 14:base + 25] == p._imu_block("R")
+assert header[base + 25] == "IMU_hand" and header[base + 26] == "KTT_valid"
+assert header[base + 27:base + 45] == list(p.ARM_COLUMNS)
 assert header[-5] == "PALM_valid" and header[-4] == "KT_hand"
 assert header[-3] == "KT_src" and header[-2] == "KT_onset"
 assert header[-1] == "Marker"
@@ -96,8 +97,11 @@ assert abs(col["ARM_shoulder_y_m"] - (1.35 - 1.30)) < 1e-9
 assert abs(col["ARM_elbow_z_m"] - (1.55 - 1.60)) < 1e-9
 assert abs(col["ARM_wrist_x_m"] - (0.85 - 0.60)) < 1e-9
 # posicao FUSIONADA do IMU: relativa a origem; zeragem gravada como 0/1
-assert np.isnan(col["IMU_pos_x_m"])            # imu_pos NaN -> NaN no CSV
-assert col["ZERO_lock"] in (0.0, 1.0)
+assert np.isnan(col["IMU_R_pos_x_m"])            # imu_pos NaN -> NaN no CSV
+assert col["ZERO_lock_R"] in (0.0, 1.0)
+assert np.isnan(col["IMU_L_roll_deg"])           # lado sem IMU medido
+assert col["IMU_L_valid"] == 0.0
+assert col["IMU_hand"] == 0.0                    # sem mao conhecida na amostra
 # angulos articulares e elos efetivos NAO sofrem com a origem
 assert col["ARM_elbow_angle_deg"] == 97.5
 assert col["ARM_shoulder_elev_deg"] == -32.0
@@ -140,8 +144,8 @@ assert col_onset["KT_onset"] == 1.0 and col["KT_onset"] == 0.0
 # ---------------------------------------------------------------------------
 row2 = p.build_motion_row(motion_dict(), origin, np.array([10.0, 0.0, 20.0]))
 col2 = dict(zip(row_keys, row2))
-assert abs(col2["IMU_roll_deg"] - 2.0) < 1e-9, col2["IMU_roll_deg"]
-assert abs(col2["IMU_yaw_deg"] - 27.0) < 1e-9, col2["IMU_yaw_deg"]
+assert abs(col2["IMU_R_roll_deg"] - 2.0) < 1e-9, col2["IMU_R_roll_deg"]
+assert abs(col2["IMU_R_yaw_deg"] - 27.0) < 1e-9, col2["IMU_R_yaw_deg"]
 assert abs(col2["PALM_azim_deg"] - col["PALM_azim_deg"]) < 1e-12
 assert col2["ARM_elbow_angle_deg"] == col["ARM_elbow_angle_deg"]
 # wrap: 170 graus relativos a origem 170 -> 0 (nao -340)
@@ -149,7 +153,7 @@ motion_wrap = motion_dict()
 motion_wrap["yaw"] = 170.0
 col_wrap = dict(zip(row_keys, p.build_motion_row(
     motion_wrap, origin, np.array([0.0, 0.0, 170.0]))))
-assert abs(col_wrap["IMU_yaw_deg"]) < 1e-9, col_wrap["IMU_yaw_deg"]
+assert abs(col_wrap["IMU_R_yaw_deg"]) < 1e-9, col_wrap["IMU_R_yaw_deg"]
 
 
 # ---------------------------------------------------------------------------
@@ -181,18 +185,50 @@ col4 = dict(zip(row_keys, row4))
 assert abs(col4["KT_x_m"] - 0.31) < 1e-9
 assert abs(col4["ARM_shoulder_x_m"] - 0.60) < 1e-9
 assert abs(col4["ARM_wrist_z_m"] - 1.90) < 1e-9
-assert abs(col4["IMU_roll_deg"] - 12.0) < 1e-9
+assert abs(col4["IMU_R_roll_deg"] - 12.0) < 1e-9
 assert col4["PALM_valid"] == 1
 
 
 # ---------------------------------------------------------------------------
-# 5) Largura total: Time(1) + EEG(32) + 43 movimento + Marker(1) = 77 colunas.
+# 5) Largura total: Time(1) + EEG(32) + 59 movimento + Marker(1) = 93 colunas.
 #    (Com o movimento em arquivo separado o CSV de EEG sai com 34 colunas;
 #    aqui medimos o formato EMBUTIDO, que o muxer anuncia quando write_motion.)
 # ---------------------------------------------------------------------------
-assert n_eeg + p.N_MOTION_COLS + 1 == 76        # canais que o muxer anuncia
-assert 1 + n_eeg + p.N_MOTION_COLS + 1 == 77    # + a coluna Time do CsvWriter
-assert len(header) == 77, len(header)
-print("ARM_CSV_OK: 5/5 blocos (43 colunas de movimento; formato embutido de "
-      "77 colunas; padrao = 34 colunas + CSV de movimento separado)")
+assert n_eeg + p.N_MOTION_COLS + 1 == 92        # canais que o muxer anuncia
+assert 1 + n_eeg + p.N_MOTION_COLS + 1 == 93    # + a coluna Time do CsvWriter
+assert len(header) == 93, len(header)
+
+
+# ---------------------------------------------------------------------------
+# 6) DOIS IMUs (um por mao): cada lado tem o seu bloco proprio, independentes --
+#    `motion["imu"][1]` (direita) e `motion["imu"][2]` (esquerda) -- e `IMU_hand`
+#    diz qual mao o trial estava executando. Ver docs/IMU_DUPLO_ESP32_DESENHO.md.
+# ---------------------------------------------------------------------------
+motion_dois = motion_dict()
+motion_dois["hand"] = 2                                  # mao ativa: esquerda
+motion_dois["imu"] = {
+    1: {"rpy_deg": (5.0, 1.0, 2.0), "accel_g": (0.0, 0.0, 1.0),
+        "pos_m": (0.20, 0.01, -0.02), "valid": 1, "zero_lock": 0},
+    2: {"rpy_deg": (7.0, 0.0, -1.0), "accel_g": (0.10, 0.0, 1.0),
+        "pos_m": (0.15, 0.0, -0.01), "valid": 1, "zero_lock": 1},
+}
+col6 = dict(zip(row_keys, p.build_motion_row(motion_dois, None, None)))
+assert col6["IMU_hand"] == 2.0
+assert abs(col6["IMU_R_roll_deg"] - 5.0) < 1e-9 and col6["IMU_R_roll_deg"] != 7.0
+assert abs(col6["IMU_L_roll_deg"] - 7.0) < 1e-9 and col6["IMU_L_roll_deg"] != 5.0
+assert abs(col6["IMU_R_acc_z_g"] - 1.0) < 1e-9
+assert abs(col6["IMU_L_acc_x_g"] - 0.10) < 1e-9
+assert abs(col6["IMU_R_pos_x_m"] - 0.20) < 1e-9
+assert abs(col6["IMU_L_pos_x_m"] - 0.15) < 1e-9
+assert col6["IMU_R_valid"] == 1.0 and col6["IMU_L_valid"] == 1.0
+assert col6["ZERO_lock_R"] == 0.0 and col6["ZERO_lock_L"] == 1.0
+# e a zeragem de orientacao e' POR lado quando o lado declara o seu orpy
+motion_dois["imu"][1]["orpy_deg"] = (5.0, 1.0, 2.0)      # direita zerada
+col6b = dict(zip(row_keys, p.build_motion_row(motion_dois, None, None)))
+assert abs(col6b["IMU_R_roll_deg"]) < 1e-9, col6b["IMU_R_roll_deg"]
+assert abs(col6b["IMU_L_roll_deg"] - 7.0) < 1e-9         # esquerda intacta
+
+print("ARM_CSV_OK: 6/6 blocos (59 colunas de movimento com bloco POR LADO dos "
+      "dois IMUs; formato embutido de 93 colunas; padrao = 34 colunas + CSV de "
+      "movimento separado)")
 sys.exit(0)

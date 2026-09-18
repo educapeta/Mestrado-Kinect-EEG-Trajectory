@@ -721,7 +721,30 @@ DUVIDAS REGISTRADAS PARA O ARTIGO
   Qualquer opcao deve incluir a ACELERACAO BRUTA (IMU_acc_*), hoje descartada --
   sem ela nao da' para validar o filtro de Kalman offline no dado real.
 
-(d) PENDENCIAS (checklist do doc, secao 6)
+(e) DECISAO DAS COLUNAS (18/09): opcao B, ja' IMPLEMENTADA
+- Medicao: no CSV de movimento ~5,7 B por coluna por linha (30 Hz). Numa sessao
+  de 3000 s: movimento 21,8 MiB com 45 colunas; EEG ~305 MiB (14x maior). A opcao
+  B (blocos por lado) vai a 61 colunas e 29,6 MiB -> +2,4% do total da sessao
+  (+~16 MiB por sujeito com 2 sessoes). TAMANHO NAO E' ARGUMENTO.
+- Implementado em eeg_motor_paradigm.py:
+  * `_imu_block(sufixo)`: 11 colunas por lado = rpy + ACCELERACAO BRUTA em g +
+    posicao fusionada (m relativa a origem) + valid + ZERO_lock;
+  * `IMU_COLUMNS = _imu_block("L") + _imu_block("R") + ["IMU_hand"]` = 23;
+    `MOTION_COLUMNS` = 59 (arquivo = 61 com t_mono_s/t_epoch_s);
+  * `IMU_hand` = 1 direita / 2 esquerda / 0 desconhecido (convencao ARM_side);
+  * `_imu_do_lado()`: le `motion["imu"][lado]` (dois IMUs) OU as chaves legadas
+    (um so' IMU -> bloco do lado ativo; mao desconhecida -> lado de `--imu-lado`,
+    padrao direita; NUNCA duplica o mesmo sensor nos dois blocos);
+  * zeragem de orientacao POR LADO (cada sensor declara o seu `orpy_deg`);
+  * `--imu-lado` novo no CLI; o valor vai para `state.motion["imu_lado"]`.
+- Testes atualizados: test_arm_csv 6/6 (caso novo com dois IMUs independentes,
+  indices do cabecalho agora DERIVADOS de _imu_block para nao quebrar com o
+  proximo ajuste), test_paradigm_protocol (59 colunas / 61 no arquivo),
+  test_move_onset (59). Motivo de ser barato: o TREINO nao le coluna de IMU
+  (MotionTrack le t_mono_s, KT_*, KT_src e ARM_*) e o JSON de eventos publica
+  `colunas_movimento`, entao a analise deve ser escrita contra o JSON.
+
+
 1. firmware: porta por lado ou ID no pacote;
 2. decidir as colunas e ajustar IMU_COLUMNS/build_motion_row;
 3. atualizar o contrato de colunas (test_paradigm_protocol, test_arm_csv);

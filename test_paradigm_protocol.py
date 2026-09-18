@@ -4,7 +4,7 @@ Cobre o que o smoke manual nao garantia:
 1. Lista de trials balanceada (250 = 6 condicoes) e cortada em blocos de 50.
 2. Duracao exata do trial (repouso 2 + cue/ME 4 + video 2 + MI 4 = 12 s).
 3. Codigos de marcador: unicos entre si e TODOS com legenda em CODE_NAMES.
-4. Contrato de colunas: EEG cru (34 colunas) + movimento em arquivo (42).
+4. Contrato de colunas: EEG cru (34 colunas) + movimento em arquivo (58).
 5. Vigia do link (#15): sem amostras novas avisa e marca 899/898.
 6. Tabela de impedancias (#23): marca canal ruim, conta OK, trata "-10".
 7. Questionario do participante (#2): ENTER mantem o padrao e o JSON sai.
@@ -77,10 +77,10 @@ todos = (list(codigos.values()) + list(p.CODE_HAND.values())
 assert len(set(todos)) == len(todos), "colisao entre codigos de mao/condicao"
 
 # ---------------------------------------------------------------------------
-# 4) Contrato de colunas: padrao = EEG cru (34) + movimento separado (42)
+# 4) Contrato de colunas: padrao = EEG cru (34) + movimento separado (58)
 # ---------------------------------------------------------------------------
 assert p.MOTION_IN_EEG_CSV is False, "o padrao deve ser EEG CRU + movimento fora"
-assert p.N_MOTION_COLS == 43, p.N_MOTION_COLS
+assert p.N_MOTION_COLS == 59, p.N_MOTION_COLS
 mov_cols = list(p.MOTION_COLUMNS)
 assert mov_cols[-3:] == ["KT_hand", "KT_src", "KT_onset"], mov_cols[-3:]
 assert len(mov_cols) == len(set(mov_cols)), "colunas de movimento duplicadas"
@@ -90,7 +90,7 @@ eeg_header = (["Time"] + [f"EEG_Ch{i + 1:02d}" for i in range(n_eeg)]
 assert len(eeg_header) == 34, len(eeg_header)
 assert eeg_header[-1] == "Marker" and "KT_x_m" not in eeg_header
 mov_header = ["t_mono_s", "t_epoch_s"] + mov_cols
-assert len(mov_header) == 45, len(mov_header)
+assert len(mov_header) == 61, len(mov_header)
 assert mov_header[2] == "KT_x_m" and mov_header[-1] == "KT_onset"
 
 # ---------------------------------------------------------------------------
