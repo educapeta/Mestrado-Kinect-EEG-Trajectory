@@ -194,6 +194,9 @@ _demo_trial.py        demo da plataforma gráfica com a webcam
 gravacoes/            sessoes gravadas (ignorado pelo git; --pasta-sessoes)
 data/                 dados antigos/BCI IV e resultados de treino anteriores
 results/              saídas de execuções de teste
+firmware/esp32_luvas/ firmware das duas luvas (ESP32 + MPU6050, PlatformIO):
+                      leitura do IMU, Kalman, Wi-Fi e UDP nas portas 4210/4211
+                      (o `credenciais.h`, com a senha das redes, NÃO é versionado)
 docs/                 histórico, críticas e documentos de decisão
                       (ESTADO_DA_ARTE_JANELAS.md, ARQUITETURA_ONLINE_JANELA_
                       HORIZONTE_E_MCU.md, PROTOCOLO_IDLE_VELOCIDADE_E_CONTEXTO.md,

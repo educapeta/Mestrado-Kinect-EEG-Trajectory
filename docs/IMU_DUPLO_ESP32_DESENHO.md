@@ -28,7 +28,9 @@ ambíguo. Com dois IMUs:
 | esquerda | 2 | **4211** |
 
 O firmware muda **uma linha** (a porta de destino). Sem ambiguidade: quem manda
-na 4210 é a direita.
+na 4210 é a direita. **Implementado** em `firmware/esp32_luvas/` (dois envs do
+PlatformIO, `GLOVE_SIDE = 1`/`0`) e com o destino em **unicast** para o IP do
+notebook (`UDP_DESTINO` no `credenciais.h`, que não é versionado).
 
 ### 2.2 Alternativa: um ESP32 com dois MPU6050 (ou dois sensores no mesmo barramento)
 
@@ -139,7 +141,7 @@ ou `--por-remetente`); (d) se `idade` sobe e `Hz` cai, é Wi-Fi/bateria.
 
 | # | Item | Onde | Status |
 | --- | --- | --- | --- |
-| 1 | firmware: porta por lado (2.1) ou ID no pacote (2.2) | projeto do ESP32 | **com o usuário** |
+| 1 | firmware: porta por lado (2.1) ou ID no pacote (2.2) | `firmware/esp32_luvas/` | ✅ opção 2.1 + unicast (28/09) |
 | 2 | decidir as colunas (seção 4) e ajustar `IMU_COLUMNS`/`build_motion_row` | `eeg_motor_paradigm.py` | ✅ opção B implementada |
 | 3 | atualizar o contrato de colunas nos testes | `test_arm_csv.py`, `test_paradigm_protocol.py` | ✅ 6/6 e 9/9 |
 | 4 | ligar o `ImuBank` no `TrackingThread` (`--imu-portas`) e publicar `motion["imu"][lado]` | `eeg_motor_paradigm.py` | ✅ (rastreador com Kinect **e** modo `--sem-kinect`) |

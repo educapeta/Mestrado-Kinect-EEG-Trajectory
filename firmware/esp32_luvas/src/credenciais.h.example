@@ -1,0 +1,48 @@
+#pragma once
+// ============================================================================
+// TEMPLATE do src/credenciais.h -- copie este arquivo para "credenciais.h" e
+// preencha com os seus dados. O credenciais.h de verdade esta' no .gitignore
+// porque contem SENHA.
+//
+//   copy src\credenciais.h.example src\credenciais.h
+// ============================================================================
+
+// --- Rede principal: WPA2-Enterprise (eduroam) -----------------------------
+// Requer EAP-TTLS + PAP. O ESP32 NAO conecta em eduroam com WiFi.begin(ssid,
+// senha): precisa da API de Enterprise (WPA2_AUTH_TTLS) + identidade/usuario.
+#define WIFI_ENTERPRISE 1
+
+#define WIFI_SSID_ENTERPRISE "eduroam"
+//: Identidade (externa) e usuario (interno) costumam ser o mesmo e-mail.
+#define WIFI_IDENTIDADE "seu.login@ufsc.br"
+#define WIFI_USUARIO "seu.login@ufsc.br"
+
+//: Tempo maximo (ms) esperando a autenticacao 802.1X de UMA senha.
+#define WIFI_TIMEOUT_MS 25000
+
+// Candidatas de senha, testadas NA ORDEM.
+// ATENCAO: cada erro conta no RADIUS e varias podem BLOQUEAR a conta.
+// Deixe WIFI_MAX_TENTATIVAS em 1 ou 2 enquanto estiver testando.
+#define WIFI_MAX_TENTATIVAS 1
+static const char *WIFI_SENHAS[] = {
+    "SUA_SENHA",
+    "SUA_SENHA",
+};
+
+// --- Rede de FALLBACK: WPA2-PSK -------------------------------------------
+// Para casa ou para o HOTSPOT do PC/celular -- recomendado na bancada, porque
+// rede institucional costuma ISOLAR clientes e derrubar o UDP entre ESP32 e PC.
+#define WIFI_PSK_FALLBACK 1
+#define WIFI_SSID_PSK "NOME_DA_REDE"
+#define WIFI_SENHA_PSK "SENHA_DA_REDE"
+
+// --- Destino dos datagramas UDP --------------------------------------------
+// UDP_USAR_UNICAST 1 -> envia direto ao IP abaixo. E' o modo usado na bancada
+//                       (hotspot do notebook, cujo IP e' FIXO) e o unico que
+//                       funciona em redes com client isolation (ex.: eduroam).
+// UDP_USAR_UNICAST 0 -> broadcast 255.255.255.255 (rede domestica simples).
+// ATENCAO: se estas macros NAO existirem, o "#if UDP_USAR_UNICAST" do main.cpp
+// trata a macro ausente como 0 e o firmware cai em broadcast -- em rede com
+// client isolation o pacote nunca chega ao PC.
+#define UDP_USAR_UNICAST 1
+#define UDP_DESTINO "192.168.137.1"

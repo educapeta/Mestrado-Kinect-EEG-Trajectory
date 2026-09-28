@@ -1230,6 +1230,45 @@ PENDENTE (por depender da bancada)
   Pasta do projeto (sem `.venv`/datasets) caiu para ~7.7 GB, dos quais 6.7 GB sao
   o dataset WAY-EEG-GAL. Verificacao pos-limpeza: 27/27 suites passando.
 
+27. SESSAO 2026-09-28 - O FIRMWARE DAS LUVAS ENTROU NO REPOSITORIO (firmware/esp32_luvas)
+  Problema: o firmware dos dois ESP32 + MPU6050 vivia so' na pasta do PlatformIO
+  (fora do git): nao ia junto no clone da outra maquina, nao tinha historico nem
+  revisao. O proprio desenho ja' previa isso -- `docs/IMU_DUPLO_ESP32_DESENHO.md`,
+  item 1 do checklist, ainda "com o usuario".
+  DECISAO: o projeto PlatformIO veio para DENTRO do monorepo, em
+  `firmware/esp32_luvas/`, em vez de virar repositorio separado -- um clone so'
+  traz firmware + pipeline na mesma arvore (e o colaborador recebe os dois de uma
+  vez, sem convite extra).
+  O QUE MUDOU:
+    - projeto movido de `...\OneDrive\Dokumente\PlatformIO\Projects\ESP32 Leitura
+      MPU6050` para `firmware/esp32_luvas/`; o `.git` proprio NAO veio junto
+      (subpasta com repositorio embutido viraria submodulo acidental). A pasta
+      antiga ficou so' com o `.git` do rascunho: nenhum codigo foi duplicado.
+    - `README.md` novo do firmware: hardware (SDA 22 / SCL 23 / 0x68, +-2 g,
+      +-250 dps), formato do pacote
+      (`t_us,roll,pitch,yaw,ax,ay,az,gx,gy,gz`), as duas portas (4210 direita /
+      4211 esquerda), rede (hotspot do notebook com UNICAST e por que a eduroam
+      nao serve: client isolation) e o procedimento de gravacao (truque do BOOT).
+    - `src/credenciais.h.example` COMPLETADO: faltavam `UDP_USAR_UNICAST` e
+      `UDP_DESTINO` -- sem elas o `#if` do `main.cpp` cai em broadcast e a luva
+      fica MUDA em rede com client isolation (era a pegadinha de quem clonasse).
+    - `gravar_direita.bat` / `gravar_esquerda.bat`: o caminho do `pio.exe` estava
+      fixo em `C:\Users\elgut\...`; agora usa `%USERPROFILE%` e, se nao existir,
+      cai para o `pio` do PATH.
+  O QUE NAO VAI PARA O GIT (regras no `.gitignore` da propria pasta, conferidas
+  com `git check-ignore`): `.pio/` (68.3 MB de build),
+  `.vscode/c_cpp_properties.json` e `launch.json` (caminhos absolutos da maquina)
+  e `src/credenciais.h` (SENHA das redes -- nenhuma senha entrou em arquivo
+  versionado; conferido tambem em todo o HEAD publicado).
+  TAMBEM NESTA SESSAO: `*.rar` entrou no `.gitignore` da raiz. Os backups
+  `Mestradopy.rar` (6.4 GB) e `WAY-EEG-GAL.rar` (5.9 GB), feitos para levar os
+  dados no pendrive, estavam como nao rastreados -- com o `git add -A` do
+  `tools/publicar.ps1` a publicacao ABORTAVA (guarda de 50 MB) e um `git add`
+  manual tentaria subir 12 GB.
+  VERIFICACAO: `pio run` compila os DOIS envs na pasta nova (RAM 13.9%, Flash
+  57.7%); `receber_luvas.py` (receptor de bancada, so' stdlib) veio junto.
+
+
 
 
 

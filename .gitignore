@@ -13,6 +13,11 @@ BCICIV_2a_gdf/
 dados_legado/
 legado_*.zip
 
+# Backups que eu mesmo gero para levar num pendrive (o tools/publicar.ps1 faz
+# `git add -A`: sem esta regra a publicacao ABORTA na guarda de 50 MB -- ver
+# Mestradopy.rar, 6.4 GB, e WAY-EEG-GAL.rar, 5.9 GB)
+*.rar
+
 # Modelos treinados
 *.pt
 *.pth
