@@ -56,3 +56,30 @@ WAY-EEG-GAL/
 *.mat
 *.dat
 SAND_cache/
+
+# Imagens de diagnostico de bancada (frames de camera, cinza do detector)
+# tabuleiro_frame_bruto.png e' o frame em COR: mostra o enquadramento, a luz e
+# o borrao -- e tambem a sala de quem capturou. Nao vai para o repositorio.
+/cam_idx*.png
+/tabuleiro_cinza*.png
+/tabuleiro_frame_bruto.png
+/probe_tabuleiro.png
+# Frames de diagnostico ao vivo (batimento do loop e sonda de falha):
+# mostram a sala/participante -- privacidade.
+/_hb_*.png
+/_falha_*.png
+
+# Bancada de teste do piloto sintetico (sessoes ficticias)
+gravacoes_sinteticas_teste/
+
+# Dados de participante (LGPD/CEP): NUNCA versionar -- nem os sinteticos.
+# O tools/publicar.ps1 faz `git add -A`, entao a regra TEM de estar aqui, e
+# nao so' na boa intencao de quem publica.
+*_participante.json
+
+# Sondas descartaveis (`_probe*`), quadros de diagnostico (`_diag_*`) e resumos
+# de suite (`_suite*`): sao DEPURACAO de bancada e mudam de nome a cada sessao.
+# `_smoke_*.py` e `_demo_trial.py` NAO entram aqui -- esses sao do projeto.
+/_probe*
+/_diag_*
+/_suite*

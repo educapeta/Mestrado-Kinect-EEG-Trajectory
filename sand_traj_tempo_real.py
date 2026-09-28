@@ -146,6 +146,14 @@ class SANDTrajWindowNode(INode):
         if abs(fs - self._sand.fs) > 1e-6:
             print(f"[{self._tag}] AVISO: fs da fonte ({fs:g} Hz) difere do "
                   f"modelo ({self._sand.fs:g} Hz).", flush=True)
+        #: Espelha sand_traj_treino.FILTRO_CAUSAL. Nao importamos o modulo de
+        #: TREINO aqui para nao acoplar o tempo real ao pipeline de treino.
+        filtro_treino = str(self._sand.cfg.get("filtro", "causal"))
+        if filtro_treino != "causal":
+            print(f"[{self._tag}] AVISO: o modelo foi treinado com filtro "
+                  f"'{filtro_treino}' e aqui o sinal chega filtrado CAUSAL "
+                  "(g.Pype Bandpass) -- ha mismatch de fase entre treino e "
+                  "inferencia. Retreine com --filtro causal.", flush=True)
         self._interval = max(1, int(round(self._interval_s * fs)))
         self._buffer = np.zeros((self._window, channel_count), np.float32)
         self._counter = 0

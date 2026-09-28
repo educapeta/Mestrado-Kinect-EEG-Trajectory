@@ -137,6 +137,135 @@ def rotation_matrix(roll_deg: float, pitch_deg: float, yaw_deg: float) -> np.nda
     ])
 
 
+# =============================================================================
+# Orientacao da palma: alinhamento IMU <-> camera (por luva)
+# =============================================================================
+#: Amostras MINIMAS para resolver o alinhamento (o modelo tem 5 GDL: 3 da
+#: rotacao de alinhamento + 2 da direcao da palma no corpo do sensor).
+PALM_ALIGNMENT_MIN_SAMPLES = 6
+#: Residuo medio (graus) acima do qual o alinhamento e' considerado ruim: com a
+#: palma sempre virada para a camera e as duas luvas certas, o normal medido pelo
+#: Kinect tem ~1-2 graus de ruido -> residuo de 2-5 graus. Residuo alto quer
+#: dizer captura ruim (palma virou para o dorso no meio, mao fora do quadro) ou
+#: dado de OUTRA luva (porta/IP trocados).
+PALM_ALIGNMENT_MAX_RESIDUAL_DEG = 15.0
+#: Limite de iteracoes do Kabsch alternado (converge em <10 na pratica).
+PALM_ALIGNMENT_ITERATIONS = 200
+
+
+def kabsch_rotation(pairs, eps=1e-12):
+    """Rotacao R que melhor leva os vetores `a_i` nos `b_i` (Kabsch/SVD).
+
+    Resolve `min R sum_i |R a_i - b_i|^2` com det(R) = +1 (rotacao propria, sem
+    espelhamento -- um sensor "montado ao contrario" e' uma ROTACAO, nao um
+    espelho, entao isto cobre a montagem da luva).
+
+    Args:
+        pairs: sequencia de (a, b), vetores 3D equivalentes em dois referenciais.
+        eps: norma minima de cada vetor para entrar no ajuste.
+
+    Returns:
+        ndarray (3, 3) ou None se nenhum par valido (comprimento < eps).
+    """
+    matriz = np.zeros((3, 3))
+    usados = 0
+    for origem, destino in pairs:
+        a = np.asarray(origem, np.float64).reshape(3)
+        b = np.asarray(destino, np.float64).reshape(3)
+        if np.linalg.norm(a) < eps or np.linalg.norm(b) < eps:
+            continue
+        matriz += np.outer(b, a)
+        usados += 1
+    if usados == 0:
+        return None
+    u, _s, vt = np.linalg.svd(matriz)
+    # reflexao (det = -1) nao e' rotacao: corrige o eixo menos significativo
+    sinal = 1.0 if np.linalg.det(u @ vt) >= 0 else -1.0
+    return u @ np.diag([1.0, 1.0, sinal]) @ vt
+
+
+def angle_between(a, b):
+    """Angulo (graus) entre dois vetores, robusto a ruido (clip do cosseno)."""
+    va = np.asarray(a, np.float64).reshape(3)
+    vb = np.asarray(b, np.float64).reshape(3)
+    na, nb = np.linalg.norm(va), np.linalg.norm(vb)
+    if na < 1e-12 or nb < 1e-12:
+        return float("nan")
+    cos = float(np.clip(np.dot(va, vb) / (na * nb), -1.0, 1.0))
+    return float(math.degrees(math.acos(cos)))
+
+
+def solve_palm_alignment(rotations, palm_directions,
+                         iterations=PALM_ALIGNMENT_ITERATIONS):
+    """Resolve (T, f_body, residuo_graus) do modelo `v_i = T R_i f`.
+
+    Por que este modelo (e nao o antigo `R_novo R_ref^T v_ref`): a rotacao que o
+    IMU entrega (`R_i`, corpo -> mundo do IMU) e a direcao da palma medida pelo
+    Kinect (`v_i`, no referencial da CAMERA) vivem em referenciais DIFERENTES. O
+    referencial do IMU tem a vertical do acelerometro, mas o "norte" dele e'
+    arbitrario (sem magnetometro) e ainda muda com a MONTAGEM de cada luva --
+    cada lado tem o seu. Compor as duas rotacoes sem converter da' um vetor certo
+    APENAS na pose de calibracao e erra cada vez mais conforme a mao gira, e o
+    erro e' diferente em cada luva (uma pode ate' parecer certa). Aqui o
+    referencial e' RESOLVIDO a partir das amostras: `T` leva o mundo do IMU para
+    o da camera e `f` e' a direcao da palma no corpo do sensor.
+
+    Solucao: Kabsch alternado. Com `f` fixo, `T` e' o Kabsch dos pares
+    (`R_i f` -> `v_i`); com `T` fixo, `f` e' a media normalizada de
+    `R_i^T T^T v_i`. Comeca em `f = R_0^T v_0` e `T = I` (o comportamento antigo)
+    e converge em poucas iteracoes.
+
+    Args:
+        rotations: lista de (3, 3) corpo -> mundo do IMU, uma por amostra.
+        palm_directions: lista de (3,) direcao da palma no referencial da camera.
+        iterations: teto de iteracoes.
+
+    Returns:
+        (T, f_body, residuo_graus) ou None se houver menos de
+        PALM_ALIGNMENT_MIN_SAMPLES pares validos.
+    """
+    pares = []
+    for rotacao, direcao in zip(rotations or [], palm_directions or []):
+        r = np.asarray(rotacao, np.float64)
+        v = np.asarray(direcao, np.float64).reshape(3)
+        if r.shape != (3, 3) or not np.isfinite(r).all():
+            continue
+        norma = np.linalg.norm(v)
+        if not np.isfinite(v).all() or norma < 1e-9:
+            continue
+        pares.append((r, v / norma))
+    if len(pares) < PALM_ALIGNMENT_MIN_SAMPLES:
+        return None
+    rotacoes = [r for r, _v in pares]
+    direcoes = [v for _r, v in pares]
+    f_body = rotacoes[0].T @ direcoes[0]
+    norma = np.linalg.norm(f_body)
+    if norma < 1e-9:
+        return None
+    f_body = f_body / norma
+    alinhamento = np.eye(3)
+    for _ in range(max(1, int(iterations))):
+        alinhamento = kabsch_rotation([(r @ f_body, v)
+                                       for r, v in pares])
+        if alinhamento is None:
+            return None
+        media = np.mean([r.T @ alinhamento.T @ v for r, v in pares], axis=0)
+        norma = np.linalg.norm(media)
+        if norma < 1e-9:
+            return None
+        novo = media / norma
+        convergiu = np.linalg.norm(novo - f_body) < 1e-12
+        f_body = novo
+        if convergiu:
+            break
+    residuos = [angle_between(alinhamento @ r @ f_body, v)
+                for r, v in pares]
+    residuos = [valor for valor in residuos if np.isfinite(valor)]
+    if not residuos:
+        return None
+    return alinhamento, f_body, float(np.mean(residuos))
+
+
 class PositionFusion:
     """Fusao IMU + camera com ZERAGEM quando ha medida de camera valida.
 
@@ -160,6 +289,18 @@ class PositionFusion:
         self.last_timestamp_us: Optional[int] = None
         self.accel_bias = np.zeros(3)
         self.bias_samples = []
+        # --- orientacao da palma ------------------------------------------
+        # `palm_reference_body`: direcao da palma NO CORPO do sensor (unitaria);
+        # `imu_to_camera`: rotacao mundo-do-IMU -> referencial da camera, por
+        # LUVA (ver `solve_palm_alignment`). Identidade = comportamento antigo
+        # (so' vale se a luva estiver com o referencial alinhado ao da camera,
+        # o que NAO e' verdade em geral -- calibre com `apply_palm_alignment`).
+        self.palm_reference_body: Optional[np.ndarray] = None
+        self.imu_to_camera = np.eye(3)
+        #: Residuo (graus) do ultimo alinhamento resolvido (None = identidade).
+        self.palm_alignment_residual_deg: Optional[float] = None
+        # Compatibilidade: referencia antiga (pose + direcao no referencial da
+        # camera) mantida para quem le estes campos.
         self.imu_reference_rotation = None
         self.palm_reference_direction = None
         # zeragem
@@ -173,6 +314,8 @@ class PositionFusion:
         self.velocity[:] = 0.0
         self.origin = None
         self.last_timestamp_us = None
+        self.palm_reference_body = None
+        self.palm_alignment_residual_deg = None
         self.imu_reference_rotation = None
         self.palm_reference_direction = None
         self.zero_lock = False
@@ -188,27 +331,106 @@ class PositionFusion:
 
     # ------------------------------------------------- orientacao da palma
     def calibrate_palm_direction(self, sample, palm_direction):
-        """Ancora a direcao da palma (medida pelo Kinect) no referencial do IMU."""
+        """Ancora a direcao da palma (medida pelo Kinect) no referencial do IMU.
+
+        Guarda a direcao NO CORPO do sensor (`f = R^T T^T v`, ver
+        `solve_palm_alignment`); `palm_direction` devolve `T R f`. Com
+        `imu_to_camera` = identidade isto reproduz o comportamento antigo
+        (`R_novo R_ref^T v_ref`) -- que so' e' correto se o referencial do IMU
+        coincidir com o da camera.
+        """
         if sample is None or palm_direction is None:
             return False
-        if not np.isfinite(np.asarray(palm_direction, np.float64)).all():
+        valor = np.asarray(palm_direction, np.float64).reshape(3)
+        if not np.isfinite(valor).all() or np.linalg.norm(valor) < 1e-9:
             return False
-        self.imu_reference_rotation = rotation_matrix(
-            sample.roll_deg, sample.pitch_deg, sample.yaw_deg
-        )
-        self.palm_reference_direction = np.asarray(palm_direction,
-                                                   np.float64).copy()
+        referencia = rotation_matrix(sample.roll_deg, sample.pitch_deg,
+                                     sample.yaw_deg)
+        corpo = referencia.T @ self.imu_to_camera.T @ (valor / np.linalg.norm(valor))
+        norma = np.linalg.norm(corpo)
+        if norma < 1e-9:
+            return False
+        self.palm_reference_body = corpo / norma
+        self.imu_reference_rotation = referencia
+        self.palm_reference_direction = valor.copy()
         return True
 
+    def apply_palm_alignment(self, rotations, palm_directions):
+        """Resolve o alinhamento IMU <-> camera DESTA luva e o aplica.
+
+        Chamada com as amostras de uma captura em que a mao gira com a palma
+        virada para a camera (e o Kinect enxergando a mao): resolve `T` (mundo do
+        IMU -> camera) e `f` (palma no corpo) por `solve_palm_alignment` e passa a
+        usa-los em `palm_direction`. Sem isso a direcao prevista acerta na pose de
+        calibracao e erra conforme a mao gira -- e o erro e' DIFERENTE em cada
+        luva (montagem diferente), o que faz uma das maos parecer certa.
+
+        Returns:
+            (T, f_body, residuo_deg) ou None (amostras insuficientes/invalidas).
+        """
+        resolvido = solve_palm_alignment(rotations, palm_directions)
+        if resolvido is None:
+            return None
+        alinhamento, corpo, residuo = resolvido
+        self.imu_to_camera = np.asarray(alinhamento, np.float64)
+        self.palm_reference_body = np.asarray(corpo, np.float64)
+        self.palm_alignment_residual_deg = float(residuo)
+        return alinhamento, self.palm_reference_body, float(residuo)
+
+    def set_palm_alignment(self, alignment, body_direction=None,
+                           residual_deg=None):
+        """Aplica um alinhamento JA' resolvido (ex.: carregado de arquivo).
+
+        Args:
+            alignment: (3, 3) mundo do IMU -> referencial da camera.
+            body_direction: (3,) direcao da palma no corpo; None = mantem a atual.
+            residual_deg: residuo do ajuste, para diagnostico.
+
+        Returns:
+            True se aplicou (matriz valida e direcao disponivel).
+        """
+        matriz = np.asarray(alignment, np.float64).reshape(3, 3)
+        if not np.isfinite(matriz).all():
+            return False
+        if abs(np.linalg.det(matriz)) < 1e-6:
+            return False
+        corpo = (self.palm_reference_body if body_direction is None
+                 else np.asarray(body_direction, np.float64).reshape(3))
+        if corpo is None:
+            return False
+        norma = np.linalg.norm(corpo)
+        if not np.isfinite(corpo).all() or norma < 1e-9:
+            return False
+        self.imu_to_camera = matriz
+        self.palm_reference_body = corpo / norma
+        self.palm_alignment_residual_deg = (None if residual_deg is None
+                                            else float(residual_deg))
+        return True
+
+    def palm_alignment_state(self):
+        """Alinhamento atual em tipos serializaveis (JSON) ou None."""
+        if self.palm_reference_body is None:
+            return None
+        return {
+            "rotation": np.asarray(self.imu_to_camera,
+                                   np.float64).tolist(),
+            "body": np.asarray(self.palm_reference_body, np.float64).tolist(),
+            "residual_deg": self.palm_alignment_residual_deg,
+        }
+
     def palm_direction(self, sample):
-        """Direcao da palma prevista pelo IMU (None sem referencia)."""
-        if sample is None or self.imu_reference_rotation is None:
+        """Direcao da palma prevista pelo IMU (None sem referencia).
+
+        `T R_novo f`, com `T` = `imu_to_camera` (mundo do IMU -> camera) e
+        `f` = direcao da palma no corpo do sensor.
+        """
+        if sample is None or self.palm_reference_body is None:
             return None
         current_rotation = rotation_matrix(
             sample.roll_deg, sample.pitch_deg, sample.yaw_deg
         )
-        direction = (current_rotation @ self.imu_reference_rotation.T
-                     @ self.palm_reference_direction)
+        direction = (self.imu_to_camera @ current_rotation
+                     @ self.palm_reference_body)
         length = np.linalg.norm(direction)
         return direction / length if length > 1e-6 else None
 

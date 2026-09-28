@@ -12,7 +12,9 @@ Formato de cada item:  PROBLEMA -> EVIDENCIA -> CAUSA RAIZ -> SOLUCAO
 --------------------------------------------------------------------------------
 Hardware
   - Kinect v2: RGB 1920x1080 + depth 512x424 -> referencia metrica principal.
-  - Webcams auxiliares: laptop (indice 0) e USB (indices 1/2) -> triangulacao.
+  - Webcams auxiliares: DUAS externas (SIGMA-W780M) + a do laptop. O indice do
+    OpenCV NAO e' fixo (e' a posicao na enumeracao do DirectShow): quem manda e'
+    o NOME -- ver `camera_names.py` e o item 19 (23/09/2026).
   - ESP32 + MPU6050 no dorso da mao (UDP 4210): roll/pitch/yaw, acc e gyro.
   - g.Nautilus / g.tec GDS: 32 canais, 500 Hz.
 Programas
@@ -782,6 +784,457 @@ DUVIDAS REGISTRADAS PARA O ARTIGO
    bloco principal;
 5. tempo real: um KalmanTrajectory por lado, usando a aceleracao do lado ativo;
 6. taxa de falso movimento com o contralateral como referencia.
+
+
+
+--------------------------------------------------------------------------------
+19. SESSAO 2026-09-23 - "A AUXILIAR E' A WEBCAM DO LAPTOP" E AS LUVAS FORA DO AR
+--------------------------------------------------------------------------------
+PROBLEMA
+  Duas queixas na bancada, no mesmo dia:
+  (a) o programa abre a webcam DO LAPTOP no lugar da webcam auxiliar;
+  (b) o hotspot do notebook aparece "ligado", mas as luvas (ESP32 + MPU6050) nao
+      aparecem conectadas a ele.
+EVIDENCIA (medido nesta maquina em 23/09/2026)
+  (a) `Get-PnpDevice -PresentOnly -Class Camera` -> SO' "Integrated Camera" (a do
+      laptop). As duas externas (SIGMA-W780M) e a Trust USB Camera aparecem
+      apenas como GHOST (Status "Unknown"): NAO estao enumeradas, e o hub USB em
+      que estavam penduradas (USB\VID_0A05&PID_7211) tambem sumiu.
+      `tools/diagnostico_cameras.py --salvar` -> so' o indice 0 abre (MSMF,
+      1280x720, ~21 s) e o PNG gravado (cam_idx0.png) e' o ROSTO de quem esta' no
+      laptop. Ou seja: com as externas fora, o indice 0 (que era a externa ampla)
+      passa a ser a webcam do laptop. E o padrao do paradigma era
+      `--aux-cameras "0,1"` -- a do laptop estava na lista por construcao.
+  (b) `Get-NetIPAddress` -> NAO existe 192.168.137.x (so' APIPA 169.254.x nos
+      adaptadores Wi-Fi Direct/WLAN e 192.168.15.8 na rede de casa); `icssvc`
+      (Windows Mobile Hotspot Service) PARADO; `arp -a` sem vizinhos em
+      192.168.137.x; netstat sem UDP 4210. O firmware espera o hotspot do
+      notebook: SSID "DUDU_LAPTOP 2897" (o perfil de AP existe em
+      C:\ProgramData\Microsoft\WlanSvc\Profiles) e unicast para 192.168.137.1
+      (= ScopeAddress do ICS no registro), que so' existe com o hotspot LIGADO.
+CAUSA RAIZ
+  (a) O indice do OpenCV e' a POSICAO da camera na enumeracao do DirectShow:
+      quando uma camera entra/sai do USB, todos os indices mudam. O programa nao
+      tinha como perceber que abriu a camera errada -- o "mapa" era um dict
+      estatico por indice (0=laptop/1=usb/2=usb2) que ja' estava errado.
+  (b) O hotspot nao estava servindo de fato (nenhum adaptador com 192.168.137.1),
+      apesar da tela de "Ponto de acesso movel" parecer ligada. Sem essa rede, o
+      ESP32 nao tem para onde mandar o UDP (destino fixo 192.168.137.1).
+SOLUCAO
+  - `camera_names.py` (NOVO; leve: ctypes/comtypes, sem cv2/numpy/pykinect2):
+    nomes das webcams na MESMA ordem do backend CAP_DSHOW; funcoes
+    e_do_laptop / indices_fora_do_laptop / aviso_laptop / resumo. Degrada em
+    silencio se a enumeracao nao existir (nome e' diagnostico, nao pre-requisito).
+  - `kinect_imu_groundtruth.py`: `indices_auxiliares_automaticos()` (todas as
+    cameras MENOS a do laptop, com as calibradas primeiro), `nome_auxiliar()`,
+    `aviso_camera_do_laptop()`, `mapa_de_cameras_resumo()`; `AUX_CAMERA_INDICES`
+    passa a (2, 0) = as duas externas.
+  - `eeg_motor_paradigm.py`: `--aux-cameras` padrao = auto (resolve por NOME) e
+    imprime o mapa no inicio; `tools/kinect_groundtruth_tool.py` e
+    `stereo_calibration.py` avisam quando o indice escolhido e' a webcam do
+    laptop (a frase vive em um so' lugar: camera_names.AVISO_LAPTOP).
+  - `tools/diagnostico_cameras.py`: imprime o NOME de cada indice e um VEREDITO
+    ("so' a webcam do LAPTOP esta' enumerada" / "externas: [...] entregando
+    frame: [...]").
+  - testes: `test_camera_names.py` (novo, sem hardware) e test_cameras_multi 6/6;
+    test_deteccao_cascata e test_stereo_solve passam a derivar o tabuleiro de
+    `sc.CHECKERBOARD_SIZE` (o tabuleiro da bancada NAQUELE dia era 5x3 cantos @
+    52 mm, confirmado dentro dos npz aux1/aux2; o legado stereo_calibration.npz
+    e' 8x6 @ 25 mm). ATENCAO: em 23/09/2026 (item 21) a placa foi trocada por
+    outra de 57 mm -- ver item 21.
+PENDENCIA (hardware -- proxima ida a bancada)
+  1. religar as DUAS webcams externas (hub com fonte) e conferir
+     `.venv\Scripts\python.exe tools\diagnostico_cameras.py --salvar` (tem de
+     listar 2 externas por NOME, nao por indice);
+  2. ligar o Ponto de acesso movel e conferir `Get-NetIPAddress` (192.168.137.1)
+     + `.venv\Scripts\python.exe tools\teste_imu_dois_esp32.py --segundos 20`;
+  3. recalibrar a auxiliar no indice que o passo 1 mostrar -- o indice MUDA.
+
+
+20. SESSAO 2026-09-23 (cont.) - AS DUAS AUXILIARES SUBSTITUEM O KINECT
+OBJETIVO DO EXPERIMENTO (pedido do orientando)
+  Nao basta a auxiliar "apoiar" o Kinect: quando o Kinect perde o video e a
+  projecao do esqueleto, as DUAS webcams (uma de cada lado, ~45 graus) tem de
+  dizer SOZINHAS onde a mao esta' nos 3 eixos. E no video do Kinect tem de
+  aparecer o esqueleto do KINECT (verde) + o de CADA auxiliar = 3 esqueletos.
+GEOMETRIA
+  - Nao existe (nem precisa) calibracao aux1<->aux2: a relacao entre as duas sai
+    da COMPOSICAO das calibracoes de cada uma com o Kinect (`relative_transform`,
+    P_w = R_a^T (P_k - T_a) etc.), o que reaproveita os npz ja' existentes.
+  - `triangulate_pair_points(view_a, view_b, px_a, px_b)` triangula DLT 2x2 no
+    frame do Kinect; `triangulate_aux_pairs(alignment, deteccoes)` tenta TODAS as
+    combinacoes e escolhe a de MENOR erro mediano de reprojecao (px).
+  - `AuxCameraView` (frozen, por camera) + `alignment.aux_view(idx)` (calibracao
+    GRAVADA) x `alignment.active_view()` (campos vivos da camera ativa): e' o que
+    permite usar as DUAS calibracoes no MESMO frame sem quebrar o contrato
+    historico de camera unica.
+DESENHO (3 esqueletos)
+  - `KinectHandTracker.draw_auxiliary_cameras_on_color(frame, {indice: maos}, ...)`
+    desenha cada auxiliar na sua cor (CORES_AUXILIARES) com rotulo, aceitando
+    `depths`/`triangulados` POR CAMERA, `cores` e `ignorar` (para o programa que
+    ja' desenhou uma delas nao duplicar tracado). Devolve o desvio em px por
+    camera, no mesmo formato de `draw_auxiliary_hands_on_color`.
+  - Regra mantida: o overlay NAO depende do depth-frame do Kinect (so' de Z em
+    metros) e a profundidade e' RIGIDA (um Z para os 21 nos), senao os offsets 3D
+    aprendidos da mao se destroem.
+  - `detect_auxiliary_hands_sides(frame, aux_index=None)`: com indice usa o
+    detector/timestamp DAQUELA camera (VideoMode do MediaPipe nao aceita
+    intercalar dois fluxos no mesmo landmarker).
+PROGRAMAS
+  - `eeg_motor_paradigm.py`: `_resolve_wrist3d` ganha a Prioridade 2 -- se nao
+    houve triangulacao com o Kinect (Kinect sem a mao), o PAR DE AUXILIARES
+    assume e a fonte vira `triangulado_aux_<i>+<j>`. `_loop_kinect` passa a
+    desenhar TODAS as auxiliares (3 esqueletos), usando o mesmo `depths`/
+    `_triangulated` (ambos no frame do Kinect, validos para todas as cameras).
+  - `tools/kinect_groundtruth_tool.py`: abre TODAS as auxiliares (`--aux-cameras`,
+    vazio = auto pelo NOME; `--aux-index` continua sendo a ATIVA das teclas
+    K/L/H), casa a resolucao de cada frame, detecta por camera, desenha as
+    outras na cor propria (a ativa segue vermelha/verde, como validado) e usa o
+    par de auxiliares quando o Kinect esta' cego. CSV ganha `hand_source`
+    ("Kinect" / "triangulado" / "trianguladoAux") e `aux_pair_x/y/z_m`.
+TESTES (novos, sem hardware)
+  - `test_aux_pair_stereo.py` 7/7: relacao entre as duas (erro ~0.6 mm),
+    pixels por camera, triangulacao SEM Kinect sub-cm, recusas e escolha do
+    melhor par com uma camera mal calibrada.
+  - `test_paradigm_aux_pair.py` 5/5: o DESVIO DE FONTE do paradigma -- Kinect
+    cego + 2 auxiliares da' `triangulado_aux_<i>+<j>` (erro < 5 mm no sintetico
+    e `last_triangulated_3d` fresco para desenho/CSV), uma auxiliar so' nao
+    substitui, uma sem calibracao recusa, e os caminhos do Kinect (triangulacao
+    Kinect+aux, `kinect_depth`) seguem com prioridade.
+  - `test_overlay_auxiliares.py` 7/7: dois esqueletos em cores distintas (prova
+    de que as duas calibracoes convivem no mesmo frame), desvio ~0 contra o
+    verde quando a projecao vem do 3D triangulado, profundidade RIGIDA != verde,
+    camera sem stereo ignorada, gating de borda e prioridade da triangulacao.
+  - Descoberta util: com as duas auxiliares vendo a MESMA mao, as duas projecoes
+    caem no MESMO pixel do Kinect e uma esconde a outra -- a coincidencia e' a
+    prova visual de que as calibracoes estao coerentes entre si; o teste usa uma
+    mao por lado justamente para enxergar as duas cores.
+PENDENCIA (inalterada, hardware): religar as duas externas + hotspot + recalibrar.
+
+21. SESSAO 2026-09-23 (cont.) - TABULEIRO NOVO: 6x4 QUADRADOS DE 57 mm
+MOTIVO
+  O detector tinha cobertura baixa com a placa antiga (quadrados pequenos ->
+  poucos px por canto no Kinect 1920x1080 e na webcam). O orientando imprimiu uma
+  placa MAIOR: 6 x 4 QUADRADOS de 57 mm = 5 x 3 CANTOS internos (o cv2 conta
+  cantos = quadrados - 1 por eixo).
+MUDANCA
+  - `kinect_imu_groundtruth.py`: SQUARE_SIZE_M 0.052 -> 0.057 (CHECKERBOARD_SIZE
+    continua (5, 3): so' o lado do quadrado mudou).
+  - `stereo_calibration.py`: SQUARE_SIZE_M 0.052 -> 0.057, com o historico das
+    placas no comentario (4x3/52 mm -> 12x8 quadrados/26 mm -> 6x4/57 mm).
+  - CONSEQUENCIA QUE ENGANAVA: o npz grava placa e quadrado e a biblioteca
+    VALIDA contra os dois. Os npz existentes (aux1/aux2, 52 mm) passam a ser
+    recusados para `stereo_ready` -- a sobreposicao continua (`stereo_usable`,
+    RMS <= 5 px), mas a ESCALA fica 9,6% maior (57/52) ate' a recalibracao. A
+    mensagem antiga dizia "RMS alto", o que mandaria o usuario melhorar luz e
+    postura quando a acao e' RECALIBRAR. Por isso entrou
+    `CameraAlignment.stereo_status()`, que devolve (estado, MOTIVO):
+      tabuleiro gravado != placa atual -> "RECALIBRE";
+      quadrado gravado != SQUARE_SIZE_M -> "RECALIBRE";
+      RMS entre 2 e 5 px -> "aproximada"; RMS > 5 px -> "rejeitada";
+      sem npz/intrinsecas -> "sem calibracao".
+  - `tools/kinect_groundtruth_tool.py` (console no inicio + texto na janela) e
+    `tools/diagnostico_cameras.py` (por indice, junto com a PLACA GRAVADA no npz)
+    mostram estado E motivo -- e' o primeiro comando do dia de recalibracao.
+  - `tools/probe_tabuleiro.py` e `_diagnostico_deteccao.py`: candidatos/padroes
+    atualizados (5x3 @ 57 mm primeiro). O `_diagnostico_deteccao` agora DERIVA os
+    defaults de `stereo_calibration`, entao nao ficam para tras na proxima troca.
+  - README: linha do tabuleiro, receita `--aux-index 2 0` (uma sessao de captura
+    por camera no MESMO comando) e o caminho certo da ferramenta autonoma
+    (tools/kinect_groundtruth_tool.py).
+PENDENCIA (amanha, com o laptop no hub)
+  1. recalibrar as DUAS auxiliares com a placa nova: `stereo_calibration.py
+     --aux-index 2 0` (15+ poses por camera, placa PARADA);
+  2. conferir que `tools\diagnostico_cameras.py` passa a dizer "aceita
+     (RMS <= 2 px)" nas duas -- e nao mais "quadrado gravado 52 mm != 57 mm".
+
+
+22. SESSAO 2026-09-23 (cont.) - JANELAS NA METADE (4 NA TELA) E GRADE LIMPA
+PEDIDO
+  "As windows que aparecem o video das cameras sejam mostrado na metade, para que
+  eu consiga botar as janelas ocupando 1/4 da tela somente e todas apareçam."
+  Com o Kinect em 1920x1080 e DUAS auxiliares em 1280x720 no tamanho real, nao
+  havia como ver as duas auxiliares ao mesmo tempo -- e sem ver as duas nao se
+  verifica a calibracao de cada uma (a razao de existir o desenho multicamera).
+MUDANCA
+  - `kinect_imu_groundtruth.py`: WINDOW_SCALE 0.6 -> 0.5 (Kinect RGB 960x540,
+    auxiliar 640x360, depth 256x212, janelas de calibracao idem).
+  - `stereo_calibration.py`: DISPLAY_SCALE = 0.5 + `reduzir_janela()`, aplicado
+    SO' no que vai para o `cv2.imshow`. Antes este programa nao reduzia nada: a
+    janela do Kinect saia em 1920x1080.
+  - Por que a reducao e' segura: roda DEPOIS de tudo o que decide algo. A
+    deteccao de cantos, a captura de amostras e o solver continuam na resolucao
+    CHEIA -- reduzir antes do detector seria cometer o erro que DETECTION_WIDTHS
+    documenta. O TEXTO de status passou a ser desenhado DEPOIS da reducao (antes
+    encolheria junto com a imagem e ficaria ilegivel) e o quadro de aviso de
+    "camera sem frame" e' montado ja' no tamanho final.
+  - Brinde: os cantos desenhados agora saem em ORDEM CANONICA
+    (`canonical_order`, a MESMA das amostras). Na ordem crua do detector as
+    linhas de ligacao saem cruzadas e parece que ele achou a coisa errada.
+  - Os dois fatores tem de ser iguais (comentado nos DOIS arquivos) e o
+    `test_deteccao_cascata.py` ganhou um caso (10/10) que confere o tamanho da
+    janela e que o helper nao encosta na deteccao.
+VERIFICACAO (sem hardware)
+  Tabuleiro sintetico 6x4 em 1920x1080 (mesma geometria do Kinect), cantos
+  detectados, imagem reduzida e cantos redesenhados escalados: o marcador
+  desenhado fica a 0,38 px de onde o detector acha o canto na janela reduzida
+  -- prova de que a escala do desenho e' a mesma da reducao. Probes temporarios
+  (`_probe_janela.py`, `_janela_teste.png`) conferidos e apagados.
+BUG ENCONTRADO NO CAMINHO DA CALIBRACAO DA MAO (tecla H)
+  `solve_hand_landmark_calibration` salvava SEMPRE em `hand_landmark_calibration
+  .npz` (o nome LEGADO, que so' a camera 0 carrega). Com a camera ativa em
+  qualquer indice != 0 -- o caso de hoje, ativa = 2 -- a captura ia para o
+  arquivo ERRADO e `aux_hand_file(2)` procurava `_aux2.npz`: a tecla H parecia
+  nao fazer nada ("calibrei a mao e ele continua com a homografia antiga").
+  Entrou `aux_hand_output_file(indice)` (mesma regra do stereo: 0 = legado,
+  N = `_auxN.npz`), a funcao passou a IMPRIMIR o destino e o
+  `test_cameras_multi.py` cobre o caso (8/8: gravou em _aux9 e carregou de volta).
+PENDENCIA: igual a do item 21 (recalibrar as duas auxiliares com a placa de 57 mm).
+
+23. SESSAO 2026-09-25 - "NAO CONSIGO CANCELAR": TECLAS GLOBAIS E SAIDA GARANTIDA
+PROBLEMA (bancada, cameras ligadas e SEM as luvas)
+  Ao iniciar a sessao do paradigma ME/MI, a janela de video do Kinect (a de
+  tracking) ficou NA FRENTE e o trial nao andava: ESPACO e ESC nao faziam mais
+  nada. Ao tentar cancelar, o programa travou e NAO saiu -- nem com o comando de
+  matar o processo no terminal.
+CAUSA (medida, nao suposta)
+  (a) as teclas do paradigma vivem no `keyPressEvent` do Qt, que so' recebe
+      evento quando a JANELA DO QT tem o foco. A janela do OpenCV e' uma janela
+      NATIVA do Win32 (`cv2.getBuildInformation` -> "GUI: WIN32UI", nao Qt):
+      entra na frente, toma o foco e o Qt deixa de ver ESPACO/ESC;
+  (b) o Ctrl+C nao interrompe codigo NATIVO (cv2.waitKey, pykinect2, gds): o
+      `finally` do main ficava preso no `pipeline.stop()`/`tracking.join()`
+      esperando thread que nao volta, e o processo seguia vivo depois do
+      "cancelar" -- dai a impressao de que nem matar o processo resolvia.
+SOLUCAO (3 camadas, do mais garantido para o mais comodo)
+  1. `hotkeys.py` (NOVO): `GlobalHotkeyWatcher` le o estado das teclas no
+     WINDOWS INTEIRO com `GetAsyncKeyState` (ctypes, sem dependencia nova), ou
+     seja: funciona com QUALQUER janela em foco, inclusive a do OpenCV. Deteccao
+     por BORDA (solto->pressionado), entao segurar a tecla nao repete. Teclas:
+     ESPACO pular espera, C cancelar trial, ESC abortar.
+     O vigia NUNCA toca no Qt: so' poe strings numa `queue.Queue` e o
+     `_ParadigmController._poll_hotkeys` (QTimer de 50 ms, thread principal)
+     executa -- esse tick tambem e' o pulso de bytecode Python que faz o Ctrl+C
+     ser percebido.
+  2. `CancelamentoGarantido` (novo, em `eeg_motor_paradigm.py`): roda as paradas
+     (pipeline, gravador, vigia de link, IMU) numa thread com tempo LIMITE
+     (`ABORT_TEARDOWN_SEC = 5 s`), alinha o JSON, imprime onde ficaram os
+     arquivos e SAI com `hotkeys.hard_exit` (`os._exit`), sem `join` que possa
+     travar. Segundo ESC/Ctrl+C sai na hora (codigo 1), sem esperar as paradas do
+     primeiro. `signal.SIGINT/SIGBREAK` entram no mesmo caminho: o Ctrl+C agora
+     cancela de verdade.
+  3. Conforto: `ExperimenterPanel` (janela pequena, SEMPRE NO TOPO, botoes
+     pular/cancelar/abortar + status bloco/trial/fase) quando a sessao nao esta
+     em tela cheia; atalhos de APLICACAO do Qt (ESPACO/C/ESC valem com qualquer
+     janela DO QT em foco, ex.: o escopo do g.Pype) e a tecla C no canvas.
+  Opcoes novas: `--sem-janela-tracking` (nao abre a janela do OpenCV; medicao e
+  gravacao identicas, e ela deixa de roubar o foco), `--sem-hotkeys` (se outro
+  programa da bancada usar ESC/ESPACO/C) e `--sem-painel-controle`.
+  Marcador NOVO: `796 = TRIAL CANCELADO pelo experimentador` (a analise exclui
+  exatamente a trial em vez de adivinhar pelo buraco no tempo).
+  `cancel_trial` mata os callbacks agendados da trial (`_generation += 1`), limpa
+  fase/video e cai na MESMA regra do fim normal (respeita a pausa entre blocos;
+  na ultima trial encerra a sessao).
+  A janela do tracking parou de se colocar a frente: `WND_PROP_TOPMOST = 0` +
+  posicao fixa + `destroyWindow` (e nao destroyAllWindows de dentro da thread de
+  tracking) + fechamento pela thread principal no fim.
+VERIFICACAO
+  - `test_paradigm_abort.py` (NOVO, 8/8 grupos): borda das teclas; vigia em
+    thread com backend injetado (sem teclado real); `enabled=False`; stop de
+    DENTRO do callback; erro do backend; `hard_exit`; `cancel_trial` (trial
+    descartada, fim de bloco, ultima trial, apos o fim); abort executado UMA vez;
+    fila de hotkeys ligada ao controlador; janela opcional; e a garantia de saida
+    com uma parada que TRAVA para sempre (medido: < 2 s com grace de 0,3 s).
+  - Suites: 25/25 passando (`tools/roda_testes.py`).
+  - Fim a fim num processo de verdade: ESC "apertado" pelo backend falso -> fila
+    -> tick do Qt -> `abort` -> `CancelamentoGarantido` com uma parada que dorme
+    30 s e grace de 1 s -> codigo de saida 0 em ~2,5 s (incluindo o start do Qt).
+    Esse e' exatamente o cenario do bug relatado (sem o tempo limite, o programa
+    ficava preso no `finally`).
+  - Caminhos de Qt (painel, atalhos, tick) validados com PySide6 puro, porque o
+    g.Pype recusa rodar fora de IDE suportada ("Execution outside supported IDEs
+    detected"): o paradigma inteiro so' roda no terminal do VS Code.
+LIMITE CONHECIDO (documentado de proposito)
+  As teclas globais valem no SISTEMA inteiro: apertar ESC/ESPACO/C em outro
+  programa da bancada cancela a sessao. E' o preco de funcionar com a janela do
+  OpenCV em foco (era o pedido); quem preferir o modo antigo usa `--sem-hotkeys`.
+
+24. SESSAO 2026-09-25 (cont.) - "NAO APARECE O VIDEO DA TERCEIRA CAMERA"
+PROBLEMA (bancada, kinect_groundtruth_tool.py)
+  Com o Kinect e as DUAS webcams externas ligadas, o video de UMA das webcams nao
+  aparecia. Nao era driver nem porta USB.
+CAUSA (medida no codigo)
+  (a) a ferramenta abria TODAS as auxiliares e detectava a mao em cada uma, mas
+      criava janela de video SO' para a camera ATIVA ("Camera auxiliar -
+      tracking"): as outras existiam apenas como esqueleto desenhado no RGB do
+      Kinect. Sem o video nao da' para conferir foco, enquadramento, luz nem se
+      a mao/tabuleiro estao em quadro NAQUELA camera -- que e' justamente a que
+      vai entrar na triangulacao;
+  (b) o Windows abre todas as janelas do OpenCV na MESMA posicao (empilhadas), de
+      modo que mesmo as que existiam ficavam escondidas atras das outras.
+MUDANCA
+  - `tools/kinect_groundtruth_tool.py`: UMA JANELA DE VIDEO POR WEBCAM AUXILIAR
+    ("Camera auxiliar <indice> - tracking"), com o NOME do Windows no titulo e o
+    rotulo "ATIVA: K/L/H" no quadro da camera ativa (trim/log/calibracao do
+    esqueleto valem so' nela). As janelas de calibracao ganharam o indice no
+    titulo. Todo `imshow` da ferramenta passa a sair pela `GradeDeJanelas`.
+  - `kinect_imu_groundtruth.py`: `GradeDeJanelas` (na ferramenta) + helpers PUROS
+    e testaveis no modulo: `tamanho_da_tela` (GetSystemMetrics),
+    `grade_de_janelas` (colunas, greedy na coluna menos cheia, o MENOR numero de
+    colunas em que a grade cabe), `escala_para_grade` (maior escala <= WINDOW_SCALE
+    que faz TODAS caberem) e `posicoes_das_janelas` (modo "grade"/"cascata"/
+    "sem-tela").
+  - Por que a ESCALA virou automatica: o WINDOW_SCALE 0.5 foi escolhido para as 4
+    janelas caberem, mas em telas com DPI > 100% a area util e' menor -- MEDIDO
+    nesta maquina: `GetSystemMetrics` devolve 1536x960 num painel 1920x1080 a
+    125%. Com 0.5 a grade NAO cabe (2 colunas de 960 px = 1920 > 1536) e as
+    janelas voltam a se sobrepor; o ajuste cai para 0.40 e as 4 cabem em 2x2.
+    Nunca abaixo de `WINDOW_SCALE_MIN` (0.3); se nem assim couber, CASCATA (degraus
+    com passo comprimido para caber na tela -- nenhuma janela exatamente atras de
+    outra, a barra de titulo de todas continua clicavel) e o programa avisa.
+  - Opcao nova: `--escala-janelas F` fixa a escala (ex.: 0.5 = janelas maiores,
+    arrastando as que ficarem por cima). As janelas sao WINDOW_NORMAL (o usuario
+    redimensiona com o mouse) e a grade so' e' refeita quando uma janela NOVA
+    entra (ex.: as de calibracao, teclas T/K): arrastar uma janela permanece.
+VERIFICACAO (sem hardware)
+  - `test_janelas_grade.py` (NOVO, 5/5 grupos): grade sem sobreposicao e dentro da
+    tela (checagem geometrica par a par), None quando nao cabe/sem tela, escala
+    automatica (0.5 em 1080p; 0.40 em 1536x960; teto/minimo respeitados), cascata
+    com posicoes DISTINTAS, `GradeDeJanelas` com um cv2 FALSO (cria com
+    WINDOW_NORMAL, redimensiona pela escala, reposiciona TODAS quando entra
+    janela nova, destroi so' o que criou, avisa uma vez sem tela e na cascata) e a
+    checagem de que a ferramenta tem uma janela por camera e nao chama imshow
+    direto.
+  - Suites: 26/26 passando (`tools/roda_testes.py`).
+
+
+
+25. SESSAO 2026-09-25 (cont.) - VETOR DA PALMA DA LUVA ESQUERDA (bug de referencial)
+PROBLEMA (bancada)
+  "Uma das luvas nao da' os valores de rotacao corretos (a da mao ESQUERDA)" e a
+  seta vermelha da palma (prevista pelo IMU) nao acompanha a mao.
+CAUSA (provada por matematica + simulacao, nao por hardware)
+  `PositionFusion.palm_direction` previa a direcao da palma com
+        v = R_novo @ R_ref^T @ v_ref
+  tratando como IGUAIS dois referenciais que nao sao:
+    - R (do ESP32, roll/pitch/yaw) = corpo -> MUNDO DO IMU: a vertical vem do
+      acelerometro, mas o "norte" e' arbitrario (nao ha' magnetometro) e ainda
+      depende da MONTAGEM de cada luva;
+    - v_ref = normal da palma medida pelo KINECT (depth), no referencial da
+      CAMERA.
+  A formula e' exata na pose de calibracao (R_novo = R_ref) e erra cada vez mais
+  conforme a mao gira -- com o eixo de rotacao errado por nao converter os
+  referenciais. MEDIDO na simulacao (mesmo dado, mesma luva a 140 graus de
+  montagem): erro MEDIO 19.3 graus e MAXIMO 78.5 graus ao girar a mao +-45 graus.
+  Como o referencial de cada luva e' diferente (a esquerda e' montada espelhada em
+  relacao a direita), o erro e' DIFERENTE em cada mao: e' por isso que so' a
+  esquerda "parecia errada".
+CORRECAO
+  - `imu.py`: a direcao da palma passa a ser modelada como `v_i = T R_i f`, com
+    `T` (mundo do IMU -> camera, POR LUVA) e `f` (direcao da palma no corpo do
+    sensor) RESOLVIDOS das amostras por Kabsch alternado (`solve_palm_alignment`:
+    `kabsch_rotation`/SVD com det=+1, media normalizada para `f`, comecando em
+    `f = R_0^T v_0` e `T = I` = comportamento antigo -> convergencia em poucas
+    iteracoes). Novos: `angle_between`, `PALM_ALIGNMENT_MIN_SAMPLES` (6),
+    `PALM_ALIGNMENT_MAX_RESIDUAL_DEG` (15),
+    `PositionFusion.apply_palm_alignment` (resolve e aplica),
+    `PositionFusion.set_palm_alignment` (aplica um ja' resolvido; recusa matriz
+    singular/direcao nula) e `PositionFusion.palm_alignment_state` (JSON).
+    `calibrate_palm_direction` continua valendo (ancora `f = R^T T^T v`) --
+    com `T = I` o resultado e' IDENTICO ao codigo antigo (retrocompativel).
+  - `tools/kinect_groundtruth_tool.py`: tecla `O` = captura do alinhamento
+    (`CapturaAlinhamentoPalma`, 14 s): guarda pares (atitude do ESP32, normal da
+    palma do Kinect) POR LADO, com intervalo minimo (0.10 s) e PASSO minimo de
+    4 graus entre amostras (postura parada nao informa rotacao); no fim imprime o
+    residuo em graus, grava `imu_palm_alignment_{right,left}.json` e recarrega
+    nas proximas sessoes (`load/save_palm_alignment`). Com alinhamento carregado,
+    a ancoragem antiga de UMA amostra e' PULADA (o ajuste de varias amostras e'
+    melhor).
+  - Diagnostico ao vivo por lado: "Palma R/L: erro Kinect x IMU <graus>" no
+    video, coluna `palm_err_deg` no CSV e colunas `palm_kin_*`/`palm_imu_*`/
+    `palm_err_deg` no log da tecla L -- e' o numero que responde "esta luva esta'
+    alinhada?"; residuo alto em UM lado so' aponta luva/porta trocada.
+  - `--imu-portas "4210,4211"` (ordem DIREITA,ESQUERDA; aceita 'lado:porta') na
+    ferramenta: quando o firmware das luvas esta' invertido, da' para casar os
+    lados sem editar codigo.
+  - `tools/teste_imu_dois_esp32.py`: `relatorio_convencao` compara as duas luvas
+    paradas na MESMA postura (eixo que carrega a gravidade + rpy) e avisa quando a
+    vertical esta' em eixos diferentes (montagem diferente -- o esperado entre
+    direita e esquerda) ou quando os sinais sao opostos (montagem espelhada).
+VERIFICACAO
+  - `test_palm_alignment.py` (NOVO, 8/8 grupos): Kabsch (exato, det +1, recusas);
+    `solve_palm_alignment` recupera T/f com montagem ate' 180 graus e ruido de
+    2 graus (residuo 1.8 graus; erro do vetor previsto < 1 grau); recusa com
+    poucas/invalidas amostras; o BUG e a CORRECAO medidos no mesmo dado (19.3
+    graus de media/78.5 de maximo contra < 0.01 de maximo); `PositionFusion`
+    (previsao a partir do rpy do firmware, erro maximo 1.1 graus em 40 poses
+    novas), recalibracao/reset; T=I reproduz o codigo antigo; JSON ida e volta;
+    e a captura da ferramenta (regras de amostragem, resolver, salvar/carregar,
+    arquivo ilegivel recusado com aviso).
+  - `tools/teste_imu_dois_esp32.py` com os dois EMISSORES FALSOS: relatorio de
+    convencao impresso para os dois lados ("OK: mesma vertical nas duas luvas").
+  - Suites: 27/27 passando (`tools/roda_testes.py`).
+PENDENTE (por depender da bancada)
+  - Rodar a tecla O com as duas luvas e conferir o residuo por lado; se a esquerda
+    continuar alta, trocar as portas (`--imu-portas`) para testar luva trocada.
+  - `UP_AXIS = 2` (vertical do MUNDO DO IMU) usado junto de posicoes de camera em
+    `[x, -y, z]` (y para cima): a integracao inercial e a ancora da camera vivem em
+    referenciais diferentes. Nao foi mexido agora (o ganho 0.9 da camera esconde o
+    erro e mudar isso altera o dado ja' gravado); fica registrado para a proxima
+    sessao, junto do log do offset da sobreposicao que o usuario vai gravar.
+
+26. SESSAO 2026-09-25 (cont.) - LIMPEZA DOS ARQUIVOS DE BANCADA (scratch)
+  Regra usada: o proprio `.gitignore` do projeto diz o que e' descartavel
+  ("saidas de diagnostico temporarias", "quadros de diagnostico", "resumos de
+  suite", "checkpoints de teste", "imagens de diagnostico de bancada",
+  "sessoes ficticias") -- e diz tambem o que NAO e': `_smoke_*.py` e
+  `_demo_trial.py`. Nada que esteja sob versionamento foi tocado (git status
+  sem nenhuma entrada 'D').
+  REMOVIDOS: 215 arquivos | 95.5 MB (`docs/limpeza_scratch.log` tem a lista
+  completa, arquivo por arquivo):
+    - 65 PNG (79.1 MB): `_diag__*.png` (varredura de deteccao por resolucao x
+      backend, 22/09) e `tabuleiro_cinza*.png`/`tabuleiro_frame_bruto.png`
+      (diagnostico da PLACA ANTIGA, 21-22/09);
+    - 62 `.txt` + 25 `.err` + 11 `.log`: logs de execucoes manuais (`_suites*.txt`,
+      `_test_*.txt`, `_vel_*.txt`, `_topo*`, `_alvos.*`, `_custo.txt`, `_cal_*.txt`,
+      `_bench*.txt`, `_ctx.txt`, `_snd*.txt`, `_tool*`) e os 3 `docs/_migracao_*.log`;
+    - 27 `.csv` + 9 `.json` (12.7 MB): sessoes SINTETICAS de teste (`_smoke_eeg_*`,
+      `_smoke_eeg_movimento.csv`, `results/smoke/*`, `_smoke_sand_traj_*`) e as
+      varreduras de treino `_anat_*`/`_syn_*`/`_vel_*`/`_sv`/`_treino_teste`;
+    - 12 `.pt` (3.1 MB): checkpoints dessas mesmas varreduras (nao sao modelos do
+      projeto; os de verdade ficam em `results/` quando gerados);
+    - 3 `.py` de sonda orfa (`_test_hb.py`, `_varre_padroes.py`,
+      `_mede_tabuleiro.py`: dependiam de `_hb_*.png` que ja' nao existiam e
+      respondiam a pergunta da PLACA ANTIGA, resolvida) e `_topo.ps1`;
+    - `docs/_tela_cues.png` (captura de tela) e as pastas `__pycache__/`
+      (1.1 MB de `.pyc`) e `results/smoke/` (vazia depois).
+  MANTIDOS (e por que):
+    - `_demo_trial.py`, `_smoke_eeg.py`, `_smoke_sand_traj.py`: o `.gitignore`
+      diz explicitamente que sao do projeto, e o README os documenta;
+    - `_diagnostico_deteccao.py`: diagnostico GERAL (pipeline do
+      stereo_calibration sobre imagens em disco, varre escala x metodo x CLAHE)
+      que a recalibracao pendente de 57 mm ainda vai usar;
+    - dados de bancada que nao se refazem sozinhos: `_imu_banco.csv`,
+      `_imu_bancada_teste.csv`, `imu_capture.txt`, `kinect_imu_groundtruth.csv`
+      (ultima sessao da ferramenta), `overlay_deviation_log.csv` (log da tecla L);
+    - TODO o material de calibracao/dados: `*.npz`
+      (stereo/aux1/aux2/mesa/hand_landmark), `pose_landmarker_lite.task`,
+      `hand_landmarker.task`, `gravacoes/` (sessao REAL de 25/09 com
+      `*_participante.json`), `gravacoes_sinteticas/` (dataset S1..S6 do treino),
+      `data/`, `WAY-EEG-GAL/`, `BCICIV_2a_gdf/`, `legacy/`, `_textos_pdf/`,
+      `docs/*.png` (figuras dos docs).
+  CANDIDATOS QUE FICARAM (por serem DADOS, aguardando decisao do usuario):
+    `gravacoes_sinteticas_teste/` (10.8 MB, 1 sessao sintetica de teste de 18/09,
+    refazivel com `tools/gerar_sessao_sintetica.py`) e `data/` (78.5 MB de
+    gravacoes antigas do ESP32, 20/08 a 16/09).
+  Pasta do projeto (sem `.venv`/datasets) caiu para ~7.7 GB, dos quais 6.7 GB sao
+  o dataset WAY-EEG-GAL. Verificacao pos-limpeza: 27/27 suites passando.
+
+
+
+
+
+
 
 
 

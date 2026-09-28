@@ -73,12 +73,26 @@ Codigos de marcador (convensao BCI Competition IV 2a estendida):
   778/779 = inicio/fim da ME             815 caneta+direita, 816 caneta+esq
   780/781 = inicio/fim da MI
   790/791 = inicio/fim do bloco      792/793 = inicio/fim da pausa
-  794   = inicio do video em 0,5x
+  794   = inicio do video em 0,5x     796 = TRIAL CANCELADO pelo experimentador
 
 Os codigos de mao (769/770), ME (778) e condicao (811-816) sao emitidos com
 offsets de 50/100 ms no inicio do cue para nao colidirem na coluna Marker
 (que guarda um codigo por amostra). Per-trial metadata (objeto, mao, bloco)
 fica no JSON de eventos.
+
+CONTROLE DA SESSAO (o que fazer quando algo da errado no meio do trial)
+  ESPACO      encerra a espera/pausa atual (segue para a proxima etapa);
+  C           CANCELA o trial atual (marca 796 no CSV) e vai para o proximo;
+  ESC         ABORTA a sessao: fecha CSV/JSON, imprime o resumo e sai;
+  Ctrl+C      idem ESC (a saida e' garantida por os._exit, com tempo limite em
+              cada parada -- nao trava mais, mesmo com a thread do Kinect presa).
+  ESPACO/ESC/C valem GLOBALMENTE (o Windows inteiro; ver hotkeys.py): funcionam
+  mesmo com a janela do Kinect/OpenCV na frente e com o foco, que era exatamente
+  onde antes elas "morriam" e o trial nao andava. Com `--sem-hotkeys` elas
+  voltam a valer so' na janela do Qt. Quando a sessao NAO esta em tela cheia
+  aparece tambem o PAINEL DO EXPERIMENTADOR: janela pequena, SEMPRE NO TOPO, com
+  os 3 botoes (pular / cancelar trial / abortar). A janela de video do Kinect
+  virou OPCIONAL (`--sem-janela-tracking`) e nao fica mais "sempre na frente".
 
 Uso tipico (g.Nautilus real, sempre com o .venv do projeto e no terminal do
 VS Code - o g.Pype exige IDE suportada):
@@ -97,6 +111,7 @@ import json
 import os
 import queue
 import random
+import signal
 import threading
 import time
 from collections import deque
@@ -104,13 +119,17 @@ from collections import deque
 import numpy as np
 import gpype as gp
 from PySide6.QtCore import QObject, QPointF, QRectF, Qt, QTimer
-from PySide6.QtGui import (QBrush, QColor, QFont, QImage, QPainter,
-                           QPainterPath, QPen, QPixmap, QPolygonF)
-from PySide6.QtWidgets import (QApplication, QLabel, QMainWindow, QWidget)
+from PySide6.QtGui import (QBrush, QColor, QFont, QImage, QKeySequence,
+                           QPainter, QPainterPath, QPen, QPixmap, QPolygonF,
+                           QShortcut)
+from PySide6.QtWidgets import (QApplication, QLabel, QMainWindow, QPushButton,
+                               QVBoxLayout, QWidget)
 from gpype.backend.core.io_node import IONode
 
 from gpype.common.constants import Constants
 from imu import ImuBank, ImuReceiver
+
+import hotkeys
 
 try:
     import winsound
@@ -228,6 +247,12 @@ CODE_SLOWMO_START = 794
 #: ancorar a janela de EEG 0,5 s ANTES do movimento (planejamento motor) e o
 #: clipe do priming no inicio real do movimento.
 CODE_MOVE_ONSET = 795
+#: Trial DESCARTADO pelo experimentador (tecla C ou botao "Cancelar trial"):
+#: o trial em andamento e' abandonado e o sorteio segue do proximo. Fica no CSV
+#: para a analise poder excluir a trial em vez de descobrir-la pelo buraco no
+#: tempo. NAO e' falha do participante: e' decisao do experimentador (tosse,
+#: eletrodo, movimento errado, etc.).
+CODE_TRIAL_CANCEL = 796
 #: Vigia do link (#15): queda/retorno da entrega de amostras do amplificador.
 CODE_LINK_LOST = 899
 CODE_LINK_OK = 898
@@ -251,6 +276,7 @@ CODE_NAMES = {
     CODE_LINK_LOST: "LINK EEG PERDIDO (sem amostras novas)",
     CODE_LINK_OK: "link EEG recuperado",
     CODE_MOVE_ONSET: "INICIO DO MOVIMENTO (onset detectado pelo Kinect)",
+    CODE_TRIAL_CANCEL: "TRIAL CANCELADO pelo experimentador (descartado)",
     CODE_BASELINE_REST: "baseline repouso ativo",
     CODE_TRIAL: "inicio do trial (repouso/home)",
     CODE_ORIGIN_START: "inicio calibracao de origem",
@@ -388,6 +414,16 @@ ARM_WRIST_TRUST_M = 0.55
 # Velocidade (m/s) minima para considerar um lado "em movimento" na escolha
 # automatica da mao ativa quando a trial nao define lado (cue circulo/nada).
 ARM_ACTIVE_SPEED_MPS = 0.05
+#: Periodo (ms) do tick que consome os HOTKEYS GLOBAIS (hotkeys.py) na thread do
+#: Qt e atualiza o painel do experimentador. 50 ms = resposta instantanea para
+#: quem aperta a tecla, e garante que haja bytecode Python rodando na thread
+#: principal com frequencia suficiente para o Ctrl+C ser percebido.
+HOTKEY_POLL_MS = 50
+#: Tempo MAXIMO (s) que o teardown de emergencia (ESC/Ctrl+C/botao ABORTAR)
+#: espera as paradas "graciosas" (pipeline, gravador, IMU). Passado o limite, o
+#: processo sai de qualquer forma: era exatamente isso que faltava quando o
+#: Kinect/OpenCV deixava a thread presa e o programa nao morria.
+ABORT_TEARDOWN_SEC = 5.0
 
 # =============================================================================
 # Estado compartilhado (thread de tracking <-> muxer/controlador Qt)
@@ -669,7 +705,7 @@ class TrackingThread(threading.Thread):
 
     def __init__(self, state, imu, with_kinect=True, use_ik=True,
                  aux_indices=(0, 1), use_zeroing=True, marker_queue=None,
-                 use_onset=True):
+                 use_onset=True, show_window=True):
         super().__init__(daemon=True)
         self.state = state
         self.imu = imu
@@ -678,6 +714,13 @@ class TrackingThread(threading.Thread):
         self.use_ik = use_ik
         self.aux_indices = tuple(int(index) for index in aux_indices)
         self.use_zeroing = bool(use_zeroing)
+        #: Mostrar a janela do video do Kinect (HighGUI/Win32). False = o
+        #: processamento continua igual (publica KT_*/ARM_*/PALM_*, grava o
+        #: clipe do priming) mas NENHUMA janela do OpenCV e' criada. Motivo
+        #: medido em 25/09/2026: essa janela e' nativa do Win32, rouba o foco do
+        #: Qt e as teclas do paradigma (ESPACO/ESC) param de chegar -- com ela
+        #: desligada o experimentador controla tudo pelo painel/hotkeys.
+        self.show_window = bool(show_window)
         #: Deteccao do INICIO DO MOVIMENTO (ancora da janela e do priming).
         self.onset_detector = MovementOnsetDetector() if use_onset else None
         self.onset_time = None              # monotonic do onset da trial atual
@@ -750,9 +793,10 @@ class TrackingThread(threading.Thread):
             print("[zeragem] fusao IMU+cameras ativa (bias + ancora espacial)",
                   flush=True)
         requested_default = self.alignment.calibrated_auxiliary_size or (1280, 720)
-        # Abre TODAS as webcams configuradas (laptop, usb, ...) com timeout
-        # por camera. Cada indice usa a propria calibracao (stereo/landmarks) e
-        # a propria resolucao de calibracao quando existir.
+        # Abre as webcams configuradas (--aux-cameras; padrao = todas menos a do
+        # laptop, resolvidas por NOME) com timeout por camera. Cada indice usa a
+        # propria calibracao (stereo/landmarks) e a propria resolucao de
+        # calibracao quando existir.
         for index in self.aux_indices:
             model = self.alignment.aux_models.get(int(index)) or {}
             requested = model.get("auxiliary_size") or requested_default
@@ -761,19 +805,42 @@ class TrackingThread(threading.Thread):
             self.auxiliaries[int(index)] = capture
             if capture is None:
                 continue
-            name = gt.AUX_CAMERA_NAMES.get(int(index), f"aux{index}")
+            # Nome REAL do Windows (nao o apelido estatico): se a camera aberta
+            # for a do laptop, o aviso abaixo diz isso em vez de anunciar "usb".
+            name = gt.nome_auxiliar(int(index))
             stereo = ("aceita" if self.alignment.aux_usable(int(index))
                       else "ausente")
             print(f"[tracking] camera {name} (indice {index}): {obtained} "
                   f"| stereo: {stereo}", flush=True)
+            aviso = gt.aviso_camera_do_laptop(int(index))
+            if aviso:
+                print(f"[tracking] {aviso}", flush=True)
         self.auxiliary = self.auxiliaries.get(int(self.aux_indices[0])) \
             if self.aux_indices else None
         if not self.auxiliaries:
             print("[tracking] nenhuma webcam auxiliar: rodando com o Kinect "
                   "apenas (triangulacao stereo desligada, KT_* vem do "
                   "depth/esqueleto)", flush=True)
-        cv2.namedWindow(self.WINDOW_NAME, cv2.WINDOW_NORMAL)
-        cv2.resizeWindow(self.WINDOW_NAME, 960, 540)
+        if self.show_window:
+            cv2.namedWindow(self.WINDOW_NAME, cv2.WINDOW_NORMAL)
+            cv2.resizeWindow(self.WINDOW_NAME, 960, 540)
+            # A janela do OpenCV e' NATIVA do Win32: por padrao ela se coloca a
+            # frente da tela do participante e ROUBA O FOCO (foi assim que o
+            # ESPACO/ESC "morreram" na bancada de 25/09/2026). Aqui ela e'
+            # explicitamente NAO-TOPMOST e posicionada num canto; o
+            # experimentador pode minimiza-la e usar o painel/hotkeys.
+            try:
+                cv2.setWindowProperty(self.WINDOW_NAME, cv2.WND_PROP_TOPMOST, 0)
+            except Exception:                  # backend sem a propriedade
+                pass
+            try:
+                cv2.moveWindow(self.WINDOW_NAME, 20, 20)
+            except Exception:
+                pass
+        else:
+            print("[tracking] janela de video do Kinect DESLIGADA "
+                  "(--sem-janela-tracking): medicao e gravacao seguem "
+                  "normais, sem janela do OpenCV", flush=True)
 
     @staticmethod
     def _open_auxiliary(cv2, index, size,
@@ -891,13 +958,21 @@ class TrackingThread(threading.Thread):
             palm = self._resolve_palm(landmarks)
             depths_for_projection = self._projection_depths(palm_position,
                                                             wrist3d)
-            if display is not None and (
-                self.alignment.stereo_usable
-                or self.alignment.hand_landmark_ready
-            ) and aux_hands:
-                self.tracker.draw_auxiliary_hands_on_color(
-                    display, aux_hands, self.alignment,
-                    depths_for_projection, self._triangulated)
+            if display is not None and any(aux_hands_all.values()):
+                # TRES esqueletos na janela do Kinect: o VERDE do Kinect (ja'
+                # desenhado por detect_hand) + UM POR WEBCAM AUXILIAR, cada um na
+                # sua cor e com rotulo (a primeira fica vermelha, como antes).
+                # A profundidade e o 3D triangulado estao no referencial do
+                # KINECT, entao servem para TODAS as auxiliares ao mesmo tempo.
+                maos_para_desenhar = {i: maos
+                                      for i, maos in aux_hands_all.items() if maos}
+                self.tracker.draw_auxiliary_cameras_on_color(
+                    display, maos_para_desenhar, self.alignment,
+                    depths={i: depths_for_projection
+                            for i in maos_para_desenhar},
+                    triangulados={i: self._triangulated
+                                  for i in maos_para_desenhar},
+                )
                 self._draw_badge(display, phase, message)
                 if not self.state.link_ok:
                     # Link de EEG caiu (#15): aviso visivel na janela de
@@ -970,10 +1045,14 @@ class TrackingThread(threading.Thread):
                 onset_flag=onset_flag, imu_blocos=blocos_imu))
 
             if display is not None:
-                cv2.imshow(self.WINDOW_NAME, display)
-                key = cv2.waitKey(1) & 0xFF
-                if key == ord('q'):
-                    self.state.request_quit()
+                if self.show_window:
+                    cv2.imshow(self.WINDOW_NAME, display)
+                    # 'q' NA JANELA DO OPENCV so' chega quando ela tem foco; o
+                    # caminho confiavel de cancelar e' o hotkey global (ESC) ou
+                    # o painel do experimentador (ver hotkeys.py).
+                    key = cv2.waitKey(1) & 0xFF
+                    if key == ord('q'):
+                        self.state.request_quit()
 
     def _loop_imu_only(self):
         """Sem Kinect: publica apenas o ESP32 (KT_*/ARM_*/PALM_* = NaN)."""
@@ -997,8 +1076,10 @@ class TrackingThread(threading.Thread):
 
         Para cada webcam com deteccao e calibracao stereo, faz a triangulacao
         Kinect+webcam e guarda a de MENOR erro mediano de reprojecao; o
-        alinhamento fica na camera escolhida (aux_used). Sem stereo, cai para
-        depth do Kinect -> esqueleto SDK.
+        alinhamento fica na camera escolhida (aux_used). Se NENHUMA triangulacao
+        com o Kinect sair (Kinect sem a mao -- o caso da bancada), o PAR DE
+        AUXILIARES assume a medida 3D sozinho. Sem nada disso: depth do Kinect ->
+        esqueleto SDK.
         """
         self._triangulated = None
         best = None
@@ -1041,6 +1122,26 @@ class TrackingThread(threading.Thread):
         else:
             self.alignment.last_triangulated_3d = None
             self.alignment.last_triangulated_3d_time = None
+            # --- O PAR DE AUXILIARES ASSUME (Kinect sem a mao / sem 3D com ele) --
+            # Este e' o objetivo do projeto: quando o Kinect perde o video e a
+            # projecao do esqueleto, as DUAS webcams (uma de cada lado, ~45
+            # graus), sozinhas, dizem onde a mao esta nos 3 eixos -- via a
+            # calibracao de CADA uma com o Kinect (ver gt.triangulate_aux_pairs).
+            pares = {int(i): maos[0]
+                     for i, maos in (aux_hands_all or {}).items() if maos}
+            pontos, info = self.gt.triangulate_aux_pairs(self.alignment, pares)
+            if pontos is not None and info:
+                self._triangulated = pontos
+                self.alignment.last_triangulated_3d = pontos
+                self.alignment.last_triangulated_3d_time = time.monotonic()
+                ponto = pontos[HAND_TRACK_LANDMARK]
+                if not np.isfinite(ponto).all():
+                    ponto = pontos[0]
+                if np.isfinite(ponto).all():
+                    nomes = "+".join(str(int(i)) for i in info["indices"])
+                    return (ponto.astype(float), f"triangulado_aux_{nomes}",
+                            int(info["indices"][0]),
+                            pares[int(info["indices"][0])])
         if palm_position is not None:
             return palm_position.astype(float), "kinect_depth", None, []
         anchor = self.tracker.body_hand_anchor(prefer_side)
@@ -1531,9 +1632,12 @@ class TrackingThread(threading.Thread):
                     pass
         self.auxiliaries = {}
         self.auxiliary = None
-        if self.cv2 is not None:
+        if self.cv2 is not None and self.show_window:
+            # So' destroi a janela que ESTA thread criou (com
+            # --sem-janela-tracking nao existe janela nenhuma, e um
+            # destroyAllWindows aqui poderia fechar janelas de outro modulo).
             try:
-                self.cv2.destroyAllWindows()
+                self.cv2.destroyWindow(self.WINDOW_NAME)
             except Exception:
                 pass
         print("[tracking] encerrado", flush=True)
@@ -1567,6 +1671,7 @@ class _StimulusCanvas(QWidget):
         self.image = None
         self.on_skip = None
         self.on_abort = None
+        self.on_cancel_trial = None
         self.show_home()
 
     # ---------------------------------------------------------------- modos
@@ -1749,9 +1854,19 @@ class _StimulusCanvas(QWidget):
                    target_w, target_h), image)
 
     def keyPressEvent(self, event):
+        """Teclas do experimentador quando a JANELA DO QT tem o foco.
+
+        ESPACO pula a espera, C descarta a trial atual e ESC aborta a sessao.
+        Estas teclas so' chegam aqui com o Qt em foco; o caminho que funciona
+        SEMPRE (inclusive com a janela do OpenCV na frente) sao os hotkeys
+        globais de `hotkeys.py` + o painel do experimentador.
+        """
         if event.key() == Qt.Key_Space:
             if self.on_skip is not None:
                 self.on_skip()
+        elif event.key() == Qt.Key_C:
+            if self.on_cancel_trial is not None:
+                self.on_cancel_trial()
         elif event.key() == Qt.Key_Escape:
             if self.on_abort is not None:
                 self.on_abort()
@@ -1763,12 +1878,13 @@ class StimulusWindow(QMainWindow):
     """Janela do participante (pode ir a tela cheia) com a tela de estimulos."""
 
     def __init__(self, full_screen=False, on_close=None, on_skip=None,
-                 on_abort=None):
+                 on_abort=None, on_cancel_trial=None):
         super().__init__()
         self.setWindowTitle("Paradigma ME/MI - sessao de gravacao")
         self.canvas = _StimulusCanvas()
         self.canvas.on_skip = on_skip
         self.canvas.on_abort = on_abort
+        self.canvas.on_cancel_trial = on_cancel_trial
         self.setCentralWidget(self.canvas)
         self.resize(900, 900)
         if full_screen:
@@ -1776,8 +1892,26 @@ class StimulusWindow(QMainWindow):
         self._progress = QLabel("")
         self._progress.setStyleSheet("color: white; background: black;")
         self.statusBar().addPermanentWidget(self._progress)
+        # ATALHOS DE APLICACAO: valem com qualquer janela DO QT em foco (o
+        # `keyPressEvent` do canvas exige o foco do canvas, que se perde, por
+        # exemplo, para o escopo do g.Pype). A janela NATIVA do OpenCV/Kinect
+        # nao participa do Qt: para ela e' que existem os hotkeys globais.
+        self._shortcuts = []
+        if on_skip is not None:
+            self._shortcuts.append(self._atalho(Qt.Key_Space, on_skip))
+        if on_cancel_trial is not None:
+            self._shortcuts.append(self._atalho(Qt.Key_C, on_cancel_trial))
+        if on_abort is not None:
+            self._shortcuts.append(self._atalho(Qt.Key_Escape, on_abort))
         self._on_close = on_close
         self.show_home()
+
+    def _atalho(self, tecla, callback):
+        """Registra um atalho de APLICACAO (funciona com qualquer janela Qt)."""
+        atalho = QShortcut(QKeySequence(tecla), self)
+        atalho.setContext(Qt.ApplicationShortcut)
+        atalho.activated.connect(callback)
+        return atalho
 
     # --- API usada pelo controlador do paradigma ---
     def show_home(self):
@@ -1802,6 +1936,76 @@ class StimulusWindow(QMainWindow):
         if self._on_close is not None:
             self._on_close()
         event.accept()
+
+class ExperimenterPanel(QMainWindow):
+    """Painel do experimentador: os 3 controles da sessao SEMPRE a mao.
+
+    Por que existe (bancada, 25/09/2026): as teclas do paradigma dependem do foco
+    da janela do Qt, e a janela de video do Kinect (nativa do OpenCV/Win32) toma
+    o foco -- o experimentador ficou sem como pular/cancelar o trial. Este painel
+    e' pequeno, fica SEMPRE NO TOPO (Qt.WindowStaysOnTopHint) e tem botao para as
+    tres acoes, alem do status (bloco/trial/fase) que antes so' aparecia no CSV.
+
+    O teclado continua valendo: SPACE/ESC/C funcionam GLOBALMENTE pelo
+    hotkeys.py, e na janela do Qt pelos atalhos do StimulusWindow. O painel e'
+    apenas o caminho "a prova de foco" (mouse).
+
+    Nao aparece com --tela-cheia (taparia a tela do participante) nem com
+    --sem-painel-controle.
+    """
+
+    def __init__(self, on_skip, on_cancel_trial, on_abort):
+        super().__init__(None, Qt.Tool | Qt.WindowStaysOnTopHint)
+        self.setWindowTitle("Controle da sessao (experimentador)")
+        self._status = QLabel("iniciando...")
+        self._status.setWordWrap(True)
+        self._status.setStyleSheet("color: #eee; background: #222; "
+                                   "padding: 4px; font-weight: bold;")
+        self._botoes = []
+        corpo = QWidget()
+        layout = QVBoxLayout(corpo)
+        layout.addWidget(self._status)
+        layout.addWidget(self._botao(
+            "Pular espera  [ESPACO]", on_skip,
+            dica="Encerra a espera/pausa atual (preparacao, baseline, pausa "
+                 "entre blocos). Nao descarta a trial."))
+        layout.addWidget(self._botao(
+            "Cancelar trial  [C]", on_cancel_trial,
+            dica="Descarta a trial em andamento (marca 796 no CSV) e segue "
+                 "para a proxima."))
+        layout.addWidget(self._botao(
+            "ABORTAR SESSAO  [ESC]", on_abort,
+            cor="#a11", dica="Encerra a sessao: fecha CSV/JSON, salva o resumo "
+                             "e sai do programa."))
+        self.setCentralWidget(corpo)
+        self.resize(360, 190)
+
+    def _botao(self, texto, callback, cor="#2d6", dica=""):
+        botao = QPushButton(texto)
+        botao.setStyleSheet(
+            f"QPushButton {{ background: {cor}; color: white; "
+            "font-size: 15px; font-weight: bold; padding: 10px; }"
+            "QPushButton:pressed { background: #555; }")
+        if dica:
+            botao.setToolTip(dica)
+        botao.clicked.connect(callback)
+        self._botoes.append(botao)
+        return botao
+
+    def set_status(self, texto):
+        """Atualiza a linha de status (chamada pelo tick dos hotkeys)."""
+        self._status.setText(texto)
+
+    def closeEvent(self, event):
+        """Fechar o painel NAO encerra a sessao (evita cancelar sem querer).
+
+        Motivo: era `Qt.Tool`, entao um ALT+F4/click no X fecharia so' o
+        controle, mas o experimentador pode achar que encerrou a sessao. Aqui o
+        fechamento e' apenas visual: a sessao segue rodando.
+        """
+        event.accept()
+
+
 
 
 class _ParadigmController(QObject):
@@ -1836,6 +2040,20 @@ class _ParadigmController(QObject):
         self._video_deadline = 0.0
         #: True durante a PREPARACAO (tela com o painel de impedancias).
         self._prep_active = False
+        #: True depois do ESC/Ctrl+C: o `abort` so' roda UMA vez (dois ESC nao
+        #: podem disparar dois teardowns/hard-exit em paralelo).
+        self._aborting = False
+        #: Teardown curto + saida garantida (fornecido pelo main()):
+        #: callable(motivo). Sem ele o abort cai no QApplication.quit().
+        self._panic = config.get("on_abort")
+        #: Painel do experimentador (botoes sempre a mao) ou None.
+        self._panel = config.get("panel")
+        #: Fila de acoes dos HOTKEYS GLOBAIS. Os callbacks do vigia rodam na
+        #: thread dele, entao NADA de Qt la' dentro: ele so' enfileira, e o
+        #: QTimer `_poll_hotkeys` (thread principal) executa.
+        self._hotkeys = config.get("hotkeys")
+        if self._hotkeys is not None:
+            self._poll_hotkeys()
 
     @staticmethod
     def build_trial_list(trials_por_bloco, blocos, rng):
@@ -1861,15 +2079,121 @@ class _ParadigmController(QObject):
         QTimer.singleShot(int(delay_ms), self._begin_preparation)
 
     def skip(self):
-        """ESPACO do experimentador: encerra a pausa/espera atual."""
+        """ESPACO do experimentador: encerra a pausa/espera atual.
+
+        Nao mexe no trial: so' encurta a espera corrente (preparacao, baseline,
+        pausa entre blocos) e o paradigma segue normalmente. Durante a
+        contagem/video nao ha' espera para pular -- para descartar a trial
+        inteira use `cancel_trial` (tecla C).
+        """
         if self._pause_on_end is not None:
             self._pause_skip = True
 
+    def cancel_trial(self):
+        """CANCELA o trial atual (tecla C / botao do painel) e vai ao proximo.
+
+        Diferenca entre os tres controles (documentado para nao confundir na
+        bancada):
+          ESPACO (`skip`)          -> so' encurta a espera/pausa corrente;
+          C (`cancel_trial`)       -> DESCARTA a trial em andamento (marca 796
+                                      no CSV) e segue para a proxima;
+          ESC (`abort`)            -> encerra a SESSION inteira.
+
+        A trial cancelada fica registrada no CSV/JSON: a analise pode excluir
+        exatamente ela em vez de adivinhar pelo buraco no tempo.
+        """
+        if self._finished or self._aborting:
+            return
+        trial = self._trial_index
+        # Mata TUDO o que estava agendado para o trial atual (fim da ME, video,
+        # fim da MI...) antes de comecar o proximo: sem isso o fim da MI antiga
+        # dispararia no meio do trial novo.
+        self._generation += 1
+        self._pause_on_end = None
+        self._pause_skip = False
+        self._state.clear_video()
+        self._state.set_phase(PHASE_IDLE, cue="")
+        total = len(self._cfg["trials"])
+        condicao = (self._cfg["trials"][trial]["condicao"]
+                    if 0 <= trial < total else "")
+        self._emit(CODE_TRIAL_CANCEL, trial=trial + 1, condicao=condicao,
+                   bloco=self._bloco + 1)
+        print(f"[paradigma] trial {trial + 1}/{total} CANCELADO pelo "
+              f"experimentador ({condicao}) -> seguindo para o proximo",
+              flush=True)
+        proximo = trial + 1
+        if proximo >= total:
+            self._finish()
+            return
+        # Mesma regra do fim normal da trial: ao fechar o bloco, a pausa entra.
+        if proximo % self._cfg["trials_por_bloco"] == 0:
+            self._end_block(proximo)
+        else:
+            self._run_trial(proximo)
+
     def abort(self):
-        print("[paradigma] sessao ABORTADA pelo experimentador (ESC)",
+        """ESC/Ctrl+C: ABORTA a sessao e sai -- com saida GARANTIDA.
+
+        Antes so' chamava QApplication.quit(); se a thread de tracking estivesse
+        presa no Kinect/OpenCV (bancada de 25/09/2026) o `finally` do main()
+        nunca voltava e o processo ficava vivo. Agora o `_panic` (definido no
+        main) faz um teardown com tempo LIMITE e termina com os._exit.
+        """
+        if self._aborting:
+            return
+        self._aborting = True
+        print("[paradigma] sessao ABORTADA pelo experimentador (ESC/Ctrl+C)",
               flush=True)
         self.stop()
+        if self._panic is not None:
+            self._panic("ESC/Ctrl+C do experimentador")
+            return
         QApplication.quit()
+
+    def info(self):
+        """Linha de status para o painel: fase, trial e o que cada tecla faz."""
+        cfg = self._cfg
+        total = len(cfg["trials"])
+        return (f"bloco {self._bloco + 1}/{cfg['blocos']} | "
+                f"trial {self._trial_index + 1}/{total} | "
+                f"fase {self._state.phase or 'idle'}")
+
+    def set_panel(self, panel):
+        """Liga (ou desliga, com None) o painel do experimentador.
+
+        Separado do construtor porque o painel precisa dos callbacks do
+        controlador, e o controlador precisa da janela: criar os dois no mesmo
+        passo exigiria um objeto meio-construido.
+        """
+        self._panel = panel
+
+    def _poll_hotkeys(self):
+        """Consome as acoes dos hotkeys GLOBAIS na thread do Qt.
+
+        O vigia (hotkeys.GlobalHotkeyWatcher) roda numa thread propria e so'
+        enfileira strings; quem mexe no paradigma/Qt e' este tick, na thread
+        principal. O tick tambem serve de pulso de Python durante a espera: e'
+        ele que faz o Ctrl+C ser percebido em no maximo `HOTKEY_POLL_MS`.
+        """
+        acoes = {"pular": self.skip, "cancelar": self.cancel_trial,
+                 "abortar": self.abort}
+        while True:
+            try:
+                acao = self._hotkeys.get_nowait()
+            except queue.Empty:
+                break
+            if acao is None:                 # fio de encerramento
+                continue
+            handler = acoes.get(str(acao))
+            if handler is None:
+                continue
+            print(f"[paradigma] hotkey global: {acao}", flush=True)
+            handler()
+            if self._aborting:
+                return                       # o abort ja' esta' terminando o app
+        if self._panel is not None:
+            self._panel.set_status(self.info())
+        QTimer.singleShot(HOTKEY_POLL_MS, self._poll_hotkeys)
 
     def stop(self):
         self._generation += 1
@@ -2987,6 +3311,153 @@ def _build_session_meta(args, trials, source, csv_name, events_name,
     }
 
 
+def _resolve_aux_cameras(valor):
+    """Indices das webcams auxiliares a partir de `--aux-cameras`.
+
+    Motivo: o indice do OpenCV e' a POSICAO da camera na enumeracao do
+    DirectShow, entao ele MUDA quando uma camera entra/sai do USB. Foi assim que
+    "a webcam auxiliar" passou a ser a webcam do LAPTOP (a janela de tracking
+    mostrava o rosto de quem esta' no laptop). Vazio/'auto' resolve pelo NOME do
+    Windows, deixando a webcam do laptop de fora (ver
+    `gt.indices_auxiliares_automaticos`); uma lista explicita ("2,0") continua
+    valendo como sempre.
+
+    Imprime o mapa (nome por indice) porque e' isso que o usuario precisa ver
+    quando a camera escolhida nao e' a que ele imagina.
+    """
+    texto = str(valor).strip()
+    if texto not in ("", "auto"):
+        return tuple(int(index) for index in texto.split(",")
+                     if index.strip().lstrip("-").isdigit())
+    try:
+        import kinect_imu_groundtruth as gt
+        indices = gt.indices_auxiliares_automaticos()
+        linhas = gt.mapa_de_cameras_resumo()
+    except Exception as exc:              # noqa: BLE001 - sem SDK/comtypes
+        indices = ()
+        linhas = ["nao deu para ler os nomes de camera (%s: %s)"
+                  % (type(exc).__name__, exc)]
+    print("[cameras] --aux-cameras auto -> %s" % (
+        list(indices) if indices else "nenhuma (so' Kinect)"), flush=True)
+    for linha in linhas:
+        print("[cameras]   " + linha, flush=True)
+    if not indices:
+        print("[cameras] nenhuma webcam EXTERNA enumerada: a do laptop nao "
+              "entra no par estereo (fica no lugar do Kinect). Confira o hub "
+              "USB das externas e rode tools\\diagnostico_cameras.py --salvar",
+              flush=True)
+    return indices
+
+
+
+class CancelamentoGarantido:
+    """Cancela a sessao e GARANTE a saida do processo (ESC/Ctrl+C/botao).
+
+    Por que nao usar so' o `finally` do main(): com a thread de tracking presa
+    dentro de codigo NATIVO (cv2.waitKey, pykinect2, gds) aquele `finally` nunca
+    termina e o processo ficava VIVO depois do "cancelar" -- foi exatamente o que
+    aconteceu na bancada de 25/09/2026 ("travou e nao saiu nem matando o
+    processo"). Aqui as paradas rodam numa thread propria com tempo LIMITE e,
+    passado o limite, o processo sai de qualquer forma (depois do flush).
+
+    E' chamavel: `cancelamento("ESC do experimentador")`.
+
+    Atributos:
+      paradas   -- [(rotulo, callable)] na ordem; a lista pode ser preenchida
+                   DEPOIS da criacao (o `main` faz isso), por isso e' mutavel;
+      vigias    -- threads de vigia (hotkeys) paradas ANTES do resto (nao deve
+                   haver tecla nova chegando no meio do teardown);
+      grace_s   -- tempo MAXIMO (s) das paradas "graciosas";
+      ao_salvar -- callable() para fechar/alinhar os arquivos e imprimir o
+                   resumo depois das paradas e antes de sair;
+      saida     -- callable(codigo) que encerra o processo (injetavel: os testes
+                   usam um espiao em vez de os._exit).
+    """
+
+    def __init__(self, paradas=None, vigias=None, grace_s=ABORT_TEARDOWN_SEC,
+                 ao_salvar=None, saida=None, ao_log=None):
+        self.paradas = paradas if paradas is not None else []
+        self.vigias = vigias if vigias is not None else []
+        self.grace_s = float(grace_s)
+        self.ao_salvar = ao_salvar
+        self.saida = saida if saida is not None else hotkeys.hard_exit
+        self.ao_log = ao_log if ao_log is not None else self._log_padrao
+        self.motivo = None               # None = ainda nao cancelou
+
+    @staticmethod
+    def _log_padrao(texto):
+        print(texto, flush=True)
+
+    def __call__(self, motivo="ESC/Ctrl+C", codigo=0):
+        if self.motivo is not None:
+            # Segundo cancelamento: o experimentador quer sair JA'. Nao espera
+            # nada (nem as paradas do primeiro, que podem estar presas).
+            self.ao_log("[paradigma] SEGUNDO cancelamento: saindo imediatamente")
+            self.saida(1)
+            return
+        self.motivo = motivo
+        self.ao_log(f"[paradigma] CANCELANDO a sessao ({motivo}): "
+                    "salvando e saindo")
+        for vigia in self.vigias:
+            try:
+                vigia.stop()
+            except Exception:                # noqa: BLE001 - nao impede a saida
+                pass
+        operador = threading.Thread(target=self._parar, daemon=True,
+                                    name="cancelamento")
+        operador.start()
+        operador.join(self.grace_s)
+        if operador.is_alive():
+            self.ao_log(f"[paradigma] o encerramento nao terminou em "
+                        f"{self.grace_s:g} s (hardware/thread presa): saindo "
+                        "mesmo assim")
+        self.saida(codigo)
+
+    def _parar(self):
+        """Roda as paradas na ordem, sem deixar uma falha impedir as outras."""
+        for rotulo, acao in self.paradas:
+            try:
+                acao()
+            except Exception as exc:         # noqa: BLE001 - para o resto
+                self.ao_log(f"[paradigma] aviso: {rotulo} nao parou limpo ({exc})")
+        if self.ao_salvar is not None:
+            try:
+                self.ao_salvar()
+            except Exception as exc:         # noqa: BLE001 - resumo e' opcional
+                self.ao_log(f"[paradigma] aviso: resumo/JSON falhou ({exc})")
+
+
+def _resumo_cancelado(writer, events_name, csv_name, motion_name):
+    """Fecha o JSON e imprime onde ficaram os arquivos de uma sessao cancelada."""
+    try:
+        _align_event_json(writer, events_name, csv_name)
+    except Exception as exc:                 # noqa: BLE001 - resumo e' opcional
+        print(f"[paradigma] aviso: alinhamento do JSON falhou ({exc})",
+              flush=True)
+    atual = getattr(writer, "_file_path", None)
+    print("[paradigma] gravacao INTERROMPIDA (sessao cancelada):\n"
+          f"  EEG        -> {os.path.abspath(atual or csv_name)}\n"
+          f"  Movimento  -> {os.path.abspath(motion_name)}\n"
+          f"  Eventos    -> {os.path.abspath(events_name)}", flush=True)
+
+
+def _fechar_janelas_kinect(tracking, sem_janela):
+    """Fecha a janela do Kinect pela thread PRINCIPAL (rede de seguranca).
+
+    A `TrackingThread._shutdown` ja' destroi a janela que ela mesma criou, mas
+    se aquela thread ficou presa dentro do Kinect/OpenCV ela nunca chega la' e a
+    janela sobrevive ao programa (era o "video travado na frente" da bancada de
+    25/09/2026). O destroyWindow daqui roda na thread principal, que e' a dona
+    da janela no HighGUI.
+    """
+    if sem_janela or tracking is None or tracking.cv2 is None:
+        return
+    try:
+        tracking.cv2.destroyWindow(tracking.WINDOW_NAME)
+    except Exception:                        # noqa: BLE001 - janela pode nao existir
+        pass
+
+
 def parse_args():
     parser = argparse.ArgumentParser(
         description=__doc__,
@@ -3059,14 +3530,33 @@ def parse_args():
     parser.add_argument("--tela-cheia", action="store_true")
     parser.add_argument("--sem-kinect", action="store_true",
                         help="Roda sem Kinect (apenas ESP32; KT_* = NaN)")
+    parser.add_argument("--sem-janela-tracking", action="store_true",
+                        help=("NAO abre a janela de video do Kinect (OpenCV). "
+                              "A medicao e a gravacao continuam identicas; "
+                              "serve para a bancada: essa janela e' NATIVA do "
+                              "Win32 e rouba o foco do Qt, fazendo ESPACO/ESC "
+                              "do paradigma pararem de funcionar"))
+    parser.add_argument("--sem-hotkeys", action="store_true",
+                        help=("Desliga os hotkeys GLOBAIS (ESPACO/ESC/C em "
+                              "qualquer janela). Use se outro programa da "
+                              "bancada usar essas teclas"))
+    parser.add_argument("--sem-painel-controle", action="store_true",
+                        help=("Nao abre o painel do experimentador (janela "
+                              "pequena com os botoes de pular/cancelar/"
+                              "abortar). Ele ja' nao aparece com --tela-cheia"))
     parser.add_argument("--sem-ik", action="store_true",
                         help=("Desliga a cinematica inversa de elos rigidos: "
                               "ARM_* vem do esqueleto cru do SDK (sem "
                               "arm_model.json)"))
-    parser.add_argument("--aux-cameras", default="0,1",
+    parser.add_argument("--aux-cameras", default="",
                         help=("Indices (OpenCV) das webcams auxiliares usadas "
-                              "com o Kinect, separados por virgula. Padrao "
-                              "'0,1' = webcam do laptop (0) + webcam USB (1)."))
+                              "com o Kinect, separados por virgula. O indice do "
+                              "OpenCV NAO e' estavel (muda quando uma camera "
+                              "entra/sai do USB), entao o padrao e' 'auto': "
+                              "todas as webcams MENOS a do laptop, pelo NOME "
+                              "do Windows. Confira quem e' quem com "
+                              "`tools\\diagnostico_cameras.py --salvar` e fixe "
+                              "ex.: --aux-cameras 2,0"))
     parser.add_argument("--sem-zeroing", action="store_true",
                         help=("Desativa a zeragem do IMU pelas cameras "
                               "(colunas IMU_*_pos_* ficam NaN e ZERO_lock_*=0)"))
@@ -3325,15 +3815,58 @@ def main():
 
     tracking = TrackingThread(state, imu, with_kinect=not args.sem_kinect,
                               use_ik=not args.sem_ik,
-                              aux_indices=tuple(
-                                  int(index) for index in
-                                  str(args.aux_cameras).split(",")
-                                  if index.strip().lstrip("-").isdigit()),
+                              aux_indices=_resolve_aux_cameras(
+                                  args.aux_cameras),
                               use_zeroing=not args.sem_zeroing,
                               marker_queue=marker_queue,
-                              use_onset=not args.sem_onset)
-    window = StimulusWindow(full_screen=args.tela_cheia,
-                            on_close=lambda: controller.stop())
+                              use_onset=not args.sem_onset,
+                              show_window=not args.sem_janela_tracking)
+
+    # ------------------------------------------------- controle da sessao
+    # Cancelamento de emergencia (ESC/Ctrl+C/botao): as listas sao preenchidas
+    # ao longo do main, mas o objeto e' criado JA' para funcionar mesmo se
+    # disparado no primeiro instante da sessao.
+    paradas = []                     # [(rotulo, callable)] na ordem de parada
+    vigias = []                      # [hotkeys.GlobalHotkeyWatcher]
+    cancelamento = CancelamentoGarantido(
+        paradas=paradas, vigias=vigias,
+        ao_salvar=lambda: _resumo_cancelado(writer, events_name, csv_name,
+                                            motion_name))
+
+    def _por_sinal(signum, _frame):
+        """Ctrl+C/Ctrl+Break: cancela como o ESC (antes o Ctrl+C nao saia)."""
+        cancelamento(f"sinal {signum} (Ctrl+C/Ctrl+Break)")
+
+    for _nome in ("SIGINT", "SIGBREAK"):
+        _numero = getattr(signal, _nome, None)
+        if _numero is None:
+            continue
+        try:
+            signal.signal(_numero, _por_sinal)
+        except (ValueError, OSError):        # fora da thread principal / SO sem
+            pass
+
+    # HOTKEYS GLOBAIS: ESPACO pular, C cancelar trial, ESC abortar. O vigia roda
+    # em thread propria e SO' ENFILEIRA (nunca toca em Qt): quem executa e' o
+    # tick `_poll_hotkeys` do controlador, na thread principal.
+    fila_hotkeys = queue.Queue()
+    vigia_hotkeys = hotkeys.GlobalHotkeyWatcher(
+        [("space", hotkeys.VK_SPACE, lambda: fila_hotkeys.put("pular")),
+         ("c", hotkeys.VK_C, lambda: fila_hotkeys.put("cancelar")),
+         ("esc", hotkeys.VK_ESCAPE, lambda: fila_hotkeys.put("abortar"))],
+        enabled=not args.sem_hotkeys,
+        on_error=lambda exc: print(f"[hotkeys] vigia parou ({exc})", flush=True))
+    vigias.append(vigia_hotkeys)
+    print("[hotkeys] teclas GLOBAIS: ESPACO pular | C cancelar trial | "
+          "ESC abortar" + ("   (DESLIGADAS por --sem-hotkeys)"
+                           if args.sem_hotkeys else ""), flush=True)
+
+    window = StimulusWindow(
+        full_screen=args.tela_cheia,
+        on_close=lambda: controller.stop(),
+        on_skip=lambda: controller.skip(),
+        on_cancel_trial=lambda: controller.cancel_trial(),
+        on_abort=lambda: controller.abort())
     controller = _ParadigmController(
         window=window, marker_queue=marker_queue, state=state,
         config={
@@ -3357,14 +3890,32 @@ def main():
             # conversando com o aparelho durante a gravacao).
             "on_session_start": (None if impedance_monitor is None
                                  else impedance_monitor.stop),
+            # Cancelamento (ESC/Ctrl+C/botao ABORTAR): teardown curto + saida
+            # garantida, e a fila dos hotkeys globais consumida pelo Qt.
+            "on_abort": cancelamento,
+            "hotkeys": fila_hotkeys,
         })
-    # ESPACO (experimentador) pula a espera/pausa atual; ESC aborta a sessao.
+    # ESPACO (experimentador) pula a espera/pausa atual; C cancela o trial;
+    # ESC aborta a sessao. (Os callbacks ja' foram passados ao StimulusWindow
+    # para os atalhos de APLICACAO; aqui fica o caminho do keyPressEvent.)
     window.canvas.on_skip = controller.skip
+    window.canvas.on_cancel_trial = controller.cancel_trial
     window.canvas.on_abort = controller.abort
+    # PAINEL DO EXPERIMENTADOR: botoes de pular/cancelar/abortar numa janela
+    # pequena SEMPRE NO TOPO. Nao aparece em tela cheia (taparia a tela do
+    # participante) nem com --sem-painel-controle; nesses casos valem os hotkeys.
+    panel = None
+    if not args.tela_cheia and not args.sem_painel_controle:
+        panel = ExperimenterPanel(controller.skip, controller.cancel_trial,
+                                  controller.abort)
+        controller.set_panel(panel)
     app.add_widget(scope)
 
+    vigia_hotkeys.start()
     tracking.start()
     window.show()
+    if panel is not None:
+        panel.show()
     pipeline.start()
     watchdog.start()
     if impedance_monitor is not None:
@@ -3372,14 +3923,23 @@ def main():
     motion_recorder = MotionRecorder(state, motion_name, hz=args.mov_hz,
                                      fs=args.fs)
     motion_recorder.start()
+    # Ordem da parada de EMERGENCIA (ver `CancelamentoGarantido`). Fica AQUI
+    # (depois de tudo existir) porque as funcoes de parada sao resolvidas na hora
+    # do `extend`: referenciar `motion_recorder` antes da criacao daria NameError.
+    paradas.extend([
+        ("pipeline de EEG", pipeline.stop),
+        ("gravador de movimento", motion_recorder.stop),
+        ("vigia de link", watchdog.stop),
+        ("imu (UDP)", imu.stop),
+    ])
     if args.source == "gnautilus" and args.impedancia:
         _impedance_report(source, args.impedancia_tentativas,
                           args.impedancia_sec)
         print("Impedancia medida. Corrija os eletrodos marcados e use ESPACO "
               "na tela de PREPARACAO para iniciar a sessao.", flush=True)
     controller.start(300)
-    print("Gravando... ESPACO inicia/pula pausas | ESC aborta | "
-          "feche a janela de estimulos para interromper.")
+    print("Gravando... ESPACO pula esperas | C cancela o trial | ESC aborta | "
+          "Ctrl+C tambem aborta (sai na hora).")
     try:
         app.run()
     finally:
@@ -3389,9 +3949,11 @@ def main():
         watchdog.stop()
         if impedance_monitor is not None:
             impedance_monitor.stop()
+        vigia_hotkeys.stop()
         tracking.running = False
         tracking.join(timeout=3.0)
         imu.stop()
+        _fechar_janelas_kinect(tracking, args.sem_janela_tracking)
         _align_event_json(writer, events_name, csv_name)
         actual_csv = getattr(writer, "_file_path", None)
         print(f"\nGravacao finalizada:\n"

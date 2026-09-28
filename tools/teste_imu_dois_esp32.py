@@ -1,5 +1,18 @@
 """Teste de bancada dos DOIS IMUs (luvas) -- sem EEG, sem Kinect, sem g.Pype.
 
+PRE-REQUISITO DE REDE (medido em 23/09/2026): o firmware envia UNICAST para
+192.168.137.1:4210/4211 (direita/esquerda), que e' o endereco do Ponto de acesso
+movel (ICS) do notebook -- SSID "DUDU_LAPTOP 2897". Com o hotspot DESLIGADO nao
+existe 192.168.137.x nenhum, e este teste fica mudo (nao ha' o que receber). Antes
+de rodar, confira no PowerShell:
+
+    Get-Service icssvc                       # Windows Mobile Hotspot: Running
+    Get-NetIPAddress -AddressFamily IPv4 | Where-Object IPAddress -like '192.168.137.*'
+    arp -a | Select-String '192.168.137'     # as duas luvas (uma vez conectadas)
+
+Se o hotspot nao estiver de pe', ligue-o em Configuracoes > Rede e Internet >
+Ponto de acesso movel (o toggle da tela sozinho nao garante que o servico subiu).
+
 Para que serve: conferir, antes da sessao, que os dois ESP32 estao enviando, a
 que taxa, com que atraso, e (se pedido) GRAVAR as duas amostras simultaneamente
 num CSV para inspecao offline.
@@ -153,6 +166,45 @@ def imprime(lados, sem_gravidade):
               f"({accel[0]:+7.2f},{accel[1]:+7.2f},{accel[2]:+7.2f})")
 
 
+def relatorio_convencao(lados):
+    """Compara a convencao das duas luvas (vertical/travessao das montagens).
+
+    Por que: o firmware calcula roll/pitch/yaw no referencial DO SENSOR, entao
+    duas luvas montadas de forma diferente (tipico: a esquerda e' a imagem
+    espelhada da direita) dao numeros diferentes para a MESMA postura -- e uma
+    delas parece "errada" quando comparada com a outra. Aqui isso fica VISIVEL:
+    com as duas luvas paradas na MESMA postura (deite as duas na mesa, no mesmo
+    sentido), o eixo que carrega a gravidade tem de ser o MESMO nas duas; se nao
+    for, a montagem difere e o alinhamento IMU <-> camera por luva (tecla O da
+    ferramenta do ground truth) e' quem corrige.
+    """
+    com_dado = [lado for lado in lados if lado.pacotes > 0 and lado.ultima]
+    if len(com_dado) < 2:
+        return
+    linhas = []
+    for lado in com_dado:
+        accel = np.asarray(lado.ultima[5], np.float64)
+        eixo = int(np.argmax(np.abs(accel)))
+        linhas.append((lado.nome, eixo, float(accel[eixo]),
+                       tuple(round(float(v), 3) for v in
+                             lado.ultima[2:5])))
+    print("\nConvencao das luvas (postura identica nas duas, luva parada):")
+    for nome, eixo, valor, rpy in linhas:
+        print(f"  {nome:<10} gravidade no eixo {'XYZ'[eixo]} ({valor:+.2f} g) | "
+              f"roll/pitch/yaw {rpy[0]:+.1f}/{rpy[1]:+.1f}/{rpy[2]:+.1f}")
+    eixos = {eixo for _nome, eixo, _valor, _rpy in linhas}
+    if len(eixos) > 1:
+        print("  ATENCAO: as duas luvas tem a VERTICAL em eixos diferentes -- "
+              "as montagens sao diferentes (esperado entre direita e esquerda). "
+              "O firmware responde no referencial do sensor: use a tecla O da "
+              "ferramenta para alinhar cada luva com a camera.")
+    else:
+        print("  OK: mesma vertical nas duas luvas.")
+    print("  Dica: gire UMA luva (na mao) e observe os sinais de roll/pitch/yaw; "
+          "repita com a outra. Sinais opostos em algum eixo = montagem "
+          "espelhada -- e' o caso da mao esquerda.")
+
+
 def main():
     args = parse_args()
     nomes = ["direita", "esquerda"]
@@ -228,6 +280,7 @@ def main():
             if time.monotonic() >= proximo:
                 proximo += 1.0
                 imprime(lados, args.sem_gravidade)
+                relatorio_convencao(lados)
     except KeyboardInterrupt:
         print("\ninterrompido pelo usuario")
     finally:
@@ -238,6 +291,7 @@ def main():
             print(f"amostras cruas gravadas em {args.gravar}")
 
     imprime(lados, args.sem_gravidade)
+    relatorio_convencao(lados)
     print()
     for lado in lados:
         if lado.remetentes:

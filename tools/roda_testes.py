@@ -28,9 +28,13 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--detalhado", action="store_true",
                         help="Mostra as ultimas linhas das suites que falharem")
+    parser.add_argument("padrao", nargs="?", default="",
+                        help="Filtro opcional pelo nome da suite (ex: test_estat)")
     args = parser.parse_args()
     python = interpretador()
     suites = sorted(glob.glob(os.path.join(RAIZ, "test_*.py")))
+    if args.padrao:
+        suites = [s for s in suites if args.padrao in os.path.basename(s)]
     if not suites:
         print("nenhuma suite encontrada")
         return 1

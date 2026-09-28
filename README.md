@@ -14,8 +14,8 @@ Pipeline de aquisição **offline** (ME/MI com 6 condições objeto×mão) e sis
 | **1 — Aquisição offline** | `eeg_motor_paradigm.py` | EEG cru (500 Hz) + movimento (~30 Hz) + marcadores + vídeo de priming + questionário do participante |
 | Treino SAND trajetória | `sand_traj_treino.py` | Treina a rede (EEG 2 s → trajetória 30×3 em metros) com as gravações do Programa 1 |
 | **2 — Tempo real** | `sand_traj_tempo_real.py` | Inferência assíncrona + overlay da trajetória prevista no vídeo |
-| Calibração stereo | `stereo_calibration.py` | Kinect ✕ webcam auxiliar N (`--aux-index`); gera `stereo_calibration_auxN.npz` |
-| Ground truth autônomo | `kinect_imu_groundtruth.py` | Ferramenta de calibração/diagnóstico standalone (uso pontual) |
+| Calibração stereo | `stereo_calibration.py` | Kinect ✕ webcam auxiliar N (`--aux-index 2 0`); gera `stereo_calibration_auxN.npz` |
+| Ground truth autônomo | `tools/kinect_groundtruth_tool.py` | ferramenta de calibração/diagnóstico standalone (uso pontual) |
 
 Biblioteca compartilhada: `kinect_imu_groundtruth.py` (stereo/triangulação, MediaPipe,
 IK de 2 elos `ArmLinkModel`, esqueleto do SDK) e **`imu.py`** (IMU do ESP32 por UDP +
@@ -44,23 +44,107 @@ detecta e orienta trocar de interpretador.
 
 Nunca posicione um par em 180° (cada câmera veria uma face diferente do tabuleiro).
 
+**Tabuleiro (calibração):** 6×4 quadrados de **57 mm** = **5×3 cantos internos**
+(placa impressa em 23/09/2026). Os valores vivem em `stereo_calibration.py`
+(`CHECKERBOARD_COLS/ROWS`, `SQUARE_SIZE_M`) e em `kinect_imu_groundtruth.py`
+(`CHECKERBOARD_SIZE`, `SQUARE_SIZE_M`). Se trocar de placa, mude nos dois (ou use
+`--checkerboard CxR --quadrado MM`) e **recalibre**: o npz grava placa e quadrado,
+e o programa recusa calibração de placa diferente dizendo o motivo
+(`stereo_status` → `tools\diagnostico_cameras.py` mostra por câmera).
+
+**Janelas de vídeo:** cada câmera tem a **sua** janela (Kinect RGB, Kinect depth e
+**uma por webcam auxiliar**), criadas e posicionadas em **grade sem sobreposição**
+por `GradeDeJanelas` + `grade_de_janelas` (em `kinect_imu_groundtruth.py`). A
+escala de exibição é automática: o maior valor **≤ 0,5** (`WINDOW_SCALE`, usado
+como teto) que faz todas caberem na tela — em 1080p dá 0,5 (Kinect RGB 960×540,
+auxiliar 640×360, depth 256×212) e em telas com DPI alto cai para ~0,4 (nesta
+máquina o Windows entrega 1536×960 úteis num painel 1920×1080 a 125%). Se a grade
+não couber nem no mínimo, as janelas vão em **cascata** (degraus: nenhuma fica
+exatamente atrás de outra) e o programa diz isso. `--escala-janelas F` fixa a
+escala; `--salvar-quadros S` grava os PNGs. É redução de **exibição** apenas —
+detecção, profundidade e calibração seguem na resolução cheia (e o texto de status
+é desenhado *depois* da redução, então continua legível).
+
+Com as **duas** auxiliares calibradas contra o Kinect, a relação aux1 ✕ aux2 sai da
+composição das duas calibrações (não existe npz de par): é ela que permite ao par
+**substituir o Kinect** — quando o Kinect perde a mão, as duas webcams triangulam a
+posição 3D nos três eixos (nos programas, `hand_source = trianguladoAux`). E o
+esqueleto do Kinect (verde) + o de **cada** auxiliar aparecem no mesmo quadro
+(`draw_auxiliary_cameras_on_color`), cada um na sua cor.
+
 ```powershell
-python -c "import cv2;[print(i, cv2.VideoCapture(i).isOpened()) for i in range(4)]"
-python stereo_calibration.py --aux-index 1   # par Kinect ✕ webcam 1
-python stereo_calibration.py --aux-index 2   # par Kinect ✕ webcam 2
-python eeg_motor_paradigm.py --aux-cameras "1,2"
+# 1) QUEM E' QUEM: imprime o NOME (Windows) de cada indice do OpenCV. O indice
+#    NAO e' estavel -- ele muda quando uma webcam entra/sai do USB, e foi assim
+#    que "a camera auxiliar" virou a webcam do LAPTOP (rosto de quem esta' no
+#    laptop na janela de tracking).
+python tools\diagnostico_cameras.py --salvar
+# 2) calibre CADA webcam EXTERNA no indice que o passo 1 mostrou. UMA SESSÃO DE
+#    CAPTURA POR CAMERA, no mesmo comando (15+ poses por camera, tabuleiro PARADO):
+#      - tabuleiro: 6x4 quadrados de 57 mm (5x3 cantos) -> ja' e' o padrao dos
+#        programas; se usar outra placa, acrescente --checkerboard 5x3 --quadrado 57
+#      - 3-8 s de pausa com a placa parada para aceitar cada pose
+python stereo_calibration.py --aux-index 2 0
+python stereo_calibration.py --aux-index 2   # ou uma camera so'
+# 2b) conferiu? cada npz diz a placa que gravou; calibracao de placa diferente e'
+#     recusada com o motivo (recalibre) em vez de um "RMS alto" enganoso
+python tools\diagnostico_cameras.py
+# 3) CONFIRA os TRES esqueletos no video do Kinect (a ativa = --aux-index; as
+#    outras em --aux-cameras, vazio = auto = todas menos a do laptop). Cada
+#    camera tem a SUA janela de video, em grade (sem uma tapar a outra);
+#    --escala-janelas F fixa o tamanho se preferir maior e arrastar.
+python tools\kinect_groundtruth_tool.py --aux-index 2 --aux-cameras "0"
+# 4) no paradigma o padrao e' `--aux-cameras auto` = todas as webcams MENOS a do
+#    laptop, pelo nome; para fixar os indices use --aux-cameras "2,0"
+python eeg_motor_paradigm.py --participante P01 --sessao S1
 ```
 
 Durante a calibração, oclusão pontual só descarta a captura (colete 15+ pares bons).
+
+### Rotina da bancada: o que apertar em cada programa
+
+**`stereo_calibration.py`** (Kinect RGB ✕ cada webcam auxiliar — 1 sessão por
+câmera, 15+ poses): a captura é automática, 2 s com o tabuleiro parado em cada
+pose aceita, e ele pede sozinho mais poses se o RMS ficar acima de 2 px.
+`ESC` encerra a câmera atual (e passa para a próxima, se pediu várias).
+
+**`tools/kinect_groundtruth_tool.py`** — é este que se abre no dia a dia (a
+biblioteca `kinect_imu_groundtruth.py` **não tem mais programa próprio**; ela só
+é importada). Ordem sugerida:
+
+| Passo | Tecla | O que faz |
+|---|---|---|
+| 1 | — | abre e já mostra: mapa de câmeras por NOME, estado do stereo (com o motivo) e os esqueletos (Kinect verde + cada auxiliar na sua cor) — e **uma janela de vídeo por câmera**, em grade |
+| 2 | `T` | diagnóstico: depth válido/medido **e** erro ponta-a-ponta da sobreposição no tabuleiro |
+| 3 | `L` | liga o **log de desvio** (`overlay_deviation_log.csv`, 1 linha/frame com o desvio por nó) |
+| 4 | `K` | mede o **trim fixo** do overlay: 3 s com a mão PARADA e visível nas duas câmeras |
+| 5 | `H` | **calibração do esqueleto da mão**: segure a mão visível nas DUAS câmeras e VARIE posição, profundidade (0,8–1,5 m) e inclinação; `P` descarta, `H` pausa |
+| 6 | `C` | **origem**: mão na mesa = (0,0,0) e mede os elos do braço (deixe ~30 amostras passarem) |
+| 7 | `B` | bias do acelerômetro (2 s com a mão parada) |
+| 8 | `R` | reset da fusão, se precisar recomeçar |
+| 9 | `O` | **alinhamento da palma por luva** (IMU ✕ câmera): ~14 s girando a mão com a palma virada para o Kinect; imprime o resíduo em graus e grava `imu_palm_alignment_{right,left}.json` |
+
+No vídeo aparece, por lado, **`Palma R/L: erro Kinect x IMU`** (e a coluna
+`palm_err_deg` no CSV e no log da tecla `L`): é o número que diz se a luva daquele
+lado está alinhada. Sem a tecla `O`, o vetor da palma é ancorado numa única amostra
+e o erro **cresce conforme a mão gira** — e cresce diferente em cada luva (a
+esquerda, montada espelhada, é a que mais aparece). Se o resíduo da `O` ficar alto
+em **um** lado, o suspeito é o par de portas: use
+`--imu-portas "4210,4211"` (ordem **direita,esquerda**) para casar com o firmware.
+
+`ESC` sai. O CSV `kinect_imu_groundtruth.csv` grava `hand_source`
+(`Kinect`/`triangulado`/`trianguladoAux`) e `aux_pair_x/y/z_m` — as colunas que
+mostram quando o **par de auxiliares** substituiu o Kinect.
 
 ## Execução (Programa 1)
 
 ```powershell
 python eeg_motor_paradigm.py --participante P01 --sessao S1 --montagem "C3,Cz,C4,P3,P4"
 # úteis: --source generator (teste sem hardware) · --sem-kinect · --sem-zeroing
-#         --aux-cameras "1,2" · --tela-cheia · --sem-priming-arquivo
+#         --aux-cameras auto (padrao) · --tela-cheia · --sem-priming-arquivo
 #         --sem-painel-impedancia · --sem-questionario · --mov-hz 30
 #         --mov-no-eeg-csv (formato antigo: movimento embutido no CSV de EEG)
+#         --sem-janela-tracking (nao abre a janela do Kinect/OpenCV)
+#         --sem-hotkeys · --sem-painel-controle (controle da sessao)
 ```
 
 Fluxo da sessão: PREPARAÇÃO (painel de impedâncias ao vivo + calibração do
@@ -69,6 +153,27 @@ Kinect + teste de sinal → ESPAÇO)
 → calibração de origem (10 s, mão na mesa = 0,0,0; também mede os elos do braço)
 → 5 blocos × 50 trials (12 s) com pausa de 2 min entre blocos (ESPAÇO pula)
 → encerramento com questionário do participante.
+
+### Cancelar / controlar a sessão (3 caminhos — `hotkeys.py`)
+
+| Tecla | Ação | Efeito |
+|-------|------|--------|
+| `ESPAÇO` | `skip` | encerra a espera/pausa atual (preparação, baseline, pausa de bloco) |
+| `C` | `cancel_trial` | descarta a trial em andamento (marca **796** no CSV) e vai à próxima |
+| `ESC` | `abort` | encerra a sessão: fecha CSV/JSON, imprime o resumo e sai |
+| `Ctrl+C` | `abort` | idem ESC (a saída é garantida, com tempo limite por parada) |
+
+As teclas são **globais**: `hotkeys.GlobalHotkeyWatcher` lê o estado do teclado no
+Windows inteiro (`GetAsyncKeyState`), então elas funcionam **mesmo com a janela de
+vídeo do Kinect (OpenCV/Win32) na frente e com o foco** — era exatamente aí que
+ESPAÇO/ESC “morriam” e o trial não andava (bancada de 25/09/2026). Com
+`--sem-hotkeys` elas voltam a valer só na janela do Qt. Sem tela cheia aparece
+também o **painel do experimentador** (janela pequena sempre no topo, com os
+botões pular/cancelar/abortar e o status bloco/trial/fase); `--sem-painel-controle`
+o desliga. A saída nunca trava: `CancelamentoGarantido` roda as paradas com tempo
+limite (`ABORT_TEARDOWN_SEC`) e termina com `os._exit`. Um 2º ESC/Ctrl+C sai na
+hora. `--sem-janela-tracking` evita a janela do OpenCV (não rouba mais o foco;
+medição e gravação seguem idênticas).
 
 Enquanto a sessão roda: a janela de tracking mostra a fase, a sobreposição da
 mão auxiliar e **"LINK EEG PERDIDO"** se o amplificador parar de enviar amostras
@@ -79,6 +184,7 @@ mão auxiliar e **"LINK EEG PERDIDO"** se o amplificador parar de enviar amostra
 ```
 *.py                  programas e bibliotecas (rodam da raiz)
 imu.py                IMU do ESP32 (UDP) + PositionFusion: FONTE UNICA
+hotkeys.py            teclas GLOBAIS de cancelamento (GetAsyncKeyState) + hard_exit
 test_*.py             suites de teste (sem hardware)
 _smoke_*.py           testes ponta-a-ponta sintéticos
 _demo_trial.py        demo da plataforma gráfica com a webcam
@@ -212,10 +318,17 @@ python _demo_trial.py       # demo da plataforma gráfica com a webcam
 | Suite | Cobre |
 |---|---|
 | `test_paradigm_protocol.py` | trials balanceados, trial de 12 s, códigos únicos com legenda, contrato de colunas (EEG 34 / movimento 44), vigia 899/898, painel de impedâncias, questionário, `KT_src` |
+| `test_paradigm_abort.py` | cancelamento da sessão: borda das teclas ESPAÇO/C/ESC, vigia global de hotkeys (backend injetado), `hard_exit`, `cancel_trial` (descarta a trial e marca 796; respeita a pausa de bloco), `abort` executado uma vez, painel/fila de hotkeys e `CancelamentoGarantido` que sai mesmo com uma parada travada |
+| `test_palm_alignment.py` | vetor da palma por luva: Kabsch/SVD, alinhamento IMU✕câmera resolvido de amostras (montagem até 180°), o bug antigo medido (erro médio 19°, máx. 78° ao girar a mão) × a correção (erro máx. <2°), recusas, JSON (salvar/carregar), captura da tecla `O` na ferramenta e retrocompatibilidade (T=I é idêntico ao código antigo) |
+| `test_janelas_grade.py` | janelas de vídeo: uma por câmera, grade sem sobreposição dentro da tela, escala de exibição automática (0,5 em 1080p → ~0,4 em 1536×960), cascata quando não cabe e `GradeDeJanelas` (cria/reposiciona/destrói, com cv2 falso) |
 | `test_arm_csv.py` | colunas ARM_*/PALM_*/KT_hand/KT_src: ordem, unidades, relatividade à origem |
 | `test_arm_ik.py` | cinemática inversa de 2 elos (8 casos) |
 | `test_body_anchor.py` | esqueleto do SDK como âncora de profundidade (6 casos) |
 | `test_cameras_multi.py` | calibração por índice de webcam e lista personalizada |
+| `test_camera_names.py` | nomes das webcams pelo Windows: mapa índice→nome, detecção da webcam do laptop, degradação silenciosa sem enumeração |
+| `test_aux_pair_stereo.py` | par de auxiliares SEM Kinect: relação vinda da composição das duas calibrações, pixels por câmera, triangulação sub-cm, recusas e escolha do melhor par |
+| `test_overlay_auxiliares.py` | 3 esqueletos no RGB do Kinect: cor por auxiliar, desvio contra o verde, profundidade rígida, gating de borda |
+| `test_paradigm_aux_pair.py` | desvio de fonte do `_resolve_wrist3d`: o par de auxiliares assume com o Kinect cego; os caminhos do Kinect mantêm prioridade |
 | `test_fusion_zeroing.py` | zeragem do IMU com as câmeras (bias/velocidade/posição) |
 | `test_triangulation.py` | triangulação estéreo 3D da mão (mm) |
 | `test_hand_calib.py` | calibração 2D→2D da mão (sintética) |

@@ -57,13 +57,33 @@ except ImportError as exc:
     ) from exc
 
 UDP_PORT = 4210
-AUX_CAMERA_INDEX = 0
+# Camera auxiliar aberta AO VIVO (a que forma o par estereo com o Kinect).
+# ATENCAO (medido em 23/09/2026): o indice do OpenCV NAO e' estavel -- ele e' a
+# POSICAO da camera na enumeracao do DirectShow, e essa posicao muda quando uma
+# camera entra/sai do USB. No MESMO dia, com as duas externas ligadas, o mapa era
+#   0 = externa (vista ampla) | 1 = webcam do LAPTOP | 2 = externa (bancada)
+# e, quando as externas cairam fora do USB, o 0 passou a ser a webcam do LAPTOP
+# (foi assim que "a camera auxiliar" virou o rosto de quem esta' no laptop).
+# Por isso o indice abaixo e' apenas o PONTO DE PARTIDA: quem manda e' o NOME.
+# `camera_names.py` diz qual camera esta' em cada indice (nome do Windows) e
+# `indices_auxiliares_automaticos()` monta a lista SEM a webcam do laptop.
+AUX_CAMERA_INDEX = 2
 # Cameras auxiliares usadas em conjunto com o Kinect (indices do OpenCV).
-# O padrao liga as DUAS webcams: 0 = webcam do laptop, 1 = webcam USB.
+# Valor MEDIDO com as duas externas ligadas (2 = bancada, 0 = ampla). O PRIMEIRO
+# da tupla e' a camera ativa quando ninguem passa `aux_indices` (ver
+# CameraAlignment/PositionFusion): por isso a 2 vem antes.
+# NUNCA incluir o indice da webcam do LAPTOP (1 no dia da medicao): ela fica no
+# lugar do Kinect, sem baseline para a triangulacao.
 # A calibracao por indice e armazenada em stereo_calibration_aux{idx}.npz /
 # hand_landmark_calibration_aux{idx}.npz (o nome legado = indice 0).
-AUX_CAMERA_INDICES = (0, 1)
-AUX_CAMERA_NAMES = {0: "laptop", 1: "usb", 2: "usb2"}
+AUX_CAMERA_INDICES = (2, 0)
+# Apelido por indice, usado SO' em mensagens curtas. E' um mapa ESTATICO e ja'
+# ficou desatualizado uma vez: para saber quem e' quem use camera_names.resumo().
+AUX_CAMERA_NAMES = {
+    0: "externa-ampla",
+    1: "laptop",
+    2: "externa-bancada",
+}
 # Keep the same physical pixel convention used by stereo_calibration.py.
 AUXILIARY_MIRROR_HORIZONTAL = True
 AUXILIARY_DISPLAY_MIRROR = False
@@ -77,18 +97,31 @@ NOMINAL_HAND_DEPTH_M = 1.0
 # vivem em `imu.py` (FONTE UNICA, item #9 da revisao -- antes havia uma copia
 # aqui e outra em camera_mpu_fusion.py). Reexportados para quem usa `gt.UP_AXIS`
 # e para as anotacoes abaixo.
+# Nome REAL de cada webcam (Windows/DirectShow). Modulo leve e OPCIONAL: sem
+# comtypes ele nao importa e tudo que depende de nome degrada para o apelido
+# estatico (`AUX_CAMERA_NAMES`). Ver `camera_names.py`.
+try:
+    import camera_names
+except ImportError:                   # pragma: no cover - sem comtypes
+    camera_names = None
+
 from imu import (  # noqa: E402
     IMU_ZERO_BIAS_EMA,
     IMU_ZERO_MAX_BIAS_G,
     IMU_ZERO_STD_M,
     IMU_ZERO_WINDOW,
+    PALM_ALIGNMENT_MAX_RESIDUAL_DEG,
+    PALM_ALIGNMENT_MIN_SAMPLES,
     POSITION_CAMERA_GAIN,
     UP_AXIS,
     VELOCITY_DAMPING,
     ImuReceiver,
     ImuSample,
     PositionFusion,
+    angle_between,
+    parse_portas_imu,
     rotation_matrix,
+    solve_palm_alignment,
 )
 CALIBRATION_SECONDS = 3.0
 PALM_VECTOR_LENGTH_M = 0.20
@@ -100,8 +133,16 @@ HAND_SIDE_CODE = {"": 0, "right": 1, "left": 2}
 #: do Kinect NAO e' espelhado -> o rotulo do Kinect precisa ser invertido.
 #: Sem isso, uma trial de mao ESQUERDA poderia triangular a mao DIREITA.
 MEDIAPIPE_KINECT_HANDEDNESS_FLIP = True
-CHECKERBOARD_SIZE = (8, 6)
-SQUARE_SIZE_M = 0.025
+# Precisa casar EXATAMENTE com stereo_calibration.py: o stereo salvo e' validado
+# contra estes dois valores (se mudarem, a calibracao antiga fica INVALIDA e o
+# arquivo tem de ser regerado com a placa nova; `CameraAlignment.stereo_status`
+# diz o MOTIVO da recusa -- tabuleiro/quadrado diferente x RMS alto).
+# PLACA ATUAL (impressa em 23/09/2026, medida com regua): 6 x 4 QUADRADOS de
+# 57 mm -> 5 x 3 CANTOS internos (o cv2 conta cantos internos = quadrados - 1).
+# A placa anterior era 5x3 @ 52 mm -- os npz gravados com ela (aux1/aux2, 52 mm)
+# sao RECUSADOS por aqui ate' serem refeitos com a placa nova.
+CHECKERBOARD_SIZE = (5, 3)
+SQUARE_SIZE_M = 0.057
 CALIBRATION_SAMPLES_REQUIRED = 15
 CALIBRATION_VERSION = 7
 MAX_STEREO_RMS_PX = 2.0
@@ -140,6 +181,76 @@ def aux_hand_file(aux_index):
     candidate = Path(__file__).with_name(
         f"hand_landmark_calibration_aux{aux_index}.npz")
     return candidate if candidate.exists() else None
+
+
+def aux_hand_output_file(aux_index):
+    """Arquivo ONDE SALVAR a calibracao de landmarks de uma camera auxiliar.
+
+    Espelha a regra do stereo (`output_file` em stereo_calibration.py): indice 0
+    usa o nome LEGADO (hand_landmark_calibration.npz) e os outros _aux{N}.npz.
+
+    Existe porque `solve_hand_landmark_calibration` salvava SEMPRE no nome legado:
+    com a camera ativa em qualquer indice != 0 a calibracao da mao era gravada no
+    arquivo ERRADO -- `aux_hand_file(2)` procura `_aux2.npz`, nao acha, e a
+    captura da tecla H se perdia (o sintoma seria "calibrei a mao e o programa
+    continua usando a homografia antiga").
+    """
+    if int(aux_index) == 0:
+        return HAND_CALIBRATION_FILE
+    return Path(__file__).with_name(
+        f"hand_landmark_calibration_aux{int(aux_index)}.npz")
+
+
+def indices_auxiliares_automaticos(recarregar=False):
+    """Indices das webcams auxiliares desta maquina, pelo NOME (sem chutar).
+
+    Motivo: o indice do OpenCV e' a POSICAO na enumeracao do DirectShow, entao
+    ele muda quando uma camera entra/sai do USB -- foi assim que "a webcam
+    auxiliar" virou a webcam do LAPTOP (ver AUX_CAMERA_INDEX). Aqui o filtro e'
+    por NOME: entram todas as cameras MENOS a webcam do laptop, que fica no lugar
+    do Kinect (sem baseline).
+
+    Ordem: primeiro as que TEM calibracao stereo (`stereo_calibration_aux{N}.npz`)
+    -- a primeira da lista e' a camera ATIVA (overlay/triangulacao), e usar a que
+    tem calibracao evita abrir o programa com a sobreposicao desligada.
+
+    Tupla vazia = nenhuma camera externa enumerada (ou comtypes/COM fora).
+    """
+    if camera_names is None:
+        return ()
+    externas = [indice for indice, nome in
+                camera_names.mapa_de_cameras(recarregar).items()
+                if not camera_names.e_do_laptop(nome)]
+    com_calibracao = [i for i in externas if aux_stereo_file(i) is not None]
+    sem_calibracao = [i for i in externas if i not in com_calibracao]
+    return tuple(com_calibracao + sem_calibracao)
+
+
+def nome_auxiliar(indice):
+    """Nome real (Windows) da camera do indice, ou o apelido estatico, ou '?'.
+
+    Fonte unica para mensagens: quem imprime "camera X (indice N)" usa isto, para
+    nunca mais anunciar 'usb'/'laptop' por um mapa estatico ja' errado.
+    """
+    real = None if camera_names is None else camera_names.nome_da_camera(indice)
+    return real or AUX_CAMERA_NAMES.get(int(indice), "?")
+
+
+def aviso_camera_do_laptop(indice, papel="webcam auxiliar"):
+    """Texto de aviso se o indice for a webcam do laptop (senao None).
+
+    A frase vive em `camera_names.AVISO_LAPTOP` (fonte unica).
+    """
+    if camera_names is None:
+        return None
+    return camera_names.aviso_laptop(indice, papel)
+
+
+def mapa_de_cameras_resumo():
+    """Linhas 'idx N: nome [<- webcam do LAPTOP]' para imprimir no inicio."""
+    if camera_names is None:
+        return ["(sem nomes de camera: comtypes/COM indisponivel)"]
+    return camera_names.resumo()
 HAND_CALIBRATION_VERSION = 2
 HAND_CALIBRATION_SAMPLES_REQUIRED = 18
 HAND_CALIBRATION_MIN_SPAN = 0.35  # varredura minima pedida na captura (norm)
@@ -150,9 +261,189 @@ HAND_CALIBRATION_MIN_DEPTH_SPAN_M = 0.40
 # para estimar profundidade aparente na camera auxiliar.
 HAND_SCALE_LANDMARK_A = 0   # punho (wrist)
 HAND_SCALE_LANDMARK_B = 9   # MCP do dedo medio (middle finger MCP)
-# Fator de redimensionamento das janelas de video (0.5 = metade do tamanho).
-# Para ver o terminal enquanto o programa roda, janelas menores ajudam.
-WINDOW_SCALE = 0.6
+# Fator de redimensionamento das JANELAS de video (0.5 = metade do tamanho).
+# 0.5 para as QUATRO janelas caberem: Kinect RGB (1920x1080) + Kinect depth +
+# cada webcam auxiliar -- no tamanho real elas tomam a tela inteira e o
+# experimentador nao consegue ver as duas auxiliares ao mesmo tempo.
+# E' reducao de EXIBICAO apenas: deteccao, profundidade e calibracao continuam
+# na resolucao cheia (a excecao e' o desenho do esqueleto, que sempre foi no
+# frame do Kinect e cai junto com ele). stereo_calibration.py tem a sua propria
+# DISPLAY_SCALE com o MESMO valor -- mantenha os dois iguais.
+WINDOW_SCALE = 0.5
+#: Numero MAXIMO de colunas da grade de janelas de video (ver `grade_de_janelas`).
+#: 3 colunas cobrem as 4-6 janelas do dia a dia (RGB e depth do Kinect + uma por
+#: webcam auxiliar) em 1080p, mas 1 ou 2 bastam como sao escolhidas pelo menor
+#: numero que couber.
+WINDOW_GRID_MAX_COLUMNS = 3
+#: Recuo (px) entre as janelas e a borda da tela na grade de janelas.
+WINDOW_GRID_MARGIN = 4
+#: Deslocamento (px) de cada janela na CASCATA (usada quando a grade nao cabe).
+#: Garante que nenhuma janela fique exatamente atras de outra: a barra de titulo
+#: de todas continua clicavel.
+WINDOW_CASCADE_STEP = 34
+#: Menor escala de exibicao aceita pelo ajuste automatico (ver
+#: `escala_para_grade`). Abaixo disso a mao no video fica pequena demais para
+#: conferir o overlay -- melhor avisar que use `--escala-janelas` ou arraste.
+WINDOW_SCALE_MIN = 0.3
+
+
+def tamanho_da_tela():
+    """(largura, altura) em pixels do monitor principal; (0, 0) se nao souber.
+
+    Existe para POSICIONAR as janelas de video: o Windows abre todas na mesma
+    posicao, empilhadas, e so' a ultima fica visivel -- foi o que fez "o video
+    de uma camera nao aparecer" na bancada de 25/09/2026 (ele existia, estava
+    coberto). Degrada em silencio (0, 0) fora do Windows.
+    """
+    if os.name != "nt":
+        return 0, 0
+    try:
+        import ctypes
+
+        user32 = ctypes.windll.user32
+        # SM_CXSCREEN/SM_CYSCREEN = resolucao do monitor principal.
+        return int(user32.GetSystemMetrics(0)), int(user32.GetSystemMetrics(1))
+    except Exception:                          # noqa: BLE001 - sem user32
+        return 0, 0
+
+
+def _grade_em_colunas(caixas, colunas, largura_tela, margem):
+    """(posicoes, altura_total) da grade de `colunas` colunas (greedy).
+
+    Cada janela entra na COLUNA MENOS CHEIA, na ordem recebida (a da esquerda em
+    caso de empate), empilhada abaixo do que ja' esta' naquela coluna. O x vem da
+    tela dividida em partes iguais e o y do quanto ja' foi usado na coluna.
+    """
+    alturas = [0] * colunas
+    posicoes = []
+    for _largura, altura in caixas:
+        coluna = alturas.index(min(alturas))
+        posicoes.append((coluna * largura_tela // colunas,
+                         margem + alturas[coluna]))
+        alturas[coluna] += int(altura) + margem
+    return posicoes, max(alturas) + margem
+
+
+def grade_de_janelas(caixas, largura_tela, altura_tela,
+                     colunas_max=WINDOW_GRID_MAX_COLUMNS,
+                     margem=WINDOW_GRID_MARGIN):
+    """Posicoes (x, y) das janelas de video, SEM uma tapar a outra.
+
+    Por que existe: com o Kinect e as DUAS webcams externas ligadas sao QUATRO
+    fluxos de video (RGB e depth do Kinect + uma janela por webcam); o Windows
+    abre todos na mesma posicao e o experimentador conclui que "o video da
+    terceira camera nao aparece" -- na verdade ele esta' atras das outras.
+
+    Heuristica (determinista): cada janela entra na COLUNA MENOS CHEIA, na ordem
+    recebida; o numero de colunas e' o MENOR entre 1 e `colunas_max` em que a
+    coluna mais alta caiba na tela. Devolve None quando nao ha' tela conhecida
+    (largura/altura 0) ou quando nem com `colunas_max` a grade cabe -- aí o
+    chamador deixa o Windows posicionar (melhor janela fora de lugar do que
+    janela escondida atras das outras).
+
+    Args:
+        caixas: [(largura, altura)] na ordem de criacao das janelas.
+        largura_tela, altura_tela: pixels da tela (0/0 = nao posicionar).
+        colunas_max: teto de colunas.
+        margem: recuo (px) na borda e entre janelas empilhadas.
+
+    Returns:
+        [(x, y)] na MESMA ordem de `caixas`, ou None.
+    """
+    if not caixas or largura_tela <= 0 or altura_tela <= 0:
+        return None
+    largura_janela = max(int(largura) for largura, _altura in caixas)
+    if largura_janela <= 0:
+        return None
+    limite = int(largura_tela // largura_janela)
+    if limite < 1:
+        return None
+    for colunas in range(1, max(1, min(int(colunas_max), limite)) + 1):
+        posicoes, altura_total = _grade_em_colunas(caixas, colunas,
+                                                   largura_tela, margem)
+        if altura_total <= altura_tela:
+            return posicoes
+    return None
+
+
+def escala_para_grade(caixas_base, largura_tela, altura_tela,
+                      escala_max=WINDOW_SCALE, escala_min=WINDOW_SCALE_MIN,
+                      passo=0.05):
+    """Maior escala de EXIBICAO (<= `escala_max`) em que TODAS as janelas cabem.
+
+    Motivo: o WINDOW_SCALE de 0.5 foi escolhido para as QUATRO janelas caberem,
+    mas em telas com DPI > 100% a area util que o Windows entrega e' menor
+    (medido nesta maquina: 1536x960 "virtuais" num monitor 1920x1080 a 125%) e a
+    grade nao cabe -- as janelas voltam a se sobrepor. Aqui a escala e' reduzida
+    (ate' `escala_min`) apenas o necessario para a grade de TODAS caber, em
+    passos de `passo`; assim as tres cameras + o depth ficam visiveis juntos sem
+    o usuario editar codigo.
+
+    Args:
+        caixas_base: [(largura, altura)] dos quadros em tamanho CHEIO (o
+            redimensionamento e' so' de exibicao).
+        largura_tela, altura_tela: pixels da tela (0/0 = sem tela conhecida).
+        escala_max/min: limites da escala procurada.
+        passo: granularidade da busca (0.05 = 5%).
+
+    Returns:
+        float -- `escala_max` se ja' cabe (ou se nao ha' tela conhecida),
+        `escala_min` se nem no minimo couber.
+    """
+    if not caixas_base or largura_tela <= 0 or altura_tela <= 0:
+        return float(escala_max)
+    valores = []
+    escala = float(escala_max)
+    while escala >= float(escala_min) - 1e-9:
+        valores.append(round(escala, 3))
+        escala -= float(passo)
+    for candidata in valores:
+        caixas = [(max(1, int(round(largura * candidata))),
+                   max(1, int(round(altura * candidata))))
+                  for largura, altura in caixas_base]
+        if grade_de_janelas(caixas, largura_tela, altura_tela) is not None:
+            return candidata
+    return float(escala_min)
+
+
+def posicoes_das_janelas(caixas, largura_tela, altura_tela,
+                         colunas_max=WINDOW_GRID_MAX_COLUMNS,
+                         margem=WINDOW_GRID_MARGIN,
+                         passo_cascata=WINDOW_CASCADE_STEP):
+    """Posicoes das janelas + COMO elas foram posicionadas.
+
+    Devolve `(posicoes, modo)`, com `modo` em:
+      * "grade"     -- `grade_de_janelas` coube: janelas lado a lado, sem
+                       sobreposicao (o caso bom);
+      * "cascata"   -- nao coube: cada janela deslocada em degrau
+                       (`passo_cascata`), para NENHUMA ficar exatamente atras de
+                       outra (a barra de titulo de todas continua clicavel);
+      * "sem-tela"  -- tela desconhecida: `posicoes` e' None e quem chamou deixa
+                       o Windows posicionar.
+
+    O `modo` existe para o chamador poder AVISAR o usuario uma unica vez (ex.:
+    "a grade nao coube em 1536x960: arraste as janelas ou use 0.4 de escala").
+    """
+    if not caixas:
+        return None, "sem-tela"
+    if largura_tela <= 0 or altura_tela <= 0:
+        return None, "sem-tela"
+    posicoes = grade_de_janelas(caixas, largura_tela, altura_tela, colunas_max,
+                                margem)
+    if posicoes is not None:
+        return posicoes, "grade"
+    # Cascata: degrau COMPRIMIDO para caber na tela mesmo quando as janelas sao
+    # maiores que ela (o caso do DPI alto). O passo nunca fica abaixo de 1 px e
+    # o total e' < largura/altura da tela, entao TODAS as posicoes sao distintas
+    # -- nenhuma janela fica exatamente atras de outra e a barra de titulo de
+    # cada uma continua alcancavel para arrastar.
+    total = max(1, len(caixas))
+    passo_x = max(1, min(int(passo_cascata),
+                         (int(largura_tela) - 1) // total))
+    passo_y = max(1, min(int(passo_cascata),
+                         (int(altura_tela) - 1) // total))
+    return [(indice * passo_x, indice * passo_y)
+            for indice in range(len(caixas))], "cascata"
 POSE_MODEL_PATH = Path(__file__).with_name("hand_landmarker.task")
 POSE_MODEL_URL = "https://storage.googleapis.com/mediapipe-models/hand_landmarker/hand_landmarker/float16/1/hand_landmarker.task"
 CSV_PATH = Path(__file__).with_name("kinect_imu_groundtruth.csv")
@@ -315,6 +606,337 @@ def ensure_hand_model() -> Path:
         urllib.request.urlretrieve(POSE_MODEL_URL, POSE_MODEL_PATH)
     return POSE_MODEL_PATH
 
+@dataclass(frozen=True)
+class AuxCameraView:
+    """Calibracao de UMA webcam auxiliar, pronta para usar SEM trocar a ativa.
+
+    Motivo (bancada de 23/09/2026): com DUAS auxiliares (uma de cada lado, ~45
+    graus do Kinect) o overlay tem de projetar as DUAS no MESMO frame do Kinect.
+    Os campos vivos do `CameraAlignment` (auxiliary_matrix, stereo_rotation, ...)
+    descrevem UMA camera so': chamar `set_active_aux` dentro do desenho seria
+    estado global mudando no meio do frame (e a camera ativa deixaria de ser a
+    que o protocolo escolheu). A vista e' IMUTAVEL e autocontida: quem desenha
+    passa a vista, nao o alignment.
+
+    Convencao (a mesma da calibracao salva): X_aux = R X_kin + T, com X em metros
+    no referencial de CAMERA do Kinect (Z para frente, X para a direita).
+    """
+
+    index: int
+    kinect_matrix: Optional[np.ndarray] = None
+    kinect_dist: Optional[np.ndarray] = None
+    matrix: Optional[np.ndarray] = None
+    dist: Optional[np.ndarray] = None
+    rotation: Optional[np.ndarray] = None
+    translation: Optional[np.ndarray] = None
+    rms: Optional[float] = None
+    stereo_usable: bool = False
+    runtime_matrix: Optional[np.ndarray] = None
+    runtime_size: Optional[tuple] = None
+    calibrated_size: Optional[tuple] = None
+
+    @property
+    def usable(self):
+        """True quando da' para projetar/triangular com esta camera."""
+        return bool(
+            self.stereo_usable
+            and self.matrix is not None and self.dist is not None
+            and self.rotation is not None and self.translation is not None
+            and self.kinect_matrix is not None and self.kinect_dist is not None
+        )
+
+    @property
+    def size(self):
+        """(w, h) do frame em uso agora (runtime) ou o da calibracao."""
+        return self.runtime_size or self.calibrated_size
+
+    @property
+    def effective_matrix(self):
+        """Matriz intrinseca na resolucao em uso (a calibrada ou a escalada)."""
+        return (self.runtime_matrix if self.runtime_matrix is not None
+                else self.matrix)
+
+    def pixels(self, landmarks):
+        """(N,2) px DESTA camera a partir de landmarks normalizados do MediaPipe."""
+        width, height = self.size or (0, 0)
+        return np.array([(lm.x * width, lm.y * height) for lm in landmarks],
+                        np.float64)
+
+    def to_kinect_stereo(self, points, kinect_depth_m):
+        """Projeta pixels da auxiliar no RGB do Kinect com profundidade dada.
+
+        Mesma matematica de `CameraAlignment.auxiliary_to_kinect_stereo` (que
+        agora delega para aqui). Devolve (N,2) px do Kinect, ou None quando a
+        camera nao tem stereo usavel (o chamador decide o fallback 2D).
+        """
+        if not self.usable:
+            return None
+        matrix = self.effective_matrix
+        auxiliary_points = np.asarray(points, dtype=np.float32).reshape(-1, 1, 2)
+        normalized = cv2.undistortPoints(
+            auxiliary_points, matrix, self.dist
+        ).reshape(-1, 2)
+        depths = np.asarray(kinect_depth_m, dtype=np.float32).reshape(-1)
+        if len(depths) == 1:
+            depths = np.full(len(normalized), depths[0], dtype=np.float32)
+        if len(depths) != len(normalized):
+            return None
+        valid_depths = depths[np.isfinite(depths) & (depths > 0)]
+        if valid_depths.size == 0:
+            return None
+        depths = np.where(
+            np.isfinite(depths) & (depths > 0),
+            depths,
+            np.median(valid_depths),
+        )
+        # Profundidades invalidas (NaN, 0, fora do sensor) viram a mediana das
+        # validas; o clip fisico (0.4-3.0 m) evita valores absurdos. NAO ha'
+        # suavizacao por indice de landmark: os indices 0..20 do MediaPipe nao
+        # sao espacialmente contiguos e isso destruiria os offsets 3D aprendidos.
+        depths = np.clip(np.asarray(depths, np.float64), 0.4, 4.0)
+        original = np.asarray(kinect_depth_m, dtype=np.float32).reshape(-1)
+        original_finite = np.isfinite(original) & (original > 0)
+        if original_finite.sum() < 0.5 * original.size:
+            depths = np.full(original.size, float(np.median(depths)),
+                             dtype=np.float64)
+        kinect_3d = []
+        rotation_inverse = np.asarray(self.rotation, np.float64).T
+        translation = np.asarray(self.translation, np.float64).reshape(3)
+        offset = -rotation_inverse @ translation
+        for ray_xy, target_z in zip(normalized, depths):
+            ray = np.array([ray_xy[0], ray_xy[1], 1.0])
+            direction = rotation_inverse @ ray
+            denominator = direction[2]
+            if target_z <= 0 or abs(denominator) < 1e-6:
+                kinect_3d.append([np.nan, np.nan, np.nan])
+                continue
+            scale = (target_z - offset[2]) / denominator
+            kinect_3d.append(rotation_inverse @ (scale * ray - translation))
+        kinect_3d = np.asarray(kinect_3d, dtype=np.float64)
+        projected, _ = cv2.projectPoints(
+            kinect_3d.reshape(-1, 1, 3),
+            np.zeros(3),
+            np.zeros(3),
+            np.asarray(self.kinect_matrix, np.float64),
+            np.asarray(self.kinect_dist, np.float64),
+        )
+        return projected.reshape(-1, 2)
+
+
+    def triangulate_with_kinect(self, aux_pixels, kinect_pixels):
+        """Triangula nos 3D (m, frame do Kinect) a partir das DUAS vistas.
+
+        Mesma matematica de `CameraAlignment.triangulate_hand_points` (que agora
+        delega para aqui): camera 1 = Kinect na origem (P1 = [I|0]), camera 2 =
+        esta auxiliar (P2 = [R|T], com X_aux = R X_kin + T). Correspondencia
+        trivial pelo indice do no do MediaPipe.
+
+        Devolve (points_3d (N,3), reproj_px (N,)) ou (None, None).
+        """
+        if not self.usable:
+            return None, None
+        aux_px = np.asarray(aux_pixels, np.float64).reshape(-1, 1, 2)
+        kin_px = np.asarray(kinect_pixels, np.float64).reshape(-1, 1, 2)
+        if aux_px.shape[0] == 0 or aux_px.shape[0] != kin_px.shape[0]:
+            return None, None
+        rays_kin = cv2.undistortPoints(
+            kin_px, np.asarray(self.kinect_matrix, np.float64),
+            np.asarray(self.kinect_dist, np.float64),
+        ).reshape(-1, 2)
+        rays_aux = cv2.undistortPoints(
+            aux_px, np.asarray(self.effective_matrix, np.float64),
+            np.asarray(self.dist, np.float64),
+        ).reshape(-1, 2)
+        if not (np.isfinite(rays_kin).all() and np.isfinite(rays_aux).all()):
+            return None, None
+        R = np.asarray(self.rotation, np.float64).reshape(3, 3)
+        T = np.asarray(self.translation, np.float64).reshape(3, 1)
+        P1 = np.hstack([np.eye(3), np.zeros((3, 1))])
+        P2 = np.hstack([R, T])
+        points3d, plausible = _triangulate_rays(P1, P2, rays_kin, rays_aux)
+        if points3d is None:
+            return None, None
+        # Erro de reprojecao por no em px do KINECT (mesma metrica do codigo
+        # original: a qualidade da triangulacao e' lida em pixels).
+        projected, _ = cv2.projectPoints(
+            np.nan_to_num(points3d).reshape(-1, 1, 3),
+            np.zeros(3),
+            np.zeros(3),
+            np.asarray(self.kinect_matrix, np.float64),
+            np.asarray(self.kinect_dist, np.float64),
+        )
+        reproj = np.linalg.norm(
+            projected.reshape(-1, 2) - kin_px.reshape(-1, 2), axis=1
+        )
+        points3d[~plausible] = np.nan
+        return points3d, reproj
+
+
+def _triangulate_rays(P1, P2, rays_1, rays_2):
+    """Triangula raios normalizados (DLT) e valida a plausibilidade fisica.
+
+    Devolve (points_3d (N,3) no referencial da camera 1, mascara_de_plausiveis)
+    ou (None, None). Nos improvaveis (oclusao, deteccao trocada entre as maos)
+    viram NaN -- e a mao toda e' recusada quando menos da METADE dos nos e'
+    plausivel (mesma regra do `triangulate_hand_points` original). O erro de
+    reprojecao NAO e' calculado aqui: cada chamador o mede em px, com as
+    intrinsecas da camera cujo pixel ele tem.
+    """
+    rays_1 = np.asarray(rays_1, np.float64).reshape(-1, 2)
+    rays_2 = np.asarray(rays_2, np.float64).reshape(-1, 2)
+    points4 = cv2.triangulatePoints(
+        np.asarray(P1, np.float64), np.asarray(P2, np.float64),
+        rays_1.reshape(-1, 1, 2).astype(np.float64),
+        rays_2.reshape(-1, 1, 2).astype(np.float64),
+    )
+    w = points4[3]
+    if not np.isfinite(w).all() or (np.abs(w) < 1e-9).any():
+        return None, None
+    points3d = (points4[:3] / w).T
+    z = points3d[:, 2]
+    plausible = np.isfinite(points3d).all(axis=1) & (z > 0.3) & (z < 4.0)
+    if plausible.sum() < max(5, int(0.5 * len(points3d))):
+        return None, None
+    return points3d, plausible
+
+
+def erro_reprojecao_px(points_3d, pixels, matrix, dist):
+    """Reprojecao mediana (px) de pontos 3D numa camera (metric de qualidade).
+
+    CONVENCAO: `points_3d` vem no referencial DA PROPRIA CAMERA (o mesmo que a
+    triangulacao devolve para a camera 1 de um par). Para medir num referencial
+    do Kinect, converta antes:  X_cam = R X_kin + T.
+    """
+    points_3d = np.asarray(points_3d, np.float64).reshape(-1, 3)
+    pixels = np.asarray(pixels, np.float64).reshape(-1, 2)
+    validos = np.isfinite(points_3d).all(axis=1)
+    if not validos.any():
+        return float("nan")
+    projected, _ = cv2.projectPoints(
+        points_3d[validos].reshape(-1, 1, 3), np.zeros(3), np.zeros(3),
+        np.asarray(matrix, np.float64), np.asarray(dist, np.float64),
+    )
+    erros = np.linalg.norm(projected.reshape(-1, 2) - pixels[validos], axis=1)
+    if erros.size == 0 or not np.isfinite(erros).any():
+        return float("nan")
+    return float(np.nanmedian(erros))
+
+def relative_transform(view_a, view_b):
+    """(R_ab, T_ab) entre duas auxiliares: X_b = R_ab X_a + T_ab.
+
+    As duas vistas estao calibradas contra o MESMO Kinect (X_i = R_i X_kin +
+    T_i), entao a relacao entre elas sai por composicao:
+
+        X_kin = R_a^T (X_a - T_a)
+        X_b   = R_b R_a^T X_a + (T_b - R_b R_a^T T_a)
+
+    Isso dispensa calibrar o par aux-aux separadamente: as duas calibracoes com o
+    Kinect ja' definem a geometria entre elas.
+    """
+    R_a = np.asarray(view_a.rotation, np.float64).reshape(3, 3)
+    T_a = np.asarray(view_a.translation, np.float64).reshape(3)
+    R_b = np.asarray(view_b.rotation, np.float64).reshape(3, 3)
+    T_b = np.asarray(view_b.translation, np.float64).reshape(3)
+    R_ab = R_b @ R_a.T
+    T_ab = T_b - R_ab @ T_a
+    return R_ab, T_ab
+
+
+def triangulate_pair_points(view_a, view_b, pixels_a, pixels_b):
+    """Triangula a mao usando SO' AS DUAS auxiliares (sem o Kinect).
+
+    E' o caminho que responde ao objetivo do projeto: quando o Kinect perde o
+    video e a projecao do esqueleto, as duas auxiliares (nos dois lados, ~45
+    graus) ainda dizem, por elas mesmas, ONDE a mao esta nos 3 eixos do espaco.
+
+    `pixels_a`/`pixels_b`: (N,2) em pixels de cada camera (`view.pixels`).
+    Devolve (points_3d (N,3) NO REFERENCIAL DO KINECT, erro_mediano_px) ou
+    (None, None). O erro e' a media das reprojecoes medianas das duas vistas.
+    """
+    if not (view_a.usable and view_b.usable):
+        return None, None
+    if int(view_a.index) == int(view_b.index):
+        return None, None
+    px_a = np.asarray(pixels_a, np.float64).reshape(-1, 1, 2)
+    px_b = np.asarray(pixels_b, np.float64).reshape(-1, 1, 2)
+    if px_a.shape[0] == 0 or px_a.shape[0] != px_b.shape[0]:
+        return None, None
+    rays_a = cv2.undistortPoints(
+        px_a, np.asarray(view_a.effective_matrix, np.float64),
+        np.asarray(view_a.dist, np.float64),
+    ).reshape(-1, 2)
+    rays_b = cv2.undistortPoints(
+        px_b, np.asarray(view_b.effective_matrix, np.float64),
+        np.asarray(view_b.dist, np.float64),
+    ).reshape(-1, 2)
+    if not (np.isfinite(rays_a).all() and np.isfinite(rays_b).all()):
+        return None, None
+    R_ab, T_ab = relative_transform(view_a, view_b)
+    P1 = np.hstack([np.eye(3), np.zeros((3, 1))])
+    P2 = np.hstack([R_ab, T_ab.reshape(3, 1)])
+    points_a, plausible = _triangulate_rays(P1, P2, rays_a, rays_b)
+    if points_a is None:
+        return None, None
+    points_a = points_a.copy()
+    points_a[~plausible] = np.nan
+    # Volta para o referencial do KINECT (o MESMO que a triangulacao com o
+    # Kinect devolve): X_kin = R_a^T (X_a - T_a).
+    R_a = np.asarray(view_a.rotation, np.float64).reshape(3, 3)
+    T_a = np.asarray(view_a.translation, np.float64).reshape(3)
+    points_kin = (R_a.T @ (points_a - T_a.reshape(1, 3)).T).T
+    points_b = (R_ab @ points_a.T).T + T_ab.reshape(1, 3)
+    erro_a = erro_reprojecao_px(points_a, px_a.reshape(-1, 2),
+                                view_a.effective_matrix, view_a.dist)
+    erro_b = erro_reprojecao_px(points_b, px_b.reshape(-1, 2),
+                                view_b.effective_matrix, view_b.dist)
+    erros = [e for e in (erro_a, erro_b) if np.isfinite(e)]
+    if not erros or not np.isfinite(points_kin).any():
+        return None, None
+    return points_kin, float(np.mean(erros))
+
+
+def triangulate_aux_pairs(alignment, deteccoes):
+    """Melhor triangulacao usando APENAS pares de webcams auxiliares.
+
+    `deteccoes` = {indice: landmarks do MediaPipe (21) ou None}; a mao JA' vem
+    escolhida pelo lado da trial (o casamento por lado e' do chamador). Todas as
+    combinacoes de pares com deteccao E calibracao utilizavel sao trianguladas;
+    vence o MENOR erro mediano de reprojecao (px).
+
+    Devolve (points_3d (N,3) no frame do Kinect, info) com
+    info = {"indices": (a, b), "erro_mediano_px": float} ou (None, None).
+    """
+    indices = sorted(int(i) for i, maos in (deteccoes or {}).items() if maos)
+    if len(indices) < 2:
+        return None, None
+    melhor = None
+    melhor_erro = float("inf")
+    melhor_indices = None
+    for posicao, index_a in enumerate(indices):
+        view_a = alignment.aux_view(index_a)
+        if view_a is None or not view_a.usable:
+            continue
+        for index_b in indices[posicao + 1:]:
+            view_b = alignment.aux_view(index_b)
+            if view_b is None or not view_b.usable:
+                continue
+            points, erro = triangulate_pair_points(
+                view_a, view_b,
+                view_a.pixels(deteccoes[index_a]),
+                view_b.pixels(deteccoes[index_b]),
+            )
+            if points is None or not np.isfinite(erro):
+                continue
+            if erro < melhor_erro:
+                melhor, melhor_erro = points, erro
+                melhor_indices = (index_a, index_b)
+    if melhor is None:
+        return None, None
+    return melhor, {"indices": melhor_indices, "erro_mediano_px": melhor_erro}
+
+
+
+
 
 class CameraAlignment:
     def __init__(self, aux_indices=None):
@@ -398,11 +1020,17 @@ class CameraAlignment:
             "kinect_matrix": None, "kinect_dist": None,
             "matrix": None, "dist": None,
             "rotation": None, "translation": None, "rms": None,
+            # O que o npz DIZ que foi calibrado (placa e quadrado): guardado
+            # para `stereo_status` poder explicar a recusa por extenso.
+            "board_size": None, "square_size_m": None,
             "stereo_ready": False, "stereo_usable": False,
             "auxiliary_size": None, "kinect_size": None,
             "hand_homography": None, "hand_residuals": None, "hand_rms": None,
             "scale_depth_params": None, "reference_scale": None,
             "node_z_offset": None, "hand_ready": False, "runtime_matrix": None,
+            # Tamanho/aviso de escala ficam POR CAMERA (multicamera): o runtime
+            # de uma auxiliar nunca pode contaminar a outra.
+            "runtime_size": None, "scale_warned": False,
         }
         stereo_path = aux_stereo_file(aux_index)
         if stereo_path is not None:
@@ -422,6 +1050,8 @@ class CameraAlignment:
                                if "checkerboard_size" in stereo_data.files else None)
                 saved_square = (float(stereo_data["square_size_m"])
                                 if "square_size_m" in stereo_data.files else None)
+                model["board_size"] = saved_board
+                model["square_size_m"] = saved_square
                 model["rms"] = (float(stereo_data["rms"])
                                 if "rms" in stereo_data.files else None)
                 model["stereo_ready"] = (
@@ -521,6 +1151,47 @@ class CameraAlignment:
             and self.stereo_rms is not None
             and self.stereo_rms <= STEREO_OVERLAY_MAX_RMS_PX
         )
+
+    def stereo_status(self, aux_index=None):
+        """(estado, motivo) do stereo de uma auxiliar -- com o motivo POR EXTENSO.
+
+        Motivo de existir: a mensagem antiga so' dizia "RMS alto", e desde a
+        troca do tabuleiro (placa nova = 6x4 quadrados de 57 mm; os npz de
+        aux1/aux2 foram gravados com a placa de 52 mm) a recusa NAO e' de
+        qualidade -- e' de COMPATIBILIDADE com a placa. Sem separar as duas
+        causas, o dia da recalibracao comeca com um diagnostico enganoso.
+        `aux_index` None consulta a camera ATIVA.
+        """
+        index = self.active_aux if aux_index is None else int(aux_index)
+        model = None if index is None else self.aux_models.get(int(index))
+        if model is None or model.get("matrix") is None:
+            return "sem calibracao", "arquivo stereo ausente ou sem intrinsecas"
+        board = model.get("board_size")
+        square = model.get("square_size_m")
+        rms = model.get("rms")
+        if board is not None and tuple(board) != tuple(CHECKERBOARD_SIZE):
+            return ("rejeitada",
+                    "tabuleiro gravado %dx%d != %dx%d cantos da placa atual "
+                    "-> RECALIBRE" % (board[0], board[1], CHECKERBOARD_SIZE[0],
+                                      CHECKERBOARD_SIZE[1]))
+        if square is not None and abs(float(square) - SQUARE_SIZE_M) > 1e-6:
+            erro = abs(float(square) - SQUARE_SIZE_M) / SQUARE_SIZE_M * 100.0
+            return ("rejeitada",
+                    "quadrado gravado %g mm != %g mm (escala ~%.0f%% errada) "
+                    "-> RECALIBRE" % (float(square) * 1000.0,
+                                      SQUARE_SIZE_M * 1000.0, erro))
+        if rms is None:
+            return "rejeitada", "npz sem RMS -> RECALIBRE"
+        if model.get("stereo_ready"):
+            return "aceita", "RMS %.2f px <= %g px" % (rms, MAX_STEREO_RMS_PX)
+        if model.get("stereo_usable"):
+            return ("aproximada",
+                    "RMS %.2f px entre %g e %g px (recalibre para < %g px)"
+                    % (rms, MAX_STEREO_RMS_PX, STEREO_OVERLAY_MAX_RMS_PX,
+                       MAX_STEREO_RMS_PX))
+        return ("rejeitada",
+                "RMS %.2f px > %g px -> RECALIBRE"
+                % (rms, STEREO_OVERLAY_MAX_RMS_PX))
 
     @property
     def hand_landmark_ready(self):
@@ -739,7 +1410,13 @@ class CameraAlignment:
         if scale_depth_params is not None:
             save_dict["scale_depth_params"] = scale_depth_params
             save_dict["node_z_offset"] = node_z_offset
-        np.savez(HAND_CALIBRATION_FILE, **save_dict)
+        # DESTINO por camera (ver aux_hand_output_file): gravar sempre no nome
+        # legado fazia a calibracao de uma auxiliar != 0 nunca ser carregada.
+        destino = aux_hand_output_file(
+            self.active_aux if self.active_aux is not None else 0)
+        np.savez(destino, **save_dict)
+        if verbose:
+            print(f"  calibracao da mao salva em {destino}")
         self.hand_landmark_homography = homography
         self.hand_landmark_residuals = residuals
         self.hand_landmark_rms = rms
@@ -834,137 +1511,95 @@ class CameraAlignment:
         )
         return affine_transformed.reshape(-1, 2)
 
+    def aux_view(self, aux_index):
+        """Vista IMUTAVEL de UMA camera auxiliar (usar VARIAS no mesmo frame).
+
+        Ver `AuxCameraView`: com duas auxiliares (uma de cada lado) o overlay
+        precisa das DUAS calibracoes ao mesmo tempo, sem mexer na camera ativa.
+        Devolve None se o indice nao estiver registrado.
+        """
+        model = self.aux_models.get(int(aux_index))
+        if model is None:
+            return None
+        return AuxCameraView(
+            index=int(aux_index),
+            kinect_matrix=model["kinect_matrix"],
+            kinect_dist=model["kinect_dist"],
+            matrix=model["matrix"],
+            dist=model["dist"],
+            rotation=model["rotation"],
+            translation=model["translation"],
+            rms=model["rms"],
+            stereo_usable=bool(model["stereo_usable"]),
+            runtime_matrix=model.get("runtime_matrix"),
+            runtime_size=model.get("runtime_size"),
+            calibrated_size=model["auxiliary_size"],
+        )
+
+    def active_view(self):
+        """Vista da camera ATIVA, montada a partir dos CAMPOS VIVOS.
+
+        Diferenca que importa: `aux_view(indice)` devolve a calibracao GRAVADA
+        daquela camera (o que o multicamera precisa para as duas auxiliares ao
+        mesmo tempo), enquanto esta vista usa os campos vivos do alignment
+        (`auxiliary_matrix`, `stereo_rotation`, ...). Isso preserva o contrato
+        historico de mano unica: quem sobrescreve os campos vivos (os testes
+        sinteticos fazem isso) continua mandando no overlay da camera ativa.
+        """
+        if self.active_aux is None:
+            return None
+        model = self.aux_models.get(self.active_aux) or {}
+        return AuxCameraView(
+            index=int(self.active_aux),
+            kinect_matrix=self.kinect_matrix,
+            kinect_dist=self.kinect_dist,
+            matrix=self.auxiliary_matrix,
+            dist=self.auxiliary_dist,
+            rotation=self.stereo_rotation,
+            translation=self.stereo_translation,
+            rms=self.stereo_rms,
+            stereo_usable=bool(self.stereo_usable),
+            runtime_matrix=self.auxiliary_matrix_runtime,
+            runtime_size=model.get("runtime_size"),
+            calibrated_size=(self.calibrated_auxiliary_size
+                             or (self.auxiliary_width, self.auxiliary_height)),
+        )
+
     def auxiliary_to_kinect_stereo(self, points, kinect_depth_m):
-        if not self.stereo_usable:
+        """Projeta pixels da AUXILIAR ATIVA no RGB do Kinect (stereo 3D).
+
+        Delega para `AuxCameraView.to_kinect_stereo` (a matematica vive la', para
+        poder ser usada com qualquer camera, ativa ou nao). Sem stereo usavel cai
+        na homografia 2D do tabuleiro -- comportamento historico preservado.
+        """
+        view = self.active_view()
+        projected = None
+        if view is not None and view.usable:
+            projected = view.to_kinect_stereo(points, kinect_depth_m)
+        if projected is None:
             return self.auxiliary_to_kinect(points)
-        auxiliary_points = np.asarray(points, dtype=np.float32).reshape(-1, 1, 2)
-        matrix = (
-            self.auxiliary_matrix_runtime
-            if self.auxiliary_matrix_runtime is not None
-            else self.auxiliary_matrix
-        )
-        normalized = cv2.undistortPoints(
-            auxiliary_points, matrix, self.auxiliary_dist
-        ).reshape(-1, 2)
-        depths = np.asarray(kinect_depth_m, dtype=np.float32).reshape(-1)
-        if len(depths) == 1:
-            depths = np.full(len(normalized), depths[0], dtype=np.float32)
-        if len(depths) != len(normalized):
-            return self.auxiliary_to_kinect(points)
-        valid_depths = depths[np.isfinite(depths) & (depths > 0)]
-        if valid_depths.size == 0:
-            return self.auxiliary_to_kinect(points)
-        depths = np.where(
-            np.isfinite(depths) & (depths > 0),
-            depths,
-            np.median(valid_depths),
-        )
-        # Profundidades inválidas (NaN, 0, fora do sensor) são substituídas
-        # pela mediana das válidas. Depois, um clip físico (0.4–4.0 m) evita
-        # valores absurdos. NÃO fazemos suavização por índice de landmark aqui:
-        # os índices 0..20 do MediaPipe não são espacialmente contíguos
-        # (0=punho, 8=ponta do indicador, 12=ponta do medio), e a suavização
-        # por vizinhança de índice destruiria os offsets 3D aprendidos pelo
-        # modelo hand_3d (dedos ficariam sempre no mesmo Z da palma).
-        depths = np.clip(np.asarray(depths, np.float64), 0.4, 4.0)
-        # Se metade ou mais das profundidades originais não são válidas,
-        # usa a mediana única para toda a mão (fallback rígido).
-        original = np.asarray(kinect_depth_m, dtype=np.float32).reshape(-1)
-        original_finite = np.isfinite(original) & (original > 0)
-        if original_finite.sum() < 0.5 * original.size:
-            depths = np.full(original.size, float(np.median(depths)), dtype=np.float64)
-        kinect_3d = []
-        rotation_inverse = np.asarray(self.stereo_rotation, np.float64).T
-        translation = np.asarray(self.stereo_translation, np.float64).reshape(3)
-        offset = -rotation_inverse @ translation
-        for ray_xy, target_z in zip(normalized, depths):
-            ray = np.array([ray_xy[0], ray_xy[1], 1.0])
-            direction = rotation_inverse @ ray
-            denominator = direction[2]
-            if target_z <= 0 or abs(denominator) < 1e-6:
-                kinect_3d.append([np.nan, np.nan, np.nan])
-                continue
-            scale = (target_z - offset[2]) / denominator
-            kinect_3d.append(rotation_inverse @ (scale * ray - translation))
-        kinect_3d = np.asarray(kinect_3d, dtype=np.float32)
-        projected, _ = cv2.projectPoints(
-            kinect_3d,
-            np.zeros(3),
-            np.zeros(3),
-            self.kinect_matrix,
-            self.kinect_dist,
-        )
-        return projected.reshape(-1, 2)
+        return projected
 
     def triangulate_hand_points(self, aux_pixels, kinect_pixels):
-        """Triangula nos 3D (m, frame do Kinect) a partir das deteccoes 2D
-        SIMULTANEAS das duas cameras (MediaPipe em cada uma; correspondencia
-        trivial pelo indice do no MediaPipe). Usa a calibracao stereo
-        (R, T, K, dist) ja carregada.
+        """Triangula nos 3D (m, frame do Kinect) a partir das duas vistas.
 
-        Este e o caminho do 'espaco vetorial 3D': a profundidade deixa de ser
-        ESTIMADA (modelo de escala aparente / EMA) e passa a ser MEDIDA pela
-        interseccao dos raios das duas vistas. Imune a inclinacao da mao.
+        Delega para `AuxCameraView.triangulate_with_kinect` da camera ATIVA.
+        Convencao: X_aux = R X_kin + T; camera 1 = Kinect (na origem,
+        P1=[I|0]); camera 2 = auxiliar (P2=[R|T]). Correspondencia trivial pelo
+        indice do no MediaPipe.
 
-        Convencao (identica a auxiliary_to_kinect_stereo): X_aux = R X_kin + T.
-        Camera 1 = Kinect (na origem, P1=[I|0]); camera 2 = auxiliar (P2=[R|T]).
-        Com coordenadas normalizadas e T em metros, a saida vem em metros.
-
-        Retorna (points_3d (N,3) no frame do Kinect, reproj_err_px (N,)) ou
-        (None, None) se a triangulacao nao for possivel/confiavel.
+        Retorna (points_3d (N,3), reproj_px (N,)) ou (None, None) se a
+        triangulacao nao for possivel/confiavel.
         """
-        if not (self.stereo_usable and self.kinect_matrix is not None):
+        view = self.active_view()
+        if view is None:
             return None, None
-        aux_px = np.asarray(aux_pixels, np.float64).reshape(-1, 1, 2)
-        kin_px = np.asarray(kinect_pixels, np.float64).reshape(-1, 1, 2)
-        if aux_px.shape[0] == 0 or aux_px.shape[0] != kin_px.shape[0]:
-            return None, None
-        aux_matrix = (
-            self.auxiliary_matrix_runtime
-            if self.auxiliary_matrix_runtime is not None
-            else self.auxiliary_matrix
-        )
-        rays_kin = cv2.undistortPoints(
-            kin_px, self.kinect_matrix, self.kinect_dist
-        ).reshape(-1, 2)
-        rays_aux = cv2.undistortPoints(
-            aux_px, aux_matrix, self.auxiliary_dist
-        ).reshape(-1, 2)
-        if not (np.isfinite(rays_kin).all() and np.isfinite(rays_aux).all()):
-            return None, None
-        R = np.asarray(self.stereo_rotation, np.float64).reshape(3, 3)
-        T = np.asarray(self.stereo_translation, np.float64).reshape(3, 1)
-        P1 = np.hstack([np.eye(3), np.zeros((3, 1))])
-        P2 = np.hstack([R, T])
-        points4 = cv2.triangulatePoints(
-            P1,
-            P2,
-            rays_kin.reshape(-1, 1, 2).astype(np.float64),
-            rays_aux.reshape(-1, 1, 2).astype(np.float64),
-        )
-        w = points4[3]
-        if not np.isfinite(w).all() or (np.abs(w) < 1e-9).any():
-            return None, None
-        points3d = (points4[:3] / w).T  # (N,3) em metros, frame do Kinect
-        z = points3d[:, 2]
-        # Plausibilidade fisica (volume de trabalho da mao). Nos improvaveis
-        # (oclusao, deteccao trocada entre maos) viram NaN e nao sao desenhados.
-        plausible = np.isfinite(points3d).all(axis=1) & (z > 0.3) & (z < 4.0)
-        if plausible.sum() < max(5, int(0.5 * len(points3d))):
-            return None, None
-        # Erro de reprojecao por no (px Kinect) = qualidade da triangulacao
-        projected, _ = cv2.projectPoints(
-            points3d.reshape(-1, 1, 3),
-            np.zeros(3),
-            np.zeros(3),
-            self.kinect_matrix,
-            self.kinect_dist,
-        )
-        reproj = np.linalg.norm(
-            projected.reshape(-1, 2) - kin_px.reshape(-1, 2), axis=1
-        )
-        points3d[~plausible] = np.nan
-        return points3d, reproj
+        return view.triangulate_with_kinect(aux_pixels, kinect_pixels)
+
+
+    # (A triangulacao vive em AuxCameraView.triangulate_with_kinect; o metodo
+    # equivalente de CameraAlignment esta' ACIMA e delega para la' -- este bloco
+    # duplicado foi removido para nao voltar a divergir.)
 
     def project_camera_points(self, points_camera, size=None):
         """Projeta pontos 3D (m, camera space) em pixels do RGB do Kinect.
@@ -994,7 +1629,15 @@ class CameraAlignment:
 
     def set_auxiliary_size(self, frame):
         height, width = frame.shape[:2]
-        if (width, height) == (self.auxiliary_width, self.auxiliary_height):
+        model = (self.aux_models.get(self.active_aux)
+                 if self.active_aux is not None else None)
+        # A checagem e' POR CAMERA (antes era pelo tamanho GLOBAL, "da ultima"):
+        # com duas auxiliares do MESMO tamanho, a segunda nunca guardava o seu
+        # `runtime_size` -- e a conversao normalizado -> pixel passava a usar o
+        # tamanho/matriz da outra camera.
+        if model is not None \
+                and tuple(model.get("runtime_size") or ()) == (width, height):
+            self.auxiliary_height, self.auxiliary_width = height, width
             return
         self.auxiliary_height, self.auxiliary_width = height, width
         self.auxiliary_matrix_runtime = None
@@ -1011,7 +1654,12 @@ class CameraAlignment:
                 runtime[1, 1] *= scale_y
                 runtime[1, 2] *= scale_y
                 self.auxiliary_matrix_runtime = runtime
-                if not self.auxiliary_scale_warned:
+                # O aviso e' POR CAMERA (no multicamera cada uma tem a sua
+                # resolucao) e sai uma vez so'.
+                avisado = bool(model.get("scale_warned")) if model else False
+                if not avisado:
+                    if model is not None:
+                        model["scale_warned"] = True
                     self.auxiliary_scale_warned = True
                     print(
                         f"AVISO: camera auxiliar {self.active_aux} em "
@@ -1020,9 +1668,13 @@ class CameraAlignment:
                         "escalada. Recalibre na mesma resolucao para melhor "
                         "precisao.", flush=True
                     )
-        # persistencia da matriz em escala por camera (troca de aux mantem)
+        # persistencia da matriz em escala por camera (troca de aux mantem).
+        # O TAMANHO tambem fica por camera: com duas auxiliares no mesmo frame e'
+        # preciso converter normalizado -> pixel com o tamanho de CADA uma (ver
+        # AuxCameraView.pixels/triangulate_aux_pairs).
         if self.active_aux in self.aux_models:
             self.aux_models[self.active_aux]["runtime_matrix"] = runtime
+            self.aux_models[self.active_aux]["runtime_size"] = (width, height)
 
 
 class ArmLinkModel:
@@ -1349,6 +2001,61 @@ class ArmLinkModel:
         return result
 
 
+def mascara_dentro_do_frame(pixels, largura, altura,
+                            margem=OVERLAY_FRAME_MARGIN_PX):
+    """Mascara dos nos cujo pixel cai (com folga `margem`) dentro do frame.
+
+    Porta de validez do overlay: projecao longe do frame = profundidade invalida
+    ou mao fora do volume calibrado. Sem isso o esqueleto projetado vira "lixo"
+    de milhares de px e contamina o log de desvio.
+    """
+    pixels = np.asarray(pixels, np.float64).reshape(-1, 2)
+    return (
+        np.isfinite(pixels).all(axis=1)
+        & (pixels[:, 0] >= -margem) & (pixels[:, 0] < largura + margem)
+        & (pixels[:, 1] >= -margem) & (pixels[:, 1] < altura + margem)
+    )
+
+
+def desenhar_esqueleto_projetado(frame, pixels, cor_nos=(0, 0, 255),
+                                 cor_linhas=(0, 0, 220), rotulo=None,
+                                 raio=4, espessura=2):
+    """Desenha nos + conexoes de UMA mao projetada no frame BGR do Kinect.
+
+    FONTE UNICA do tracado: a mao do Kinect, cada webcam auxiliar e o par de
+    auxiliares usam a MESMA tabela HAND_CONNECTIONS e o mesmo gating de borda
+    (`mascara_dentro_do_frame`). Antes o laco de desenho existia dentro de um
+    metodo unico e cada camera nova teria de copiar o bloco.
+
+    Devolve a mascara (N,) dos nos elegiveis (ja' usada por quem mede desvio).
+    """
+    altura, largura = frame.shape[:2]
+    pixels = np.asarray(pixels, np.float64).reshape(-1, 2)
+    dentro = mascara_dentro_do_frame(pixels, largura, altura)
+    for pixel, ok in zip(pixels, dentro):
+        if not ok:
+            continue
+        x, y = int(round(pixel[0])), int(round(pixel[1]))
+        if 0 <= x < largura and 0 <= y < altura:
+            cv2.circle(frame, (x, y), raio, cor_nos, -1)
+    for start, end in HAND_CONNECTIONS:
+        if not (dentro[start] and dentro[end]):
+            continue
+        start_x, start_y = map(int, np.round(pixels[start]))
+        end_x, end_y = map(int, np.round(pixels[end]))
+        if all((0 <= start_x < largura, 0 <= start_y < altura,
+                0 <= end_x < largura, 0 <= end_y < altura)):
+            cv2.line(frame, (start_x, start_y), (end_x, end_y), cor_linhas,
+                     espessura)
+    if rotulo is not None and dentro.any():
+        # Rotulo junto da palma (no 9), para o experimentador saber de QUE
+        # camera e' cada esqueleto sem consultar o terminal.
+        ancora = pixels[9] if dentro.size > 9 else pixels[int(np.argmax(dentro))]
+        x, y = int(round(ancora[0])), int(round(ancora[1]))
+        if 0 <= x < largura and 0 <= y < altura:
+            cv2.putText(frame, rotulo, (x + 8, y - 8),
+                        cv2.FONT_HERSHEY_SIMPLEX, 0.6, cor_linhas, 2)
+    return dentro
 class KinectHandTracker:
     """Wrapper do Kinect v2: frames de cor/depth/body + MediaPipe por camera."""
 
@@ -1484,7 +2191,7 @@ class KinectHandTracker:
         # MapColorFrameToDepthSpace (COM) exige o ponteiro ctypes do buffer
         # interno de depth e um buffer de saida _DepthSpacePoint pre-alocado;
         # passar o array numpy falha sempre (o wrapper do pykinect2 nao o
-        # aceita) e o except engolia o erro -> "0/48"/"Kinect sem mao".
+        # aceita) e o except engolia o erro -> "0/N"/"Kinect sem mao".
         # O mapeamento roda uma vez por frame de depth (cache por indice).
         try:
             if self._color_to_depth_output is None:
@@ -2060,13 +2767,8 @@ class KinectHandTracker:
             # invalida o mano fuera del volumen calibrado), se descarta la mano
             # por completo. Evita dibujar un esqueleto rojo basura y que el
             # desvio explote a miles de px en el log de diagnostico.
-            in_frame = (
-                finite
-                & (kinect_pixels[:, 0] >= -OVERLAY_FRAME_MARGIN_PX)
-                & (kinect_pixels[:, 0] < self.color_width + OVERLAY_FRAME_MARGIN_PX)
-                & (kinect_pixels[:, 1] >= -OVERLAY_FRAME_MARGIN_PX)
-                & (kinect_pixels[:, 1] < self.color_height + OVERLAY_FRAME_MARGIN_PX)
-            )
+            in_frame = (finite & mascara_dentro_do_frame(
+                kinect_pixels, self.color_width, self.color_height))
             if in_frame.sum() < 5:
                 continue
             if (
@@ -2102,26 +2804,8 @@ class KinectHandTracker:
                     red_copy = kinect_pixels.copy()
                     red_copy[~in_frame] = np.nan
                     first_red = red_copy
-            for pixel, ok in zip(kinect_pixels, in_frame):
-                if not ok:
-                    continue
-                x, y = int(round(pixel[0])), int(round(pixel[1]))
-                if 0 <= x < self.color_width and 0 <= y < self.color_height:
-                    cv2.circle(frame, (x, y), 4, (0, 0, 255), -1)
-            for start, end in HAND_CONNECTIONS:
-                if not (in_frame[start] and in_frame[end]):
-                    continue
-                start_x, start_y = map(int, np.round(kinect_pixels[start]))
-                end_x, end_y = map(int, np.round(kinect_pixels[end]))
-                if all(
-                    (
-                        0 <= start_x < self.color_width,
-                        0 <= start_y < self.color_height,
-                        0 <= end_x < self.color_width,
-                        0 <= end_y < self.color_height,
-                    )
-                ):
-                    cv2.line(frame, (start_x, start_y), (end_x, end_y), (0, 0, 220), 2)
+            # Tracado: fonte unica (nos + conexoes + gating de borda).
+            desenhar_esqueleto_projetado(frame, kinect_pixels)
         if first_red is None:
             return None
         if first_deviation is None:
@@ -2129,6 +2813,163 @@ class KinectHandTracker:
             # vermelha segue disponivel para o log de diagnostico.
             return (None, None, None, first_red, None)
         return (*first_deviation, first_red, first_green)
+#: Cores (BGR) por POSICAO da webcam auxiliar na lista de cameras. O
+    #: esqueleto do Kinect e' verde (desenhado em detect_hand/detect_hands_all);
+    #: a primeira auxiliar fica vermelha -- a mesma cor do overlay de um par so'.
+    CORES_AUXILIARES = ((0, 0, 255), (255, 0, 255), (0, 165, 255),
+                        (255, 255, 0))
+
+    def _projetar_mao_no_kinect(self, view, hand_landmarks, kinect_depth_m=None,
+                                triangulado=None, trim=None):
+        """(21,2) px do Kinect para a mao de UMA auxiliar (ou None).
+
+        Prioridade:
+        0) TRIANGULACAO 3D ja' calculada (Kinect+aux, ou o PAR de auxiliares
+           quando o Kinect esta' cego) -- e' medida, nao estimativa;
+        1) stereo 3D com UMA profundidade rigida para a mao (regra estavel: a
+           profundidade por no espalha os dedos, porque o modelo de escala
+           aparente tem ~12 cm de residuo).
+
+        NAO depende do depth FRAME do Kinect (so' da profundidade em metros que o
+        chamador passar): e' isso que permite desenhar as auxiliares justamente
+        quando o Kinect nao esta' entregando nada.
+        """
+        if view is None or not view.usable or hand_landmarks is None:
+            return None
+        deslocamento = (np.asarray(trim, np.float64)
+                        if trim is not None else np.zeros(2))
+        if triangulado is not None:
+            tri = np.asarray(triangulado, np.float64).reshape(-1, 3)
+            if np.isfinite(tri).all(axis=1).sum() >= 5:
+                projected, _ = cv2.projectPoints(
+                    np.nan_to_num(tri).reshape(-1, 1, 3),
+                    np.zeros(3),
+                    np.zeros(3),
+                    np.asarray(view.kinect_matrix, np.float64),
+                    np.asarray(view.kinect_dist, np.float64),
+                )
+                pixels = projected.reshape(-1, 2)
+                if np.any(deslocamento):
+                    pixels = pixels + deslocamento[None, :]
+                return pixels
+        pixels = view.pixels(hand_landmarks)
+        init_depth = None
+        if kinect_depth_m is not None:
+            valores = np.asarray(kinect_depth_m, np.float64).reshape(-1)
+            validos = valores[np.isfinite(valores) & (valores > 0.1)]
+            if validos.size > 0:
+                init_depth = float(np.median(validos))
+        if init_depth is None:
+            init_depth = NOMINAL_HAND_DEPTH_M
+        pixels = view.to_kinect_stereo(pixels, [init_depth])
+        if pixels is None:
+            return None
+        pixels = np.asarray(pixels, np.float64).reshape(-1, 2)
+        if np.any(deslocamento):
+            pixels = pixels + deslocamento[None, :]
+        return pixels
+
+    def draw_auxiliary_cameras_on_color(self, frame, hands_por_camera,
+                                        alignment, depths=None,
+                                        triangulados=None, rotulos=True,
+                                        cores=None, ignorar=()):
+        """Desenha as maos de TODAS as auxiliares no RGB do Kinect.
+
+        Objetivo (bancada de 23/09/2026): na janela do Kinect tem de aparecer o
+        esqueleto do KINECT (verde, ja' desenhado por detect_hand*) MAIS o de
+        CADA webcam auxiliar, cada um na sua cor e com rotulo. E' a verificacao
+        visual de que as duas auxiliares enxergam a mao e de onde cada uma a
+        coloca no espaco (calibracao de cada camera).
+
+        `hands_por_camera` = {indice: [landmarks, ...]};
+        `depths`           = {indice: profundidades (m, frame do Kinect)};
+        `triangulados`     = {indice: points_3d (21,3) no frame do Kinect} -- aqui
+        entra TAMBEM a triangulacao do PAR DE AUXILIARES, que e' o caminho que
+        substitui o Kinect quando ele perde a mao;
+        `cores`            = {indice: (B,G,R)}, para fixar a cor de uma camera
+        (ex.: pular a cor da camera cujo esqueleto outra rotina ja' desenhou);
+        `ignorar`          = indices a NAO desenhar (quem ja' desenhou essa mao).
+
+        Devolve {indice: (desvio_px|None, dx, dy, red_pixels, green_pixels)} no
+        MESMO formato de `draw_auxiliary_hands_on_color` (por camera; a primeira
+        mao de cada camera e' a que alimenta o desvio).
+        """
+        if frame is None or not hands_por_camera:
+            return {}
+        ignorar = {int(i) for i in ignorar}
+        verde_todas = self.last_kinect_hands or []
+        resultados = {}
+        for posicao, index in enumerate(sorted(hands_por_camera)):
+            if int(index) in ignorar:
+                continue
+            maos = hands_por_camera[index]
+            if not maos:
+                continue
+            # A camera ATIVA usa os CAMPOS VIVOS (mesmo contrato da rotina de
+            # camera unica: quem os sobrescreve -- ex. testes sinteticos ou o
+            # trim em tempo real -- manda); as outras usam a calibracao GRAVADA
+            # daquela camera (`aux_view`).
+            ativo = getattr(alignment, "active_aux", None)
+            view = None
+            if (ativo is not None and int(index) == int(ativo)
+                    and hasattr(alignment, "active_view")):
+                view = alignment.active_view()
+            if view is None:
+                view = alignment.aux_view(int(index))
+            if view is None or not view.usable:
+                continue
+            cor_nos = (cores or {}).get(int(index))
+            if cor_nos is None:
+                cor_nos = self.CORES_AUXILIARES[
+                    posicao % len(self.CORES_AUXILIARES)]
+            cor_nos = tuple(int(canal) for canal in cor_nos)
+            cor_linhas = tuple(int(canal * 0.75) for canal in cor_nos)
+            rotulo = None
+            if rotulos:
+                rotulo = "aux %s" % nome_auxiliar(index)
+            for hand_index, landmarks in enumerate(maos):
+                pixels = self._projetar_mao_no_kinect(
+                    view, landmarks,
+                    (depths or {}).get(int(index)),
+                    ((triangulados or {}).get(int(index))
+                     if hand_index == 0 else None),
+                    alignment.overlay_trim,
+                )
+                if pixels is None or pixels.shape[0] < 21:
+                    continue
+                dentro = (np.isfinite(pixels).all(axis=1)
+                          & mascara_dentro_do_frame(pixels, self.color_width,
+                                                    self.color_height))
+                if dentro.sum() < 5:
+                    continue
+                desvio = None
+                verde_mao = None
+                if hand_index < len(verde_todas):
+                    verde_mao = np.array(
+                        [(lm.x * self.color_width, lm.y * self.color_height)
+                         for lm in verde_todas[hand_index]], np.float64)
+                    if verde_mao.shape == pixels.shape:
+                        validos = dentro & np.isfinite(verde_mao).all(axis=1)
+                        if validos.any():
+                            difs = pixels - verde_mao
+                            desvio = (
+                                float(np.mean(np.linalg.norm(difs[validos],
+                                                             axis=1))),
+                                float(np.mean(difs[validos, 0])),
+                                float(np.mean(difs[validos, 1])),
+                            )
+                desenhar_esqueleto_projetado(
+                    frame, pixels, cor_nos, cor_linhas,
+                    rotulo if (hand_index == 0 and rotulo) else None)
+                if int(index) not in resultados:
+                    vermelho = pixels.copy()
+                    vermelho[~dentro] = np.nan
+                    if desvio is None:
+                        resultados[int(index)] = (None, None, None, vermelho,
+                                                  None)
+                    else:
+                        resultados[int(index)] = (*desvio, vermelho, verde_mao)
+        return resultados
 
     def draw_auxiliary_hands(self, frame, auxiliary_hands):
         height, width = frame.shape[:2]
@@ -2196,6 +3037,131 @@ class KinectHandTracker:
         for start, end in HAND_CONNECTIONS:
             cv2.line(frame, points[start], points[end], linha_cor,
                      2 if destaque else 1)
+
+    def _palm_camera_position(self, landmarks):
+        """Palma (landmark 9) no espaco de camera do Kinect, ou None.
+
+        Mesmo caminho de detect_hand: pixel de cor -> mapeamento color->depth
+        -> mediana de depth -> MapDepthPointToCameraSpace (y invertido).
+        """
+        palm = landmarks[9]
+        color_x = int(np.clip(palm.x * self.color_width, 0, self.color_width - 1))
+        color_y = int(np.clip(palm.y * self.color_height, 0, self.color_height - 1))
+        depth_pixel = self._color_to_depth_pixel(color_x, color_y)
+        if depth_pixel is None:
+            self._log_map_failure(color_x, color_y)
+            return None
+        depth_mm = self._median_depth(*depth_pixel)
+        if depth_mm is None:
+            return None
+        depth_point = PyKinectV2._DepthSpacePoint()
+        depth_point.x = float(depth_pixel[0])
+        depth_point.y = float(depth_pixel[1])
+        camera_point = self.mapper.MapDepthPointToCameraSpace(
+            depth_point, int(round(depth_mm))
+        )
+        if camera_point is None:
+            return None
+        position = np.array(
+            [camera_point.x, -camera_point.y, camera_point.z], dtype=float
+        )
+        if not np.isfinite(position).all():
+            return None
+        return position
+
+    def detect_hands_all(self, color_frame, depth_frame, flip=None):
+        """Detecta TODAS as maos no RGB do Kinect (groundtruth bimanual).
+
+        Devolve (color_frame, maos); cada item e' um dict:
+            {"side": "right"/"left"/"",
+             "landmarks": [21 landmarks],
+             "position": np.array(3) | None}  # palma no espaco de camera
+        `side` vem do rotulo do MediaPipe corrigido pelo espelho (o RGB do
+        Kinect nao e' espelhado). Todas as maos sao DESENHADAS com destaque:
+        o groundtruth bimanual nao escolhe uma unica mao ativa.
+        """
+        if color_frame is None or depth_frame is None:
+            self.last_hand_reason = "sem frame Kinect"
+            return None, []
+        if flip is None:
+            flip = MEDIAPIPE_KINECT_HANDEDNESS_FLIP
+        raw_color_frame = color_frame.copy()
+        self._draw_skeleton(color_frame)
+        rgb = cv2.cvtColor(raw_color_frame, cv2.COLOR_BGRA2RGB)
+        image = mp.Image(image_format=mp.ImageFormat.SRGB, data=rgb)
+        self.kinect_frame_timestamp_ms = max(
+            self.kinect_frame_timestamp_ms + 1, int(time.monotonic() * 1000)
+        )
+        result = self.hands.detect_for_video(image, self.kinect_frame_timestamp_ms)
+        detected = list(getattr(result, "hand_landmarks", None) or [])
+        self.last_kinect_hands = detected
+        maos = []
+        for index, hand_landmarks in enumerate(detected):
+            side = self._handedness_of(result, index, flip)
+            position = self._palm_camera_position(hand_landmarks)
+            if position is not None:
+                if self.last_hand_depth_m is None:
+                    self.last_hand_depth_m = float(position[2])
+                else:
+                    self.last_hand_depth_m = (
+                        0.8 * self.last_hand_depth_m + 0.2 * float(position[2])
+                    )
+            self._draw_hand(color_frame, hand_landmarks, destaque=True)
+            maos.append(
+                {
+                    "side": side,
+                    "landmarks": hand_landmarks,
+                    "position": position,
+                }
+            )
+        self.last_hand_reason = (
+            f"{len(maos)} mao(s) no Kinect" if maos else "MediaPipe sem deteccao"
+        )
+        return color_frame, maos
+
+    def detect_auxiliary_hands_sides(self, auxiliary_frame, aux_index=None):
+        """Detecta TODAS as maos na auxiliar com a lateralidade de cada uma.
+
+        Devolve lista de {"side": ..., "landmarks": [...]}. SEM reordenacao: o
+        groundtruth bimanual casa as maos PELO LADO. A auxiliar e' espelhada no
+        pipeline -> o rotulo do MediaPipe ja' corresponde a mao fisica (sem
+        flip), como em detect_auxiliary_hands.
+
+        `aux_index` None usa o detector PRIMARIO (compatibilidade); com indice usa
+        o detector/timestamp DAQUELA camera -- necessario com duas auxiliares: o
+        VideoMode do MediaPipe nao admite intercalar dois fluxos no mesmo
+        landmarker.
+        """
+        if auxiliary_frame is None:
+            return []
+        rgb = cv2.cvtColor(auxiliary_frame, cv2.COLOR_BGR2RGB)
+        image = mp.Image(image_format=mp.ImageFormat.SRGB, data=rgb)
+        if aux_index is not None:
+            index = int(aux_index)
+            detector = self.auxiliary_detectors.get(index)
+            if detector is None:
+                raise KeyError(f"Sem detector para a camera auxiliar {index}.")
+            stamp = max(self.auxiliary_timestamps_ms[index] + 1,
+                        int(time.monotonic() * 1000))
+            self.auxiliary_timestamps_ms[index] = stamp
+            result = detector.detect_for_video(image, stamp)
+        else:
+            self.auxiliary_frame_timestamp_ms = max(
+                self.auxiliary_frame_timestamp_ms + 1,
+                int(time.monotonic() * 1000)
+            )
+            result = self.auxiliary_hands.detect_for_video(
+                image, self.auxiliary_frame_timestamp_ms
+            )
+        return [
+            {
+                "side": self._handedness_of(result, index, False),
+                "landmarks": hand_landmarks,
+            }
+            for index, hand_landmarks in enumerate(
+                getattr(result, "hand_landmarks", None) or []
+            )
+        ]
 
     def detect_hand(self, color_frame, depth_frame, want_side=None):
         """Detecta a mao no RGB do Kinect.
@@ -2271,7 +3237,8 @@ class KinectHandTracker:
             self._map_error_reported = True
             print(
                 f"mapeo color->depth falhou para a palma ({color_x}, {color_y}): "
-                "use 'T' com o tabuleiro para diagnosticar (debe ver 'N/48 cantos')"
+                f"use 'T' com o tabuleiro para diagnosticar (debe ver "
+                f"{CHECKERBOARD_SIZE[0] * CHECKERBOARD_SIZE[1]} cantos)"
             )
 
     def draw_palm_vector(self, frame, landmarks, direction_camera):

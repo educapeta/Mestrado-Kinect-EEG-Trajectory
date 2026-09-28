@@ -1,13 +1,29 @@
 """Calibracao stereo Kinect RGB + camera auxiliar.
 
-Tabuleiro: 9 x 7 quadrados, cantos internos 8 x 6, quadrado de 25 mm.
+Tabuleiro (placa atual, impressa em 23/09/2026): 6 x 4 QUADRADOS de 57 mm ->
+5 x 3 CANTOS INTERNOS. Os valores ficam nas constantes do arquivo
+(CHECKERBOARD_COLS/ROWS e SQUARE_SIZE_M) e precisam casar com
+kinect_imu_groundtruth.py: o npz grava placa e quadrado, e um npz de placa
+diferente e' RECUSADO com o motivo por extenso (CameraAlignment.stereo_status).
+Trocar de placa = mudar as constantes nos DOIS arquivos (ou passar
+--checkerboard CxR --quadrado MM aqui) e CALIBRAR DE NOVO.
+
+Regra geral do cv2: ele conta CANTOS INTERNOS = (quadrados - 1) por eixo; se a
+placa tiver quadrados cortados nas bordas, o detector ENXERGA os cantos deles
+(contar as colunas/linhas cortadas tambem).
 As capturas sao automaticas (2 s com o tabuleiro estavel nas duas
 cameras); ESC encerra sem salvar.
+
+O Kinect RGB e' OBRIGATORIO: o par estereo e' (Kinect RGB, webcam auxiliar), e
+nao ha' como calibrar so' com a auxiliar. Se o Kinect nao entregar frame, o
+programa agora falha ALTO e com instrucao. Antes ele ficava MUDO: o loop fazia
+`continue` antes do `cv2.imshow` e nenhuma janela aparecia -- o sintoma era
+"rodei e nao apareceu nada", sem pista nenhuma de que faltava a camera.
 
 Por que esta versao existe (o RMS stereo ficava em 30-70 px com RMS
 individual de ~0.5-1.0 px):
 
-1. ORDEM DOS CANTOS. findChessboardCorners/SB devolve os 48 cantos em
+1. ORDEM DOS CANTOS. findChessboardCorners/SB devolve os N cantos em
    ordem canonica de IMAGEM (o canto mais proximo do canto superior
    esquerdo da imagem primeiro). Como cada camera ve o tabuleiro de um
    angulo diferente, o "primeiro canto" pode corresponder a cantos
@@ -32,6 +48,8 @@ individual de ~0.5-1.0 px):
    deteccao ruim) sao rejeitadas antes de entrar na solucao.
 """
 
+import sys
+import time
 from pathlib import Path
 
 import cv2
@@ -39,24 +57,74 @@ import numpy as np
 from pykinect2 import PyKinectV2
 from pykinect2.PyKinectRuntime import PyKinectRuntime
 
-AUX_CAMERA_INDEX = 0
+# Cameras auxiliares que formam o par estereo com o Kinect (indices do OpenCV).
+# ATENCAO: o indice do OpenCV NAO e' estavel -- e' a POSICAO da camera na
+# enumeracao do DirectShow, e ela muda quando uma camera entra/sai do USB.
+# MEDIDO nesta maquina (23/09/2026), com as DUAS externas ligadas:
+#   0 = webcam externa virada para a bancada/mesa (vista ampla)
+#   1 = webcam DO LAPTOP (Integrated Camera) -- sem baseline com o Kinect
+#   2 = webcam externa montada por cima da bancada (ve' as duas maos)
+# No MESMO dia, quando as externas cairam fora do USB, o indice 0 passou a ser a
+# webcam do LAPTOP: o par abaixo e' so' um PONTO DE PARTIDA. Quem manda e' o NOME
+# (camera_names.py) -- confira com tools/diagnostico_cameras.py --salvar, que
+# imprime o nome do Windows de cada indice.
+# Foi por assumir 1="usb" que a calibracao de `aux1` foi feita na webcam do
+# laptop: o par util hoje e' (2, 0), as DUAS webcams externas.
+# Precisa casar com AUX_CAMERA_INDICES de kinect_imu_groundtruth.py.
+AUX_CAMERA_INDICES_PADRAO = (2, 0)
+AUX_CAMERA_NAMES = {
+    0: "externa-ampla",
+    1: "laptop",
+    2: "externa-bancada",
+}
+# Indice em uso agora (trocado por calibrate_one a cada camera).
+AUX_CAMERA_INDEX = AUX_CAMERA_INDICES_PADRAO[0]
 # Must match the resolution used by kinect_imu_groundtruth.py.
 AUX_REQUEST_SIZE = (1280, 720)  # (width, height)
+#: Backends tentados ao abrir a webcam auxiliar, NA ORDEM. O DSHOW costuma
+#: abrir em ~1 s (contra os 20-40 s do MSMF) e enfileira MENOS frames -- as
+#: duas coisas aparecem como "video lento/atrasado" quando erradas.
+AUX_BACKENDS = ((cv2.CAP_DSHOW, "DSHOW"), (cv2.CAP_MSMF, "MSMF"))
+#: Frames descartados logo apos abrir: o driver entrega imagem instavel/escura
+#: enquanto a exposicao automatica estabiliza.
+AUX_DESCARTE = 5
 # The raw auxiliary stream arrives mirrored (virtual camera / phone app);
 # flipping restores the physical, unmirrored coordinates. Keep the same
 # value as AUXILIARY_MIRROR_HORIZONTAL in kinect_imu_groundtruth.py.
 AUXILIARY_MIRROR_HORIZONTAL = True
 AUXILIARY_DISPLAY_MIRROR = False
-CHECKERBOARD_COLS = 8
-CHECKERBOARD_ROWS = 6
+#: Fator de reducao das JANELAS de video (0.5 = metade). Manter IGUAL a
+#: WINDOW_SCALE de kinect_imu_groundtruth.py: com o Kinect em 1920x1080 e as
+#: duas webcams em 1280x720, so' cabe tudo na tela se cada janela ocupar ~1/4
+#: dela -- no tamanho real o experimentador nao consegue ver as duas auxiliares
+#: ao mesmo tempo. A reducao e' SO' de EXIBICAO: a deteccao de cantos, a
+#: captura de amostras e a calibracao seguem na resolucao CHEIA (reduzir antes
+#: do detector seria cometer o erro que DETECTION_WIDTHS documenta).
+DISPLAY_SCALE = 0.5
+#: Quanto esperar o PRIMEIRO frame do Kinect RGB ao abrir (s). O Kinect leva
+#: alguns segundos para comecar a transmitir; se nao vier nada nesse tempo, o
+#: programa para com mensagem clara em vez de ficar mudo para sempre.
+ESPERA_KINECT_S = 20.0
+# Tabuleiro: PLACA ATUAL (impressa 23/09/2026) = 6 x 4 QUADRADOS de 57 mm ->
+# 5 x 3 CANTOS internos (a regra do cv2 e' sempre quadrados - 1 por lado).
+# Precisa casar com CHECKERBOARD_SIZE/SQUARE_SIZE_M em
+# kinect_imu_groundtruth.py: o stereo salvo guarda estes dois valores e a
+# biblioteca RECUSA (stereo_ready=False, com o motivo dito em
+# CameraAlignment.stereo_status) qualquer npz de placa/quadrado diferente.
+# Historico: 4x3/52 mm (subgrade, geometria 2x grande) -> 12x8 quadrados/26 mm
+# (11x7 cantos, a placa antiga) -> 6x4/57 mm (a atual).
+# Sobrescrevivel na linha de comando com --checkerboard CxR e --quadrado MM.
+CHECKERBOARD_COLS = 5
+CHECKERBOARD_ROWS = 3
 CHECKERBOARD_SIZE = (CHECKERBOARD_COLS, CHECKERBOARD_ROWS)
-SQUARE_SIZE_M = 0.025
+SQUARE_SIZE_M = 0.057
 SAMPLES_REQUIRED = 15
 SOLVE_EVERY_EXTRA = 3          # depois das 15, resolve a cada +3 amostras
 MAX_STEREO_RMS_PX = 2.0
 STABLE_CAPTURE_SECONDS = 2.0
 MIN_BOARD_SPAN_FRACTION = 0.08  # tabuleiro >= 8% da diagonal da imagem (duas cams)
 MAX_PAIR_ERROR_PX = 3.0         # erro planar homografia aux -> kinect
+MIN_POSE_SEPARATION = 0.30      # amostra nova a >= 30% do span de TODAS as outras
 MAX_POSE_RMS_PX = 4.0           # residuo stereo por pose (limite duro)
 OUTLIER_MEDIAN_FACTOR = 2.5     # pior pose vs mediana
 MIN_ACTIVE_POSES = 8
@@ -65,7 +133,57 @@ RANSAC_SEED_SIZE = 5
 ASSIGNMENT_ROUNDS = 3
 MAX_TOTAL_SAMPLES = 60
 DETECTION_INTERVAL_S = 0.1     # detecta cantos a ~10 Hz e reusa entre frames
-FALLBACK_EVERY = 5             # detector classico so a cada N deteccoes (custo)
+FALLBACK_EVERY = 1             # classico em TODO ciclo: com N>1 a deteccao
+                               # OSCILA (SB nao acha o frame do Kinect; sem
+                               # fallback ele falha, a estabilidade de 2 s
+                               # zera e NENHUMA amostra e' coletada -- medido
+                               # ao vivo com batimento de diagnostico)
+# --- Robustez e custo do detector ------------------------------------------
+# Por que existem (dois sintomas classicos na bancada):
+#   (a) VIDEO TRAVADO: findChessboardCornersSB custa ~O(px^2) e com
+#       CALIB_CB_EXHAUSTIVE|CALIB_CB_ACCURACY em 1920x1080 ele sozinho passa de
+#       100 ms/frame -- a interface engasga e o detector reusa cantos velhos.
+#   (b) TABULEIRO "PISCANDO" com ele visivel: impressao de baixo contraste,
+#       papel brilhante ou luz desigual deixam o detector na fronteira, e ele
+#       oscila entre achar e nao achar.
+#: CLAHE no cinza antes de detectar (0 desliga). E' o que mais ajuda em (b).
+DETECTION_CLAHE_CLIP = 2.0
+DETECTION_CLAHE_GRID = 8
+#: Larguras-ALVO da deteccao, tentadas EM CASCATA (a primeira que achar vence).
+#: 0 = resolucao cheia.
+#: MEDIDO na bancada, com TODAS as configs rodando na MESMA imagem:
+#:   rodada 1 (tabuleiro a 36% da largura, quadrado de 45 px em 1280):
+#:     ACERTA 640 e 427 px | FALHA 960 px e a resolucao cheia;
+#:   rodada 2 (tabuleiro a 31%, quadrado de 39 px em 1280):
+#:     ACERTA 960 e 427 px | FALHA 640 px e a resolucao cheia.
+#: As duas rodadas juntas NAO obedecem a regra nenhuma de tamanho: 640 acerta
+#: numa e falha na outra, e 960 faz o mesmo. Ou seja, a hipotese anterior
+#: ("quadrado grande demais atrapalha o SB") esta' REFUTADA -- o detector esta'
+#: na FRONTEIRA e o resultado sai por sorte. Quem decide e' a qualidade da
+#: imagem (ruido de ISO e borrao de movimento com pouca luz), nao a largura.
+#: Consequencia pratica: NAO tente consertar "piscando" a largura; melhore a luz.
+#: A cascata cobre as tres larguras que ja' acertaram alguma vez, com a MAIS
+#: confiavel primeiro (427 acertou nas DUAS rodadas), e a memoizacao
+#: (_ultima_largura_ok) evita pagar a cascata inteira a cada frame.
+#: Custo medido: 427 px = 13 ms | 640 px = 59 ms | 960 px = 70 ms | cheia = 108 ms.
+DETECTION_WIDTHS = (427, 960, 640)
+#: Largura que ACHOU o tabuleiro na deteccao anterior: tentada PRIMEIRO, porque
+#: entre frames o tabuleiro muda pouco. Sem isso a cascata inteira seria paga a
+#: cada frame, justamente quando ela e' desnecessaria.
+_ultima_largura_ok = None
+#: Flags do SB. EXHAUSTIVE procura com mais afinco (tabuleiro pequeno/inclinado)
+#: e e' barato comparado ao ACCURACY, que faz refinamento extra e era o que
+#: mais pesava no video travado.
+DETECTION_SB_FLAGS = cv2.CALIB_CB_EXHAUSTIVE
+#: Refinar os cantos com cornerSubPix na resolucao CHEIA (nao na reduzida).
+#: Por que: a cascata pode achar o tabuleiro a 427 px e, ao voltar para o frame
+#: original, o fator de 3x transforma o erro de meio pixel da deteccao em 1,5 px
+#: -- perto do MAX_STEREO_RMS_PX de 2 px. Refinando no frame original o erro
+#: volta a ser sub-pixel. Efeito colateral bom: TODAS as amostras passam a ter
+#: a mesma precisao, mesmo as que vieram de larguras diferentes (antes a amostra
+#: detectada a 427 px entrava com 3x mais ruido de pixel que a de 960 px, e a
+#: calibracao misturava as duas).
+DETECTION_REFINO_CHEIO = True
 # k1, k2, k3, p1, p2 livres (k3 congelado degradava a precisao nas bordas
 # da imagem, onde a distorcao do Kinect e maior).
 CALIB_FLAGS = 0
@@ -92,48 +210,149 @@ def parse_args():
     parser = argparse.ArgumentParser(
         description=__doc__,
         formatter_class=argparse.ArgumentDefaultsHelpFormatter)
-    parser.add_argument("--aux-index", type=int, default=0,
-                        help="Indice da webcam auxiliar a calibrar "
-                             "(0 = laptop, 1 = usb). Salva em "
+    parser.add_argument("--largura-deteccao", type=int, nargs="+",
+                        default=list(DETECTION_WIDTHS), metavar="N",
+                        help="Largura(s)-ALVO da deteccao, tentadas EM CASCATA "
+                             "(0 = resolucao cheia). Medido com o tabuleiro a "
+                             "31-36%% da imagem: 427 px acertou nas DUAS "
+                             "rodadas, e 640 e 960 alternaram entre acertar e "
+                             "falhar -- o que decide e' a qualidade da imagem "
+                             "(luz/ruido), nao a largura. Custo: 427 px = 13 "
+                             "ms, 960 px = 70 ms, resolucao cheia = 108 ms.")
+    parser.add_argument("--clahe", type=float, default=DETECTION_CLAHE_CLIP,
+                        help="Forca do CLAHE no cinza antes de detectar. 0 "
+                             "desliga; 2-4 ajuda muito com impressao fraca, "
+                             "papel brilhante ou luz desigual.")
+    parser.add_argument("--rapido", action="store_true",
+                        help="Tira o CALIB_CB_EXHAUSTIVE do detector SB: mais "
+                             "rapido, porem menos robusto com o tabuleiro "
+                             "pequeno ou muito inclinado.")
+    parser.add_argument("--checkerboard", type=str, default=None, metavar="CxR",
+                        help="Padrao do tabuleiro como 'CANTOSxCANTOS' (5x3 = "
+                             "6x4 quadrados). Padrao: usa as constantes do "
+                             "arquivo (%dx%d)." % (CHECKERBOARD_COLS,
+                                                   CHECKERBOARD_ROWS))
+    parser.add_argument("--quadrado", type=float, default=None, metavar="MM",
+                        help="Tamanho do quadrado do tabuleiro em mm. "
+                             "Padrao: usa a constante do arquivo "
+                             "(%g mm)." % (SQUARE_SIZE_M * 1000))
+    parser.add_argument("--aux-index", type=int, nargs="+",
+                        default=list(AUX_CAMERA_INDICES_PADRAO), metavar="N",
+                        help="Indice(s) da(s) webcam(s) auxiliar(es) a "
+                             "calibrar, na ordem. Aceita varias de uma vez "
+                             "(ex.: --aux-index 1 2). Salva em "
                              "stereo_calibration_aux{N}.npz (0 usa o arquivo "
                              "legado stereo_calibration.npz).")
     return parser.parse_args()
 
 
-def find_corners(frame, allow_fallback=True):
-    """Detecta os 48 cantos internos (float64, ordem de deteccao).
+def prepare_gray(frame, largura_alvo):
+    """Cinza pronto para o detector: reduzido para `largura_alvo` + CLAHE.
 
-    O detector SB (rapido e subpixel) roda primeiro; o classico e usado
-    apenas como fallback eventual (allow_fallback) porque e caro em
-    imagens grandes e dobraria o custo quando o tabuleiro nao esta
-    visivel.
+    Devolve (gray, escala_de_volta). Os cantos achados na imagem reduzida
+    precisam ser multiplicados por `escala_de_volta` para voltar ao tamanho do
+    frame original. `largura_alvo` 0 = nao reduz.
     """
     gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
-    if hasattr(cv2, "findChessboardCornersSB"):
-        found, corners = cv2.findChessboardCornersSB(
-            gray,
-            CHECKERBOARD_SIZE,
-            cv2.CALIB_CB_EXHAUSTIVE | cv2.CALIB_CB_ACCURACY,
-        )
-        if found:
-            return corners.reshape(-1, 2).astype(np.float64)
-    if not allow_fallback:
-        return None
-    found, corners = cv2.findChessboardCorners(
+    escala = 1.0
+    if largura_alvo and gray.shape[1] > largura_alvo:
+        fator = largura_alvo / float(gray.shape[1])
+        gray = cv2.resize(gray, None, fx=fator, fy=fator,
+                          interpolation=cv2.INTER_AREA)
+        escala = 1.0 / fator
+    if DETECTION_CLAHE_CLIP > 0:
+        clahe = cv2.createCLAHE(
+            clipLimit=DETECTION_CLAHE_CLIP,
+            tileGridSize=(DETECTION_CLAHE_GRID, DETECTION_CLAHE_GRID))
+        gray = clahe.apply(gray)
+    return gray, escala
+
+
+def refina_cantos(frame, cantos):
+    """Refina cantos (JA' no sistema de coordenadas do frame) com cornerSubPix.
+
+    Ver DETECTION_REFINO_CHEIO para o porque. O refinamento roda no cinza
+    ORIGINAL, sem CLAHE: o CLAHE realca contraste mas tambem amplifica o ruido,
+    e e' o ruido que desloca o minimo sub-pixel. A janela 11x11 (raio de 5 px)
+    e' segura: o rescalonamento erra no maximo ~1,5 px e a estrutura vizinha
+    mais proxima (a borda de um quadrado) esta' a ~1/2 lado de quadrado de
+    distancia -- bem fora da janela.
+    """
+    if not DETECTION_REFINO_CHEIO or len(cantos) == 0:
+        return cantos
+    gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
+    refinados = cv2.cornerSubPix(
         gray,
-        CHECKERBOARD_SIZE,
-        cv2.CALIB_CB_ADAPTIVE_THRESH | cv2.CALIB_CB_NORMALIZE_IMAGE,
-    )
-    if not found:
-        return None
-    corners = cv2.cornerSubPix(
-        gray,
-        corners,
+        cantos.reshape(-1, 1, 2).astype(np.float32),
         (11, 11),
         (-1, -1),
         (cv2.TERM_CRITERIA_EPS + cv2.TERM_CRITERIA_MAX_ITER, 30, 0.001),
     )
-    return corners.reshape(-1, 2).astype(np.float64)
+    return refinados.reshape(-1, 2).astype(np.float64)
+
+
+def find_corners(frame, allow_fallback=True):
+    """Detecta todos os cantos internos (float64, ordem de deteccao).
+
+    Tenta as larguras de DETECTION_WIDTHS EM CASCATA e devolve a primeira que
+    achar; a que funcionou por ultimo e' tentada primeiro. A cascata existe
+    porque o SB e' instavel na FRONTEIRA: MEDIDO, a mesma configuracao acertou
+    numa rodada e falhou na outra (640 px e 960 px ja' fizeram os dois, com o
+    tabuleiro na mesma faixa de tamanho -- ver DETECTION_WIDTHS). Entao vale
+    cobrir varias escalas em vez de apostar numa.
+
+    Os cantos achados na imagem reduzida sao reescalonados para o frame
+    ORIGINAL e refinados la' (refina_cantos). Sem isso o erro de deteccao
+    cresce com a reducao: medido 0.67 px na escala cheia, 1.27 px a 640 px e
+    2.20 px a 427 px -- este ultimo ja' acima do MAX_STEREO_RMS_PX de 2 px.
+
+    O detector classico entra apenas como fallback eventual (allow_fallback)
+    porque e' caro em imagens grandes.
+    """
+    global _ultima_largura_ok
+    larguras = list(DETECTION_WIDTHS)
+    if _ultima_largura_ok in larguras:
+        larguras.remove(_ultima_largura_ok)
+        larguras.insert(0, _ultima_largura_ok)
+    for largura in larguras:
+        gray, escala = prepare_gray(frame, largura)
+        if hasattr(cv2, "findChessboardCornersSB"):
+            found, corners = cv2.findChessboardCornersSB(
+                gray,
+                CHECKERBOARD_SIZE,
+                DETECTION_SB_FLAGS,
+            )
+            if found:
+                _ultima_largura_ok = largura
+                cantos = corners.reshape(-1, 2).astype(np.float64) * escala
+                return refina_cantos(frame, cantos)
+    if not allow_fallback:
+        return None
+    #: O classico entra EM CASCATA tambem, da MENOR para a MAIOR largura (0 =
+    #: resolucao cheia, sempre por ultimo): adaptive threshold local lida melhor
+    #: com quadrados pequenos e com a impressao de baixo contraste, e ha' caso
+    #: medido (Kinect 1080p, tabuleiro impresso) em que o SB rejeita o frame
+    #: INTEIRO em todas as escalas -- EXH e rapido, com e sem CLAHE -- enquanto
+    #: o classico acha a 960 px (e falha a 640/427 px). Fazer o classico tentar
+    #: so' a menor largura perdia exatamente esses casos.
+    ordem = sorted(w for w in larguras if w)
+    if any(w == 0 for w in larguras):
+        ordem.append(0)
+    for largura in ordem:
+        gray, escala = prepare_gray(frame, largura)
+        found, corners = cv2.findChessboardCorners(
+            gray,
+            CHECKERBOARD_SIZE,
+            cv2.CALIB_CB_ADAPTIVE_THRESH | cv2.CALIB_CB_NORMALIZE_IMAGE,
+        )
+        if found:
+            break
+    if not found:
+        return None
+    #: O classico ja' devolve cantos refinados, mas na escala REDUZIDA: refinar
+    #: de novo no frame original deixa a precisao igual a do caminho SB.
+    cantos = corners.reshape(-1, 2).astype(np.float64) * escala
+    return refina_cantos(frame, cantos)
 
 
 def board_object_points():
@@ -147,9 +366,9 @@ def symmetry_indices():
     """Mapeia cada simetria da grade para uma permutacao de indices.
 
     Chaves: 'id' (identidade), 'rot180' (grade girada 180 graus),
-    'hflip' (espelhada ao longo do eixo de 8 cantos) e 'vflip'
-    (espelhada ao longo do eixo de 6 cantos). O layout dos indices e
-    row-major com 8 cantos por linha.
+    'hflip' (espelhada ao longo do eixo de ROWS cantos) e 'vflip'
+    (espelhada ao longo do eixo de COLS cantos). O layout dos indices e
+    row-major, com COLS cantos por linha.
     """
     cols, rows = CHECKERBOARD_COLS, CHECKERBOARD_ROWS
     rr, cc = np.mgrid[0:rows, 0:cols]
@@ -618,6 +837,15 @@ def print_solve_report(final, errors, active, spans, tilt_ratios):
 
 def print_capture_guidance():
     print("COMO CAPTURAR (o RMS stereo depende muito disso):")
+    print("- LUZ e' o fator numero 1. Com pouca luz a webcam sobe o tempo de")
+    print("  exposicao e o ganho: a imagem sai BORRADA (movimento da mao) e")
+    print("  GRANULADA, e o detector passa a achar/nao achar por sorte -- medido")
+    print("  na bancada, a MESMA configuracao acertou numa rodada e falhou na")
+    print("  outra. Acenda uma luz DIFUSA apontada para o tabuleiro (lampada")
+    print("  com uma folha de papel na frente). Luz de teto nao resolve: ela")
+    print("  cria sombra da propria mao e estoura no reflexo.")
+    print("- Prenda o tabuleiro numa base rigida (caixa, encosto de cadeira).")
+    print("  Na mao, a pouca luz + tremor = borrao e a deteccao fica instavel.")
     print("- Segure o tabuleiro de frente para as cameras, sempre com a parte")
     print("  de cima para cima (nao gire o tabuleiro no plano da imagem).")
     print("- Varie a distancia (0.8 a 2.5 m) e a posicao na imagem; todas as")
@@ -687,17 +915,115 @@ def save_alignment(obj, kin, aux):
     print(f"Alinhamento (homografia) regenerado em {CAMERA_ALIGNMENT_FILE}")
 
 
-def main():
+def reduzir_janela(frame):
+    """Reduz o frame para o TAMANHO DA JANELA (DISPLAY_SCALE).
+
+    Chamado no ultimo passo, so' no que vai para o `cv2.imshow`: e' reducao de
+    EXIBICAO. Tudo o que decide algo (deteccao de cantos, amostras, solver)
+    roda antes, na resolucao CHEIA.
+    """
+    if frame is None or DISPLAY_SCALE == 1.0:
+        return frame
+    return cv2.resize(frame, None, fx=DISPLAY_SCALE, fy=DISPLAY_SCALE,
+                      interpolation=cv2.INTER_AREA)
+
+
+def abre_auxiliar(indice):
+    """Abre a webcam auxiliar pelo backend de MENOR ATRASO, com fallback.
+
+    O problema que isto resolve: por padrao os backends do OpenCV ENFILEIRAM
+    varios frames e o `read()` devolve o mais ANTIGO. O video aparece "lento"
+    (mostra o passado) e o detector roda em cima de imagem defasada -- o
+    tabuleiro ja' se moveu quando o resultado sai. `CAP_PROP_BUFFERSIZE = 1`
+    corta a fila; onde o backend ignora a propriedade, o descarte inicial ja'
+    ajuda. Se o DSHOW nao entregar frame, cai para o MSMF.
+    """
+    for backend, nome in AUX_BACKENDS:
+        captura = cv2.VideoCapture(indice, backend)
+        if not captura.isOpened():
+            captura.release()
+            print(f"  auxiliar {indice}: backend {nome} nao abriu")
+            continue
+        captura.set(cv2.CAP_PROP_FRAME_WIDTH, AUX_REQUEST_SIZE[0])
+        captura.set(cv2.CAP_PROP_FRAME_HEIGHT, AUX_REQUEST_SIZE[1])
+        aceitou_buffer = captura.set(cv2.CAP_PROP_BUFFERSIZE, 1)
+        for _ in range(AUX_DESCARTE):
+            captura.read()
+        ok, quadro = captura.read()
+        if ok and quadro is not None:
+            print(f"  auxiliar {indice}: backend {nome} OK "
+                  f"({quadro.shape[1]}x{quadro.shape[0]}, buffer=1: "
+                  f"{'sim' if aceitou_buffer else 'backend ignorou'})")
+            return captura
+        captura.release()
+        print(f"  auxiliar {indice}: backend {nome} abriu mas nao entregou frame")
+    raise RuntimeError(
+        f"Nao consegui abrir a webcam auxiliar {indice}. Ela esta' conectada "
+        "e livre (nenhum outro programa usando)?")
+
+
+def abre_kinect(espera_s=ESPERA_KINECT_S):
+    """Abre o Kinect RGB e ESPERA o primeiro frame antes de seguir.
+
+    O Kinect e' OBRIGATORIO: o par estereo e' (Kinect RGB, auxiliar), nao ha'
+    como calibrar so' com a auxiliar. Sem esta espera o sintoma e' cruel, e foi
+    o que aconteceu na bancada: se o Kinect nao entrega frame, o loop principal
+    faz `continue` ANTES do `cv2.imshow` e NENHUMA JANELA APARECE. O programa
+    fica mudo, com cara de travado, sem dizer que o problema e' a camera.
+    Aqui ele falha ALTO e diz exatamente o que conferir.
+    """
+    print("  Kinect: abrindo o RGB (pode levar alguns segundos)...")
+    try:
+        runtime = PyKinectRuntime(PyKinectV2.FrameSourceTypes_Color)
+    except Exception as exc:
+        raise RuntimeError(
+            "Nao consegui abrir o Kinect v2. Confira: cabo USB 3.0 (porta "
+            "azul) DIRETO na maquina (sem hub/extensor), SDK do Kinect v2 "
+            "instalado, e nenhum outro programa (Kinect Studio, ferramenta de "
+            f"ground truth) usando a camera. Erro: {exc}") from exc
+    inicio = time.time()
+    while time.time() - inicio < espera_s:
+        if runtime.has_new_color_frame():
+            print(f"  Kinect: primeiro frame em {time.time() - inicio:.1f} s")
+            return runtime
+        time.sleep(0.005)
+    runtime.close()
+    raise RuntimeError(
+        f"O Kinect abriu mas NAO entregou frame em {espera_s:.0f} s. Ele e' "
+        "obrigatorio para a calibracao stereo (o par e' Kinect RGB + webcam "
+        "auxiliar). Confira o cabo USB 3.0 direto na maquina e se outro "
+        "programa nao esta' usando a camera.")
+
+
+def calibrate_one(aux_index):
+    """Calibra o par (Kinect RGB, webcam auxiliar `aux_index`).
+
+    Devolve 0 em caso de sucesso. Cada camera auxiliar tem a SUA propria sessao
+    de captura e o seu proprio arquivo stereo_calibration_aux{N}.npz.
+    """
     global AUX_CAMERA_INDEX
-    args = parse_args()
-    AUX_CAMERA_INDEX = int(args.aux_index)
-    print(f"Calibrando a webcam auxiliar de indice {AUX_CAMERA_INDEX} -> "
+    AUX_CAMERA_INDEX = int(aux_index)
+    # Nome REAL (Windows) da camera deste indice: e' o que denuncia o erro caro
+    # -- calibrar "a auxiliar" na webcam do LAPTOP (mesmo ponto de vista do
+    # Kinect, sem baseline). O nome vem de camera_names.py (enumeracao
+    # DirectShow, a mesma ordem do CAP_DSHOW).
+    nome_real = None
+    try:
+        import camera_names as nomes_mod
+    except ImportError:                   # pragma: no cover - sem comtypes
+        nomes_mod = None
+    if nomes_mod is not None:
+        nome_real = nomes_mod.nome_da_camera(AUX_CAMERA_INDEX)
+    print("=" * 72)
+    print(f"Calibrando a webcam auxiliar de indice {AUX_CAMERA_INDEX} "
+          f"({nome_real or AUX_CAMERA_NAMES.get(AUX_CAMERA_INDEX, '?')}) -> "
           f"{output_file(AUX_CAMERA_INDEX)}")
+    if nomes_mod is not None and nomes_mod.e_do_laptop(nome_real):
+        print(nomes_mod.aviso_laptop(
+            AUX_CAMERA_INDEX, "webcam do par estereo com o Kinect"))
     print_capture_guidance()
-    kinect = PyKinectRuntime(PyKinectV2.FrameSourceTypes_Color)
-    auxiliary = cv2.VideoCapture(AUX_CAMERA_INDEX)
-    auxiliary.set(cv2.CAP_PROP_FRAME_WIDTH, AUX_REQUEST_SIZE[0])
-    auxiliary.set(cv2.CAP_PROP_FRAME_HEIGHT, AUX_REQUEST_SIZE[1])
+    kinect = abre_kinect()
+    auxiliary = abre_auxiliar(AUX_CAMERA_INDEX)
     aux_width = int(auxiliary.get(cv2.CAP_PROP_FRAME_WIDTH))
     aux_height = int(auxiliary.get(cv2.CAP_PROP_FRAME_HEIGHT))
     kinect_width = kinect.color_frame_desc.Width
@@ -723,6 +1049,13 @@ def main():
     detection_count = 0
     cached_kinect_corners = None
     cached_auxiliary_corners = None
+    #: O SB falhou na deteccao anterior? Se sim, o classico entra na proxima --
+    #: e' exatamente o caso (contraste/ruido) em que ele mais ajuda.
+    sb_falhou_antes = False
+    #: Ultimo aviso de "camera sem frame" impresso (evita repetir a cada frame).
+    aviso_anterior = ""
+    #: Batimento de deteccao (ver bloco "sem par completo" no loop).
+    ultimo_aviso_detecao = 0.0
     try:
         while True:
             kinect_frame = None
@@ -734,16 +1067,59 @@ def main():
             if AUXILIARY_MIRROR_HORIZONTAL and auxiliary_ok:
                 auxiliary_frame = cv2.flip(auxiliary_frame, 1)
             if kinect_frame is None or not auxiliary_ok:
+                # AVISO VISIVEL: mostrar NADA quando uma camera cai deixa o
+                # programa com cara de travado -- foi exatamente o sintoma
+                # "rodei e nao apareceu nada". A janela diz QUAL camera caiu;
+                # o texto no terminal sai so' quando a lista muda.
+                faltando = []
+                if kinect_frame is None:
+                    faltando.append("Kinect RGB")
+                if not auxiliary_ok:
+                    faltando.append(f"auxiliar {AUX_CAMERA_INDEX}")
+                texto = ", ".join(faltando)
+                # Aviso montado JA' no tamanho da JANELA (DISPLAY_SCALE): aqui
+                # nao ha' imagem de camera para reduzir, entao as 4 linhas sao
+                # desenhadas direto no tamanho final (reduzir o quadro pronto
+                # deixaria as letras com ~5 px).
+                aviso = np.full(
+                    (int(200 * DISPLAY_SCALE), int(780 * DISPLAY_SCALE), 3),
+                    40, np.uint8)
+                cv2.putText(aviso, "SEM IMAGEM", (12, 32),
+                            cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 0, 255), 2)
+                cv2.putText(aviso, f"sem frame de: {texto}", (12, 58),
+                            cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 255, 255), 1)
+                cv2.putText(aviso, "confira o cabo USB (3.0 direto, sem hub) e",
+                            (12, 78), cv2.FONT_HERSHEY_SIMPLEX, 0.45,
+                            (200, 200, 200), 1)
+                cv2.putText(aviso, "se outro programa nao usa a camera | ESC sai",
+                            (12, 96), cv2.FONT_HERSHEY_SIMPLEX, 0.45,
+                            (200, 200, 200), 1)
+                cv2.imshow("Stereo - Kinect RGB", aviso)
+                cv2.imshow("Stereo - camera auxiliar", aviso)
+                if texto != aviso_anterior:
+                    print(f"  SEM FRAME de: {texto}. A janela mostra o aviso; "
+                          "confira o cabo/USB e se outro programa nao esta' "
+                          "usando a camera.")
+                    aviso_anterior = texto
                 if cv2.waitKey(1) & 0xFF == 27:
                     break
                 continue
+            #: Recuperou: zera para que uma NOVA queda volte a avisar.
+            aviso_anterior = ""
             now = cv2.getTickCount() / cv2.getTickFrequency()
             # Detecta a ~10 Hz e reusa os cantos entre frames: SB+fallback
             # em 1080p+720p por frame deixaria a interface inviavel.
             if now - last_detect >= DETECTION_INTERVAL_S:
-                allow_fallback = detection_count % FALLBACK_EVERY == 0
+                # O classico entra em TODO ciclo (FALLBACK_EVERY = 1): com o SB
+                # falhando em frames como os do Kinect, um gate "de vez em
+                # quando" faz a deteccao oscilar acha/falha e a estabilidade
+                # de 2 s nunca completa. Ver FALLBACK_EVERY.
+                allow_fallback = (sb_falhou_antes
+                                  or detection_count % FALLBACK_EVERY == 0)
                 kinect_corners = find_corners(kinect_frame, allow_fallback=allow_fallback)
                 auxiliary_corners = find_corners(auxiliary_frame, allow_fallback=allow_fallback)
+                sb_falhou_antes = (kinect_corners is None
+                                   or auxiliary_corners is None)
                 cached_kinect_corners = kinect_corners
                 cached_auxiliary_corners = auxiliary_corners
                 last_detect = now
@@ -753,20 +1129,33 @@ def main():
                 auxiliary_corners = cached_auxiliary_corners
             kinect_found = kinect_corners is not None
             auxiliary_found = auxiliary_corners is not None
-            kinect_display = kinect_frame.copy()
-            auxiliary_display = auxiliary_frame.copy()
+            # --- JANELAS (DISPLAY_SCALE) ------------------------------------
+            # A deteccao acima rodou na resolucao CHEIA; daqui para baixo e' o
+            # que o cv2.imshow mostra. Os cantos desenhados sao escalados pelo
+            # MESMO fator (senao sairiam fora do tabuleiro) e os TEXTOS entram
+            # depois da reducao: desenhados antes, encolheriam junto com a
+            # imagem e ficariam ilegiveis na janela da metade.
+            kinect_display = reduzir_janela(kinect_frame)
+            auxiliary_display = reduzir_janela(auxiliary_frame)
             if kinect_found:
+                # ORDEM CANONICA no desenho: o detector devolve os cantos na
+                # ordem da IMAGEM e as linhas de ligacao saem cruzadas/loucas
+                # (parece que ele achou a coisa errada). `canonical_order` e' a
+                # MESMA reordenacao usada nas amostras -> o operador ve' a grade
+                # seguindo o tabuleiro.
+                _, canonico = canonical_order(kinect_corners)
                 cv2.drawChessboardCorners(
                     kinect_display,
                     CHECKERBOARD_SIZE,
-                    kinect_corners.astype(np.float32).reshape(-1, 1, 2),
+                    (canonico * DISPLAY_SCALE).astype(np.float32).reshape(-1, 1, 2),
                     True,
                 )
             if auxiliary_found:
+                _, canonico = canonical_order(auxiliary_corners)
                 cv2.drawChessboardCorners(
                     auxiliary_display,
                     CHECKERBOARD_SIZE,
-                    auxiliary_corners.astype(np.float32).reshape(-1, 1, 2),
+                    (canonico * DISPLAY_SCALE).astype(np.float32).reshape(-1, 1, 2),
                     True,
                 )
             if AUXILIARY_DISPLAY_MIRROR:
@@ -775,9 +1164,18 @@ def main():
                 stable_text = f"estavel {max(0.0, now - stable_since):.1f}/2.0 s"
             else:
                 stable_text = "aguardando ambos"
+            # Mostra o TAMANHO do tabuleiro ao vivo: abaixo de
+            # MIN_BOARD_SPAN_FRACTION a amostra e' rejeitada, e sem esse numero
+            # o sintoma no video e' so' "piscar" sem o usuario saber o motivo.
+            kinect_pct = (board_span(kinect_corners) / kinect_diagonal
+                          if kinect_found else 0.0)
+            auxiliary_pct = (board_span(auxiliary_corners) / auxiliary_diagonal
+                             if auxiliary_found else 0.0)
             status = (
-                f"Kinect: {'OK' if kinect_found else 'falhou'} | "
-                f"Aux: {'OK' if auxiliary_found else 'falhou'} | "
+                f"Kinect: {'OK' if kinect_found else 'falhou'} "
+                f"({kinect_pct:.0%}) | "
+                f"Aux: {'OK' if auxiliary_found else 'falhou'} "
+                f"({auxiliary_pct:.0%}) | "
                 f"{len(object_points)}/{SAMPLES_REQUIRED} | {stable_text}"
             )
             for display in (kinect_display, auxiliary_display):
@@ -792,7 +1190,8 @@ def main():
                 )
                 cv2.putText(
                     display,
-                    "mantenha ambos por 2 s | ESC encerra",
+                    f"tabuleiro >= {MIN_BOARD_SPAN_FRACTION:.0%} da imagem | "
+                    "mantenha 2 s parado | ESC encerra",
                     (12, 60),
                     cv2.FONT_HERSHEY_SIMPLEX,
                     0.7,
@@ -805,6 +1204,26 @@ def main():
                 break
             if not (kinect_found and auxiliary_found):
                 stable_since = None
+                #: Batimento de diagnostico: silencio total quando a deteccao
+                #: falha e' cruel -- parece travado. A cada 5 s sem par completo,
+                #: imprime O QUE cada camera mostra (achou? brilho medio?) e
+                #: salva os frames em _hb_*.png para analise externa.
+                if now - ultimo_aviso_detecao >= 5.0:
+                    mk = (f"brilho {kinect_frame.mean():.0f}"
+                          if kinect_frame is not None else "sem frame")
+                    ma = (f"brilho {auxiliary_frame.mean():.0f}"
+                          if auxiliary_ok else "sem frame")
+                    print(
+                        f"  deteccao sem par completo "
+                        f"(Kinect {'OK' if kinect_found else 'nao'} {mk} | "
+                        f"aux {AUX_CAMERA_INDEX} "
+                        f"{'OK' if auxiliary_found else 'nao'} {ma}); "
+                        "frames salvos em _hb_*.png", flush=True)
+                    ultimo_aviso_detecao = now
+                    if kinect_frame is not None:
+                        cv2.imwrite("_hb_kinect.png", kinect_frame)
+                    if auxiliary_ok:
+                        cv2.imwrite("_hb_aux.png", auxiliary_frame)
                 continue
             if stable_since is None:
                 stable_since = now
@@ -828,6 +1247,26 @@ def main():
                 continue
             _, kinect_canonical = canonical_order(kinect_corners)
             _, auxiliary_canonical = canonical_order(auxiliary_corners)
+            #: Guarda de variedade: amostra quase IGUAL a uma ja' coletada nao
+            #: acrescenta geometria -- 15 amostras de UMA pose = extrinseca
+            #: degenerada com RMS enganosamente bom. Exige que o centro do
+            #: tabuleiro (na imagem do Kinect) esteja afastado de TODOS os
+            #: centros ja' coletados; o tabuleiro parado deixa de virar lixo.
+            if kinect_points:
+                centros = np.array([
+                    p.reshape(-1, 2).mean(axis=0) for p in kinect_points
+                ])
+                centro_novo = kinect_canonical.reshape(-1, 2).mean(axis=0)
+                separacao = float(
+                    np.linalg.norm(centros - centro_novo, axis=1).min()
+                )
+                if separacao < MIN_POSE_SEPARATION * kinect_span:
+                    print(
+                        f"Pose quase igual a uma ja' coletada "
+                        f"({separacao:.0f} px); MEXA no tabuleiro -- mude "
+                        "distancia, inclinacao ou posicao antes da proxima."
+                    )
+                    continue
             object_points.append(board.copy())
             kinect_points.append(kinect_canonical.reshape(-1, 1, 2))
             auxiliary_points.append(auxiliary_canonical.reshape(-1, 1, 2))
@@ -871,7 +1310,71 @@ def main():
         auxiliary.release()
         kinect.close()
         cv2.destroyAllWindows()
+    return 0
+
+
+def main():
+    """Calibra cada camera auxiliar pedida, uma sessao de captura de cada vez."""
+    global DETECTION_WIDTHS, DETECTION_CLAHE_CLIP, DETECTION_SB_FLAGS
+    args = parse_args()
+    global CHECKERBOARD_COLS, CHECKERBOARD_ROWS, CHECKERBOARD_SIZE, SQUARE_SIZE_M
+    if args.checkerboard:
+        texto = args.checkerboard.lower().replace(" ", "")
+        for separador in ("x", ",", "*"):
+            if separador in texto:
+                cols_txt, rows_txt = texto.split(separador, 1)
+                break
+        else:
+            print(f"ERRO: --checkerboard '{args.checkerboard}' nao esta' no "
+                  "formato COLSxROWS (ex.: 5x3).")
+            return 2
+        try:
+            cols, rows = int(cols_txt), int(rows_txt)
+        except ValueError:
+            print(f"ERRO: --checkerboard '{args.checkerboard}' nao esta' no "
+                  "formato COLSxROWS (ex.: 5x3).")
+            return 2
+        if cols < 3 or rows < 3:
+            print(f"ERRO: --checkerboard {cols}x{rows} invalido (minimo 3x3).")
+            return 2
+        CHECKERBOARD_COLS, CHECKERBOARD_ROWS = cols, rows
+        CHECKERBOARD_SIZE = (cols, rows)
+    if args.quadrado:
+        if args.quadrado <= 0:
+            print(f"ERRO: --quadrado {args.quadrado} tem de ser > 0.")
+            return 2
+        SQUARE_SIZE_M = args.quadrado / 1000.0
+    print(f"Tabuleiro: {CHECKERBOARD_COLS}x{CHECKERBOARD_ROWS} cantos "
+          f"internos, quadrado de {SQUARE_SIZE_M * 1000:g} mm")
+    DETECTION_WIDTHS = tuple(int(v) for v in args.largura_deteccao)
+    DETECTION_CLAHE_CLIP = float(args.clahe)
+    DETECTION_SB_FLAGS = 0 if args.rapido else cv2.CALIB_CB_EXHAUSTIVE
+    print(f"Detector: larguras {DETECTION_WIDTHS} (0 = cheia) | "
+          f"CLAHE {DETECTION_CLAHE_CLIP:g} | flags {DETECTION_SB_FLAGS}")
+    #: dict.fromkeys preserva a ordem e remove indices repetidos.
+    indices = list(dict.fromkeys(int(i) for i in args.aux_index))
+    if len(indices) > 1:
+        print(f"Vao ser calibradas {len(indices)} auxiliares, UMA DE CADA VEZ: "
+              f"{indices}")
+        print("Cada sessao tem o seu proprio minimo de 15 amostras; ESC "
+              "encerra a sessao atual e passa para a proxima.")
+    for posicao, aux_index in enumerate(indices, start=1):
+        if len(indices) > 1:
+            print(f"\n##### AUXILIAR {posicao}/{len(indices)} "
+                  f"(indice {aux_index}) #####")
+        try:
+            if calibrate_one(aux_index) != 0:
+                return 1
+        except RuntimeError as exc:
+            #: Falha de camera sai como INSTRUCAO, nao como traceback cru: e' o
+            #: caso "esqueci o Kinect conectado", e um traceback do pykinect2
+            #: nao diz nada de util.
+            print(f"\nERRO: {exc}")
+            return 2
+    return 0
 
 
 if __name__ == "__main__":
-    main()
+    #: sys.exit propaga o codigo: sem isso um erro de camera terminava com
+    #: codigo 0 e os .bat/scripts nao tinham como perceber a falha.
+    sys.exit(main())

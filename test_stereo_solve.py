@@ -167,7 +167,12 @@ def run_scenario(name, object_points, kinect_points, auxiliary_points, poses, rn
     # que a sobreposicao usa: pixel da auxiliar + Z do Kinect -> pixel Kinect)
     board = sc.board_object_points()
     rvec_k, tvec_k, _, _ = poses[2]
-    sample = board.reshape(-1, 3)[[0, 10, 27, 47]]
+    # Cantos espalhados pelo tabuleiro, DERIVADOS do tamanho atual: antes o teste
+    # fixava [0, 10, 27, 47], indices que so' existem no tabuleiro 8x6 antigo (o
+    # de hoje, gravado nas calibracoes aux1/aux2, e' 5x3 = 15 cantos).
+    cantos_tabuleiro = board.reshape(-1, 3)
+    total = len(cantos_tabuleiro)
+    sample = cantos_tabuleiro[[0, total // 3, 2 * total // 3, total - 1]]
     points_kinect = sample @ cv2.Rodrigues(rvec_k)[0].T + tvec_k.reshape(1, 3)
     rot_est = np.asarray(final["rotation"], np.float64)
     trans_est = np.asarray(final["translation"], np.float64).reshape(1, 3)

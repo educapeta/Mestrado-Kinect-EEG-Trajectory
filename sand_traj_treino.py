@@ -10,8 +10,9 @@ KT_* = landmark 9 do MediaPipe Hands (centro da palma) triangulado para 3D,
 em metros, RELATIVO a origem (mao apoiada na mesa na calibracao inicial).
 
 Pre-processamento identico ao tempo real (sand_traj_tempo_real.py):
-    filtro banda 1-30 Hz (scipy, zero-phase) -> selecao de canais ->
-    CAR -> z-score por canal (window por janela ou dataset pelos stats).
+    filtro banda 1-30 Hz (scipy, CAUSAL por padrao -- ver --filtro) ->
+    selecao de canais -> CAR -> z-score por canal (window por janela ou
+    dataset pelos stats).
 
 Uso:
     python sand_traj_treino.py --data gravacoes/
@@ -38,6 +39,15 @@ from torch.utils.data import DataLoader, Dataset, Subset
 import sand_trajectory_model as st
 
 TRAJ_AXIS_ORDER = {"x": 0, "y": 1, "z": 2}
+
+#: Aquecimento (s) do filtro CAUSAL. O tempo real (g.Pype Bandpass) filtra o
+#: FLUXO continuo, entao a janela chega sem o transiente de partida do filtro.
+#: Para reproduzir isso offline o treino filtra um prefixo ANTES da janela e
+#: descarta o prefixo; sem ele trocariamos o vies otimista do `sosfiltfilt` por
+#: um artefato de transiente que NAO existe em tempo real.
+FILTRO_WARMUP_SEC = 2.0
+FILTRO_CAUSAL = "causal"
+FILTRO_ZERO_FASE = "zero-fase"
 
 try:
     from sklearn.model_selection import KFold
@@ -103,6 +113,14 @@ def parse_args():
                              "graus (padrao 15,178)")
     parser.add_argument("--f-lo", type=float, default=st.DEFAULT_F_LO)
     parser.add_argument("--f-hi", type=float, default=st.DEFAULT_F_HI)
+    parser.add_argument("--filtro", choices=[FILTRO_CAUSAL, FILTRO_ZERO_FASE],
+                        default=FILTRO_CAUSAL,
+                        help="Filtro da banda. 'causal' (padrao) e' o MESMO do "
+                             "tempo real (g.Pype Bandpass), com "
+                             f"{FILTRO_WARMUP_SEC:g} s de aquecimento antes da "
+                             "janela para nao introduzir transiente; "
+                             "'zero-fase' usa sosfiltfilt (sem transiente, mas "
+                             "ve' o futuro -- vies otimista, so' p/ comparacao)")
     parser.add_argument("--alvo", choices=["posicao", "velocidade"],
                         default="posicao",
                         help="Formulacao do alvo: 'posicao' (m, padrao) ou "
@@ -248,7 +266,8 @@ class Recording:
 
     def __init__(self, csv_path, events_path, fs, window_n, output_seq_len,
                  event_code, ktt_valid_min, f_lo, f_hi, start_offset=0,
-                 target_offset=None, target_n=None, alvo="posicao"):
+                 target_offset=None, target_n=None, alvo="posicao",
+                 filtro=FILTRO_CAUSAL):
         self.path = csv_path
         self.events_path = events_path
         self.fs = float(fs)
@@ -267,6 +286,9 @@ class Recording:
         #: e para controle de protese (integrar no tempo real).
         self.alvo = str(alvo)
         self.f_lo, self.f_hi = float(f_lo), float(f_hi)
+        #: Filtro da banda: FILTRO_CAUSAL (igual ao tempo real) ou
+        #: FILTRO_ZERO_FASE (sosfiltfilt, so' para comparacao).
+        self.filtro = str(filtro)
         self.header = None
         self.eeg_cols = []
         self.kt_cols = []
@@ -395,6 +417,55 @@ class Recording:
                 valid[lidas:] = 0.0
         return eeg, kt, valid
 
+    def _load_eeg(self, start, n):
+        """Le SO' as colunas de EEG (n linhas a partir de start).
+
+        Usado pelo aquecimento do filtro causal, onde a trajetoria do punho nao
+        interessa -- evita a busca no relogio do movimento (self.motion.at).
+        """
+        eeg = np.zeros((n, len(self.eeg_cols)), np.float64)
+        if start < 0:                          # nao existe amostra antes do 0
+            return eeg
+        with open(self.path, "r", encoding="utf-8-sig") as handle:
+            reader = csv.reader(handle)
+            next(reader)                       # pula o cabecalho
+            for row_index, row in enumerate(reader):
+                if row_index < start:
+                    continue
+                if row_index >= start + n:
+                    break
+                local = row_index - start
+                for channel, col_index in enumerate(self.eeg_cols):
+                    eeg[local, channel] = _to_float(row[col_index])
+        return eeg
+
+    def _filtra_janela(self, sos, start, eeg):
+        """Filtra a janela do MESMO jeito que o tempo real filtra.
+
+        - FILTRO_CAUSAL (padrao): `sosfilt`, isto e', so' o PASSADO influencia
+          o presente -- igual ao g.Pype Bandpass do tempo real. Para nao herdar
+          o transiente de partida do filtro, o filtro comeca
+          `FILTRO_WARMUP_SEC` antes da janela e o prefixo e' descartado (o
+          tempo real ja' vem filtrado do inicio da sessao).
+        - FILTRO_ZERO_FASE: `sosfiltfilt` (padrao antigo do treino). Nao tem
+          transiente, mas ve' o FUTURO -- vies otimista que o tempo real nao
+          tem. Fica disponivel so' para comparacao.
+        """
+        canais = eeg.shape[1]
+        if self.filtro != FILTRO_CAUSAL:
+            return np.asarray([scipy.signal.sosfiltfilt(sos, eeg[:, ch])
+                               for ch in range(canais)], np.float64)
+        aquecimento = int(round(FILTRO_WARMUP_SEC * self.fs))
+        inicio = max(0, start - aquecimento)
+        prefixo_n = start - inicio
+        if prefixo_n <= 0:                     # janela ja' no inicio do arquivo
+            return np.asarray([scipy.signal.sosfilt(sos, eeg[:, ch])
+                               for ch in range(canais)], np.float64)
+        trecho = self._load_eeg(inicio, prefixo_n + self.window_n)
+        filtrado = np.asarray([scipy.signal.sosfilt(sos, trecho[:, ch])
+                               for ch in range(canais)], np.float64)
+        return filtrado[:, prefixo_n:prefixo_n + self.window_n]
+
     def build_epochs(self, event_samples, com_braco=False):
         """Monta (X (N,C,T) filtrado, Y (N,seq,3)) para cada evento pedido.
 
@@ -429,8 +500,7 @@ class Recording:
             # abaixo) usa (C, T). O `.T` que existia aqui trocava os eixos e
             # fazia o treino receber "1000 canais x 1000 amostras" -- bug
             # pego em 18/09/2026 gerando sessoes sinteticas para o piloto.
-            filtered = np.asarray([scipy.signal.sosfiltfilt(sos, eeg[:, ch])
-                                   for ch in range(eeg.shape[1])], np.float64)
+            filtered = self._filtra_janela(sos, start, eeg)
             target = st.trajectory_resample(kt_target, self.output_seq_len)
             if self.alvo == "velocidade":
                 # Intervalo entre pontos da grade reamostrada (s): a janela do
@@ -600,6 +670,11 @@ def load_all_epochs(recordings, args, com_braco=False):
           + (" (m/s -- a posicao vem de integracao no tempo real)"
              if formulacao == "velocidade"
              else " (m, posicao relativa a origem)"), flush=True)
+    filtro = getattr(args, "filtro", FILTRO_CAUSAL)
+    print(f"Filtro da banda {args.f_lo:g}-{args.f_hi:g} Hz: {filtro}"
+          + (f" (sosfilt causal, {FILTRO_WARMUP_SEC:g} s de aquecimento -- "
+             "igual ao tempo real)" if filtro == FILTRO_CAUSAL
+             else " (sosfiltfilt zero-fase -- vies otimista)"), flush=True)
     for session, (csv_path, events_path) in enumerate(recordings):
         record = Recording(csv_path, events_path, args.fs,
                            int(args.window_sec * args.fs),
@@ -609,7 +684,8 @@ def load_all_epochs(recordings, args, com_braco=False):
                            target_offset=int(target_start * args.fs),
                            target_n=max(1, int((target_end - target_start)
                                                * args.fs)),
-                           alvo=getattr(args, "alvo", "posicao"))
+                           alvo=getattr(args, "alvo", "posicao"),
+                           filtro=getattr(args, "filtro", FILTRO_CAUSAL))
         record._parse_header()
         eventos = record.list_event_samples()
         if com_braco:
@@ -791,6 +867,7 @@ def run_training(args, x_train, y_train, x_val, y_val, channel_map,
         "zscore": args.zscore,
         "f_lo": args.f_lo,
         "f_hi": args.f_hi,
+        "filtro": str(getattr(args, "filtro", FILTRO_CAUSAL)),
         "channel_map": [int(ch) + 1 for ch in channel_map],
         "window_start_sec": float(args.window_start_sec),
         "window_sec": args.window_sec,
