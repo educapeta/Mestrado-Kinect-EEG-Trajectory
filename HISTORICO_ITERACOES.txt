@@ -3916,3 +3916,85 @@ ITEM 54 (09/10/2026) - DECISAO: o ESP32 vira CENTRAL com os 2 IMUs (1 placa no l
   `tools\diagnostico_imu_serial.py COMx 115200 10` procurando
   "[i2c] barramento vivo". Credenciais de Wi-Fi NAO vao no repo (copiar
   `src/credenciais.h.example` -> `src/credenciais.h`).
+ITEM 55 (13/10/2026) - BANCADA DE CASA: 2 IMUs no flat de 2 m, pull-ups de 2,2k e 4 bugs do esp32_duas_imus
+  Contexto: antes de voltar para a bancada Kinect, o usuario levou o ESP32 central
+  (firmware/esp32_duas_imus) para casa com os DOIS MPU6050 ligados num flat cable
+  de 2 m (um por mao, para fixar no dorso das maos). Sessao de diagnostico I2C
+  nesta maquina (COM6, placa uPesy WROOM).
+
+  Fluxo de gravacao que passou a valer (o usuario grava, o Cline diagnostica):
+  `gravar.bat COM6` -> tecla qualquer tecla -> SEGURE o BOOT durante o
+  "Connecting..." -> solte em "Writing at 0x000..." -> desligue e religue o USB.
+  ATENCAO: a porta default do .bat e' COM4 (no outro desktop e' a placa); aqui
+  COM4 e' uma porta Bluetooth fantasma, entao a porta TEM que vir como argumento.
+  Upload por esptool direto tambem funciona, mas com o esptool do PACOTE do
+  PlatformIO (`~\.platformio\packages\tool-esptoolpy\esptool.py`); o
+  `python -m esptool` do penv nao existe (erro "No module named esptool").
+
+  QUATRO BUGS CORRIGIDOS no firmware (compilados e gravados nesta sessao):
+  1) O sondeo de pinos so' testava a orientacao (sda,scl) com b>a, ou seja,
+     NUNCA testava (scl,sda). A bancada fixa SCL em D21 e SDA em D22 (INVERTIDO
+     do padrao do ESP32), entao o sondeo imprimia "NENHUM MPU6050 respondeu em
+     NENHUM par de GPIO" mesmo com modulo bom e cabo curto -- custou ~1 h de
+     desvio. Agora testa as DUAS orientacoes de cada par e marca no log quando
+     acha a orientacao da bancada.
+  2) O sondeo nao definia timeout do Wire: o padrao do driver e' 1000 ms por
+     transacao, e 306 combinacoes x 2 transacoes = ~10 MINUTOS de silencio antes
+     da primeira linha quando o barramento nao responde (diagnosticos de 45-50 s
+     liam o vazio e pareciam "placa morta"). Agora `Wire.setTimeOut(15)`.
+  3) Clock I2C 400 kHz -> 100 kHz -> 50 kHz. Com flat de 2 m (~300-400 pF com os
+     dois modulos) e pull-ups de 2,2k o tempo de subida fica ~0,7 us: no limite
+     em 100 kHz, confortavel em 50 kHz. A taxa necessaria e' ~24 kbit/s
+     (2 IMUs x 100 Hz), irrelevante para o barramento.
+  4) platformio.ini sem `monitor_speed` -> o monitor do PlatformIO abria a 9600
+     baud e mostrava "caracteres confusos". Adicionado `monitor_speed = 115200`.
+
+  ACHADOS DE HARDWARE da bancada:
+  - AD0 no 3V3 e' LEGITIMO (GND->0x68, 3V3->0x69, conforme documentacao). A
+    teoria de que "AD0 no 3V3 deixa o chip inativo" foi REFUTADA ao vivo: o
+    modulo de AD0->3V3 respondeu no 0x69 com bias plausivel. O que "nasce
+    inativo" e' o SLEEP do registrador 0x6B (PWR_MGMT_1), e o firmware ja'
+    acorda os DOIS MPUs antes de calibrar.
+  - LED de forca NAO e' indicador confiavel: o modulo que funcionou primeiro
+    estava com o LED apagado e o outro com LED aceso. O unico teste que vale e'
+    o sondeo I2C.
+  - Pull-ups EXTERNOS de 2,2k (SDA->3V3 e SCL->3V3, junto ao ESP32) foram
+    NECESSARIOS para o flat de 2 m: sem eles o barramento nao respondia em nenhum
+    par de GPIO. Torcao: o que mais conta e' o GND vizinho ao sinal (o retorno
+    da corrente e' o GND, nao o 3V3); com fita de 4 condutores, reordenar para
+    SDA-GND-SCL-3V3 ja' melhora (GND entre os dois sinais).
+  - MASCARAMENTO NO LOOP: com um MPU ausente, o `delay(100)` do lado que falha
+    faz o `dt` do lado bom passar de 0,1 s, e o `if (dt <= 0.1f)` ENGOLE os
+    dados do lado bom (medido: 1 linha de dados em 21 s com o 0x68 saudavel).
+    Na bancada: com um IMU morto, o outro TAMBEM parece morto.
+
+  ESTADO AO FINAL DA SESSAO (nao resolvido -- levar para a bancada):
+  - MPU 0x68: responde no sondeo e calibra com bias NAO nulo, mas 302/500
+    leituras deram NACK; MPU 0x69: 500/500 NACK e bias exatamente zero. NENHUMA
+    linha de dados nos dois lados.
+  - O pino de SCL reportado pelo sondeo TROCA entre boots (D26, D23, D25). Um
+    fio fisico nao muda de pino: ou ha' contato intermitente em varios pontos,
+    ou o barramento e' tao marginal que o sondeo captura ACK falso. Nao da' para
+    confiar nos dados ainda.
+  - O usuario identificou CABO USB COM MAU CONTATO no ESP32 -- suspeito de peso:
+    o 3,3 V da placa vem do VBUS e os MPU6050 estao nesse mesmo trilho, entao um
+    contato marginal sagga a tensao e produz exatamente este quadro (NACK
+    intermitente, bias zerado, "pino trocando entre boots"). Corrigir o USB e'
+    o PRIMEIRO passo da bancada, antes de mexer em resistor ou cabo de dados.
+
+  PLANO PARA A BANCA (nesta ordem):
+  1) Trocar/reapertar o cabo USB, testar outra porta; entao rodar
+     `tools\diagnostico_imu_serial.py COMx 115200 75` procurando: bias NAO nulo
+     nos DOIS modulos, 'Erro de leitura I2C D'/'E' = 0 e dados nos DOIS lados.
+  2) Se ainda falhar: teste de flexao (5 s mexendo / 5 s parado) para separar
+     contato mecanico de sinal. FECHAR o monitor serial antes -- ele toma a COM
+     e derruba a captura no meio (medido: PermissionError 13 na leitura).
+  3) Reordenar o flat de 4 condutores para SDA-GND-SCL-3V3; se sobrar ruido,
+     fita de 6 condutores (GND-SDA-GND-SCL-GND-3V3) ou pares torcidos.
+  4) Pull-ups mantidos em 2,2k; se preciso, 1k.
+
+  Ambiente: `pyserial` nao esta' no requirements.txt desta maquina (o .venv daqui
+  nao tem) -- `diagnostico_imu_serial.py`, `imu_serial_bridge.py` e
+  `teste_imu_dois_esp32.py` precisam dele; rodar com o python do penv do
+  PlatformIO ou adicionar pyserial ao requirements.
+

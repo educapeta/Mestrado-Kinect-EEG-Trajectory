@@ -205,18 +205,38 @@ void setupI2c() {
   bool jaBegin = false;
   for (size_t a = 0; a < n && endereco == 0; a++) {
     for (size_t b = a + 1; b < n && endereco == 0; b++) {
-      const int sda = PinosI2cCandidatos[a];
-      const int scl = PinosI2cCandidatos[b];
-      if (jaBegin) Wire.end();
-      Wire.begin(sda, scl);
-      Wire.setClock(400000);
-      jaBegin = true;
-      if (algumMpuResponde(endereco)) {
-        SDA_PIN = sda;
-        SCL_PIN = scl;
-        Serial.printf("[i2c] barramento vivo em SDA=%d SCL=%d (endereco 0x%02X)\n",
-                      sda, scl, endereco);
-        return;
+      // Testa as DUAS orientacoes de cada par. A bancada fixa SCL em D21 e SDA
+      // em D22 (INVERTIDO do padrao do ESP32, onde SDA=21 e SCL=22); um sondeo
+      // que so' testasse (sda,scl) com b>a nunca enxergava esse barramento e
+      // imprimia "NENHUM MPU6050 respondeu em NENHUM par" mesmo com modulo bom
+      // e cabo curto -- medido na bancada em 13/10/2026.
+      const int orientacoes[2][2] = {{PinosI2cCandidatos[a], PinosI2cCandidatos[b]},
+                                     {PinosI2cCandidatos[b], PinosI2cCandidatos[a]}};
+      for (int o = 0; o < 2 && endereco == 0; o++) {
+        const int sda = orientacoes[o][0];
+        const int scl = orientacoes[o][1];
+        if (jaBegin) Wire.end();
+        Wire.begin(sda, scl);
+        // Timeout CURTO: sem isto cada transacao de um barramento mudo espera o
+        // padrao de 1000 ms do driver, e 306 combinacoes x 2 transacoes viram
+        // ~10 MINUTOS de silencio antes da primeira linha do log (medido na
+        // bancada em 13/10/2026 com o flat de 2 m).
+        Wire.setTimeOut(15);
+        // 50 kHz: o barramento da bancada usa flat de 2 m (~300-400 pF com os
+        // dois modulos). Com pull-ups de 2,2 k o tempo de subida fica ~0,7 us;
+        // a 100 kHz ainda era intermitente (bias zerado, pinos trocando entre
+        // boots -- medido em 13/10/2026), entao baixamos para 50 kHz, que dobra
+        // a margem de tempo. A taxa necessaria e' minuscula (2 IMUs x 100 Hz).
+        Wire.setClock(50000);
+        jaBegin = true;
+        if (algumMpuResponde(endereco)) {
+          SDA_PIN = sda;
+          SCL_PIN = scl;
+          Serial.printf("[i2c] barramento vivo em SDA=%d SCL=%d (endereco 0x%02X)%s\n",
+                        sda, scl, endereco,
+                        (sda == 22 && scl == 21) ? "  [bancada: SCL=D21, SDA=D22]" : "");
+          return;
+        }
       }
     }
   }
@@ -227,7 +247,8 @@ void setupI2c() {
                  "Seguindo com SDA=22 SCL=23.");
   Wire.end();
   Wire.begin(SDA_PIN, SCL_PIN);
-  Wire.setClock(400000);
+  Wire.setTimeOut(15);
+  Wire.setClock(50000);
 }
 
 void setup() {

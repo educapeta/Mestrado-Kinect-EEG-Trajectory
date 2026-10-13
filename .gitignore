@@ -89,3 +89,9 @@ _*.json
 /_probe*
 /_diag_*
 /_suite*
+/_suite*
+
+# Estado de IDE criado na pasta firmware/ (nao confundir com os .vscode/
+# versionados DENTRO de cada projeto, tipo firmware/esp32_luvas/.vscode)
+/firmware/.vscode/
+
