@@ -1,17 +1,27 @@
 """Teste de bancada dos DOIS IMUs (luvas) -- sem EEG, sem Kinect, sem g.Pype.
 
-PRE-REQUISITO DE REDE (medido em 23/09/2026): o firmware envia UNICAST para
-192.168.137.1:4210/4211 (direita/esquerda), que e' o endereco do Ponto de acesso
-movel (ICS) do notebook -- SSID "DUDU_LAPTOP 2897". Com o hotspot DESLIGADO nao
-existe 192.168.137.x nenhum, e este teste fica mudo (nao ha' o que receber). Antes
-de rodar, confira no PowerShell:
+PRE-REQUISITO DE REDE (medido em 23/09/2026 e ATUALIZADO em 28/09/2026): o
+firmware envia UNICAST para 192.168.137.1:4210/4211 (direita/esquerda), que e' o
+endereco do Ponto de acesso movel (ICS) do PC -- agora SSID "EDUARDO-PC 9049"
+(senha 0011223344; o SSID anterior era "DUDU_LAPTOP 2897", de outro notebook).
+Com o hotspot DESLIGADO nao existe 192.168.137.x nenhum, e este teste fica mudo
+(nao ha' o que receber). O jeito rapido de conferir TUDO de uma vez (SSID x
+hostname, ICS, firewall, portas livres e escuta) e':
+
+    .venv\\Scripts\\python.exe tools\\diagnostico_hotspot.py --escutar 20
+
+Se quiser conferir na mao, no PowerShell:
 
     Get-Service icssvc                       # Windows Mobile Hotspot: Running
     Get-NetIPAddress -AddressFamily IPv4 | Where-Object IPAddress -like '192.168.137.*'
     arp -a | Select-String '192.168.137'     # as duas luvas (uma vez conectadas)
 
 Se o hotspot nao estiver de pe', ligue-o em Configuracoes > Rede e Internet >
-Ponto de acesso movel (o toggle da tela sozinho nao garante que o servico subiu).
+Ponto de acesso movel (o toggle da tela sozinho nao garante que o servico subiu,
+e a FAIXA tem de ser 2,4 GHz -- o ESP32 nao ve 5 GHz). O firewall do Windows
+tambem precisa de uma regra de ENTRADA UDP: existir uma regra "Python" NAO basta,
+porque regra de programa vale so' para aquele python.exe (a desta maquina e' a
+do python da Loja, nao a do .venv).
 
 Para que serve: conferir, antes da sessao, que os dois ESP32 estao enviando, a
 que taxa, com que atraso, e (se pedido) GRAVAR as duas amostras simultaneamente

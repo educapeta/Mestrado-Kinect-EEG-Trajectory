@@ -112,6 +112,7 @@ import os
 import queue
 import random
 import signal
+import sys
 import threading
 import time
 from collections import deque
@@ -486,6 +487,10 @@ class SharedState:
         self.video_frames = []
         self.video_ready = False
         self._video_pos = 0
+        #: Duracao REAL (s) do trecho de movimento coberto por `video_frames`.
+        #: O playback em 0,5x usa-a (ver _video_tick): sem ela o clipe seria
+        #: tocado a 30 fps fixos e acabaria antes da pausa (tela congelada).
+        self.video_dur = 0.0
         self.slowmo_request = None       # monotonic do pedido pendente
         self.quit_requested = False      # tecla 'q' no overlay
 
@@ -500,6 +505,7 @@ class SharedState:
             self.video_frames = []
             self.video_ready = False
             self._video_pos = 0
+            self.video_dur = 0.0
             self.slowmo_request = (time.monotonic(), destino)
 
     def take_slowmo_request(self):
@@ -509,11 +515,28 @@ class SharedState:
             self.slowmo_request = None
             return pedido
 
-    def publish_video(self, frames):
+    def publish_video(self, frames, duracao_real=None):
+        """Publica o clipe pronto.
+
+        `duracao_real` (s) e' o tempo de movimento coberto pelos quadros (o
+        intervalo entre o 1o e o ultimo do buffer): e' ela que define a
+        camera lenta de 0,5x no playback (ver _video_tick). None = desconhecida.
+        """
         with self.lock:
             self.video_frames = list(frames)
+            self.video_dur = float(duracao_real or 0.0)
             self.video_ready = True
             self._video_pos = 0
+
+    def video_snapshot(self):
+        """Copia dos quadros do clipe + duracao real, SEM consumir o clipe.
+
+        O playback e' cronometrado pelo relogio (indice por tempo), entao nao
+        pode consumir quadro-a-quadro: com buffer lento o clipe acabava em
+        0,2-0,4 s e a janela congelava no ultimo quadro.
+        """
+        with self.lock:
+            return list(self.video_frames), self.video_dur
 
     def take_video_frame(self):
         """Proximo quadro do clipe, ou None se acabou/ainda nao esta pronto."""
@@ -529,6 +552,7 @@ class SharedState:
             self.video_frames = []
             self.video_ready = False
             self._video_pos = 0
+            self.video_dur = 0.0
 
     @property
     def needs_arm_calibration(self):
@@ -1553,8 +1577,15 @@ class TrackingThread(threading.Thread):
                                    False, (0, 255, 255), 3)
                 self.cv2.circle(copia, tuple(pixels[-1]), 7, (0, 0, 255), -1)
             clipe.extend([copia] * repeticoes)
-        self.state.publish_video(clipe)
-        print(f"[video] clipe do movimento: {len(frames)} quadros reais -> "
+        # Duracao REAL coberta pelo clipe: o intervalo entre o 1o e o ultimo
+        # quadro escolhido do buffer. E' ela que define o 0,5x do playback --
+        # e a taxa de captura (fps) impressa abaixo explica um clipe "travado"
+        # (o buffer so' recebe um quadro por iteracao do laço do tracking).
+        dur_real = (frames[-1][0] - frames[0][0]) if len(frames) > 1 else 0.0
+        self.state.publish_video(clipe, duracao_real=dur_real)
+        taxa = ((len(frames) - 1) / dur_real) if dur_real > 0 else 0.0
+        print(f"[video] clipe do movimento: {len(frames)} quadros reais em "
+              f"{dur_real:.2f} s de movimento ({taxa:.1f} fps de captura) -> "
               f"{len(clipe)} em {SLOWMO_SPEED:g}x "
               f"({len(clipe) / SLOWMO_CAPTURE_FPS:.1f} s de video)", flush=True)
         if destino:
@@ -1646,6 +1677,108 @@ class TrackingThread(threading.Thread):
 # =============================================================================
 # Paradigma Qt (janela de estimulos + maquina de estados)
 # =============================================================================
+# ----------------------------------------------------------------------------
+# Geometria do cue (objeto + seta): funcoes PURAS, fora da classe, para o
+# teste travar a folga e a costura SEM renderizar (Qt).
+# ----------------------------------------------------------------------------
+CAIXA_OBJETO_FRAC = 0.30      # lado da caixa quadrada do objeto / menor lado
+LINHA_CUE_FRAC = 0.40         # cy do objeto e da seta (linha do cue)
+MARGEM_SETA_FRAC = 0.06       # margem da ponta da seta na borda da tela
+COMPRIMENTO_SETA_FRAC = 0.30  # comprimento "desejado" da seta
+FOLGA_CUE_FRAC = 0.05         # folga minima objeto <-> seta (menor lado)
+
+
+def geometria_cue(width, height, mao=None):
+    """Caixa do objeto e span x da seta, em pixels (sem objetos Qt).
+
+    A seta e' ENCURTADA para respeitar `FOLGA_CUE_FRAC` de folga contra a
+    caixa do objeto em QUALQUER proporcao de tela. Motivo (medido em
+    30/09/2026): em telas quasi-quadradas a cauda da seta invadia o objeto
+    (900x900 = -9 px, 700x900 = -7 px; em 1920x1050 havia 372 px de folga),
+    e foi o que o usuario viu ("a seta sobreposta no icone").
+
+    Retorna: `lado` da caixa, `cx`/`cy`, `objeto_x` (x_esq, x_dir),
+    `folga`, `seta_x` (x_min, x_max; None se `mao` nao e' lateral) e
+    `comprimento`.
+    """
+    menor = min(width, height)
+    lado = menor * CAIXA_OBJETO_FRAC
+    cx = width / 2.0
+    cy = height * LINHA_CUE_FRAC
+    folga = menor * FOLGA_CUE_FRAC
+    margem = width * MARGEM_SETA_FRAC
+    objeto_x = (cx - lado * 0.5, cx + lado * 0.5)
+    seta_x, comprimento = None, 0.0
+    if mao == "esquerda":
+        ponta = margem                     # ponta encostada na borda esquerda
+        limite = objeto_x[0] - folga       # x maximo da CAUDA
+        comprimento = min(menor * COMPRIMENTO_SETA_FRAC, limite - ponta)
+        seta_x = (ponta, ponta + comprimento)
+    elif mao == "direita":
+        ponta = width - margem             # ponta na borda direita
+        limite = objeto_x[1] + folga       # x minimo da CAUDA
+        comprimento = min(menor * COMPRIMENTO_SETA_FRAC, ponta - limite)
+        seta_x = (ponta - comprimento, ponta)
+    return {"lado": lado, "cx": cx, "cy": cy, "objeto_x": objeto_x,
+            "folga": folga, "seta_x": seta_x, "comprimento": comprimento}
+
+
+#: Costuras da bola de tenis: portadas do SVG do Twemoji (U+1F3BE), em
+#: coordenadas do viewBox 36x36 (circulo em (18,18) com r=18). Cada costura e'
+#: a borda INTERNA do crescente branco do Twemoji: comeca na borda do circulo
+#: (pe em ~46 graus), mergulha ate' 0,39 R na linha do centro e volta para a
+#: borda; as duas sao espelho uma da outra. Mesma linguagem dos outros icones:
+#: TRACO branco com ponta arredondada.
+#: ANTES (bug): moveTo+arcTo deixava uma RETA atravessada e dois arcos 10%
+#: maiores que o circulo (para FORA) -> "circulo com um risco"; e a cubica do
+#: OpenMoji (tentada primeiro) fechava quase no pe e parecia uma LAMPADA.
+_BOLA_CENTRO_VISTA = (18.0, 18.0)
+_BOLA_RAIO_VISTA = 18.0
+#: (inicio, ((c1, c2, fim), ...)) por costura -- inicio + 2 cubicas; a
+#: costura da esquerda e' o espelho em x (36 - x), o que da a simetria.
+_BOLA_COSTURAS = (
+    (
+        (30.374, 4.95),
+        (
+            ((27.406, 6.605), (25.0, 10.578), (25.0, 18.0)),
+            ((25.0, 25.421), (27.406, 29.395), (30.374, 31.05)),
+        ),
+    ),
+    (
+        (5.626, 4.95),
+        (
+            ((8.594, 6.605), (11.0, 10.578), (11.0, 18.0)),
+            ((11.0, 25.421), (8.594, 29.395), (5.626, 31.05)),
+        ),
+    ),
+)
+
+
+def _bola_px(cx, cy, raio, ponto):
+    """Ponto do viewBox do Twemoji -> pixel do canvas da bola."""
+    k = raio / _BOLA_RAIO_VISTA
+    return (cx + (ponto[0] - _BOLA_CENTRO_VISTA[0]) * k,
+            cy + (ponto[1] - _BOLA_CENTRO_VISTA[1]) * k)
+
+
+def costura_bola(cx, cy, raio):
+    """Ancoras + controles das DUAS costuras, em pixels (14 pontos).
+
+    Fora da classe de teste: o teste comprova que os PES ficam SOBRE o
+    circulo, todo o resto fica POR DENTRO (o mergulho a 0,39 R) e o conjunto
+    e' simetrico esquerda/direita -- ou seja, e' costura de bola de tenis e
+    nao o circulo desenhado de novo.
+    """
+    pontos = []
+    for inicio, segmentos in _BOLA_COSTURAS:
+        pontos.append(_bola_px(cx, cy, raio, inicio))
+        for c1, c2, fim in segmentos:
+            pontos.extend((_bola_px(cx, cy, raio, c1),
+                           _bola_px(cx, cy, raio, c2),
+                           _bola_px(cx, cy, raio, fim)))
+    return tuple(pontos)
+
+
 class _StimulusCanvas(QWidget):
     """Tela do participante: tudo desenhado em vetor (sem arquivos de imagem).
 
@@ -1749,10 +1882,11 @@ class _StimulusCanvas(QWidget):
 
     def _paint_object(self, painter, width, height):
         """Objeto alvo, grande e centralizado (garrafa / bola / caneta)."""
-        size = min(width, height) * 0.30
-        cx, cy = width / 2, height * 0.40
-        box = QRectF(cx - size * 0.5, cy - size * 0.5, size, size)
-        painter.setPen(QPen(self.WHITE, max(5, int(size * 0.045))))
+        # mesma caixa/linha que `geometria_cue` usa para encaixar a seta
+        geo = geometria_cue(width, height)
+        lado, cx, cy = geo["lado"], geo["cx"], geo["cy"]
+        box = QRectF(cx - lado * 0.5, cy - lado * 0.5, lado, lado)
+        painter.setPen(QPen(self.WHITE, max(5, int(lado * 0.045))))
         painter.setBrush(Qt.NoBrush)
         if self.object_name == "garrafa":
             self._draw_bottle(painter, box)
@@ -1778,21 +1912,20 @@ class _StimulusCanvas(QWidget):
 
     @staticmethod
     def _draw_ball(painter, box):
+        """Bola de tenis: circulo + as duas costuras (Twemoji U+1F3BE)."""
         radius = box.width() * 0.46
         center = box.center()
         painter.drawEllipse(center, radius, radius)
-        upper = QPainterPath()
-        upper.moveTo(center.x() - radius * 0.95, center.y() - radius * 0.25)
-        upper.arcTo(QRectF(center.x() - radius * 1.1,
-                           center.y() - radius * 1.1,
-                           radius * 2.2, radius * 2.2), 200, 140)
-        painter.drawPath(upper)
-        lower = QPainterPath()
-        lower.moveTo(center.x() - radius * 0.95, center.y() + radius * 0.25)
-        lower.arcTo(QRectF(center.x() - radius * 1.1,
-                           center.y() - radius * 1.1,
-                           radius * 2.2, radius * 2.2), 20, 140)
-        painter.drawPath(lower)
+        caminho = QPainterPath()
+        for inicio, segmentos in _BOLA_COSTURAS:
+            p0 = _bola_px(center.x(), center.y(), radius, inicio)
+            caminho.moveTo(p0[0], p0[1])
+            for c1, c2, fim in segmentos:
+                a = _bola_px(center.x(), center.y(), radius, c1)
+                b = _bola_px(center.x(), center.y(), radius, c2)
+                p_fim = _bola_px(center.x(), center.y(), radius, fim)
+                caminho.cubicTo(a[0], a[1], b[0], b[1], p_fim[0], p_fim[1])
+        painter.drawPath(caminho)
 
     @staticmethod
     def _draw_pen(painter, box):
@@ -1810,25 +1943,29 @@ class _StimulusCanvas(QWidget):
         painter.drawRect(clip)
 
     def _paint_arrow(self, painter, width, height):
-        """Seta grande do lado da mao indicada (esquerda/direita)."""
+        """Seta grande do lado da mao indicada (esquerda/direita).
+
+        O comprimento vem de `geometria_cue`: a seta e' encurtada para
+        respeitar a folga contra o objeto em QUALQUER proporcao de tela (a
+        cauda invadia o icone em telas quasi-quadradas -- ver geometria_cue).
+        """
         if self.hand not in ("esquerda", "direita"):
             return
-        left_side = self.hand == "esquerda"
-        length = min(width, height) * 0.30
+        geo = geometria_cue(width, height, self.hand)
+        x_min, x_max = geo["seta_x"]
+        cy = geo["cy"]
+        length = geo["comprimento"]
         thickness = length * 0.16
-        cy = height * 0.40
-        margin = width * 0.06
-        if left_side:
-            tail, head = (QPointF(margin + length, cy), QPointF(margin, cy))
+        if self.hand == "esquerda":
+            head, tail = QPointF(x_min, cy), QPointF(x_max, cy)
         else:
-            tail = QPointF(width - margin - length, cy)
-            head = QPointF(width - margin, cy)
+            head, tail = QPointF(x_max, cy), QPointF(x_min, cy)
         painter.setPen(QPen(self.WHITE, thickness, Qt.SolidLine, Qt.RoundCap))
         painter.drawLine(tail, head)
         painter.setPen(Qt.NoPen)
         painter.setBrush(QBrush(self.WHITE))
         wing = length * 0.34
-        if left_side:
+        if self.hand == "esquerda":
             points = [head, QPointF(head.x() + wing, cy - wing * 0.8),
                       QPointF(head.x() + wing, cy + wing * 0.8)]
         else:
@@ -2038,6 +2175,12 @@ class _ParadigmController(QObject):
         self._trial_index = 0
         self._bloco = 0
         self._video_deadline = 0.0
+        # Playback do clipe CRONOMETRADO (sem congelar): ancora na 1a chegada
+        # de quadro, passo por quadro derivado do relogio e indice ja' mostrado
+        # (repinta so' quando o indice muda).
+        self._video_t0 = None
+        self._video_passo = None
+        self._video_idx = -1
         #: True durante a PREPARACAO (tela com o painel de impedancias).
         self._prep_active = False
         #: True depois do ESC/Ctrl+C: o `abort` so' roda UMA vez (dois ESC nao
@@ -2417,17 +2560,50 @@ class _ParadigmController(QObject):
             destino=self._priming_file(self._trial_index))
         print("[paradigma] pausa + video em camera lenta (0,5x)", flush=True)
         self._video_deadline = time.monotonic() + cfg["video_sec"]
+        self._video_t0 = None            # ancora quando o clipe CHEGAR
+        self._video_passo = None
+        self._video_idx = -1
         self._schedule(int(1000 / SLOWMO_CAPTURE_FPS), self._video_tick)
 
     def _video_tick(self):
-        """Toca o clipe em 0,5x (o tracking ja entrega os quadros duplicados)."""
-        frame = self._state.take_video_frame()
-        if frame is not None:
-            self._window.show_video_frame(self._to_qimage(frame))
-        if time.monotonic() >= self._video_deadline:
+        """Toca o clipe cobrindo exatamente o tempo RESTANTE da pausa.
+
+        O clipe NAO e' consumido quadro-a-quadro (o buffer do Kinect capta
+        devagar -- o laço roda 3x MediaPipe por iteracao -- entao o clipe
+        acabava em 0,2-0,4 s e a tela congelava no ultimo quadro ate' o fim
+        da pausa: sintoma de 30/09/2026). Aqui o indice vem do RELOGIO, com
+        passo = restante/n: os quadros sao ESPACADOS para terminar
+        EXATAMENTE na deadline -- nunca antes (nao congela; a pose final do
+        movimento aparece) e nunca depois (a MI comeca com o cue). Com o
+        clipe cheio (1 s de movimento na pausa de 2 s) o passo da ~0,5x, como
+        pede o protocolo; com clipe curto (buffer lento) o mesmo clipe e'
+        espacado em vez de acabar cedo. So' repinta quando o indice muda
+        (evita copias de QImage a 30 Hz).
+        """
+        agora = time.monotonic()
+        if agora >= self._video_deadline:
             self._state.clear_video()
             self._start_mi()
             return
+        quadros, dur_real = self._state.video_snapshot()
+        if quadros:
+            if self._video_passo is None:
+                self._video_t0 = agora
+                restante = max(self._video_deadline - agora, 1e-3)
+                self._video_passo = max(1e-3, restante / len(quadros))
+                if dur_real > restante * 1.2:
+                    # Tracking atrasado/captura rara: o clipe nao cabe no
+                    # 0,5x da pausa. O playback encaixa (nao congela), mas a
+                    # camera lenta fica mais rapida que o protocolo -- avisa.
+                    print(f"[video] AVISO: clipe de {dur_real:.2f} s de "
+                          f"movimento em so' {restante:.2f} s de pausa "
+                          "(tracking atrasado?); playback > 0,5x", flush=True)
+            decorrido = max(agora - self._video_t0, 0.0)
+            idx = min(len(quadros) - 1,
+                      int(decorrido / self._video_passo))
+            if idx != self._video_idx:
+                self._video_idx = idx
+                self._window.show_video_frame(self._to_qimage(quadros[idx]))
         self._schedule(int(1000 / SLOWMO_CAPTURE_FPS), self._video_tick)
 
     @staticmethod
@@ -2445,8 +2621,14 @@ class _ParadigmController(QObject):
     def _start_mi(self):
         """MI: o MESMO cue permanece na tela; sem video/overlay (imaginacao)."""
         self._emit(CODE_MI_START)
-        condicao = self._cfg["trials"][self._trial_index]["condicao"]
-        self._state.set_phase(PHASE_MI, cue=condicao)
+        trial = self._cfg["trials"][self._trial_index]
+        self._state.set_phase(PHASE_MI, cue=trial["condicao"])
+        # A janela estava em modo "video" (quadro do clipe da pausa). SEM
+        # restaurar o cue aqui, o paintEvent continuava no ULTIMO QUADRO
+        # CONGELADO durante a MI inteira -- era o "video para de funcionar"
+        # reportado em 30/09/2026. O protocolo pede o cue (seta + objeto),
+        # identico ao da ME, sem feedback do movimento.
+        self._window.show_condition(trial["objeto"], trial["mao"])
         self._schedule(self._cfg["mi_sec"] * 1000, self._end_mi)
 
     def _end_mi(self):
@@ -2938,7 +3120,13 @@ class MotionRecorder(threading.Thread):
         self._path = str(path)
         self._dt = 1.0 / max(1e-3, float(hz))
         self._fs = float(fs)
-        self._stop = threading.Event()
+        # ATENCAO: o nome NAO pode ser `self._stop`. `threading.Thread` tem um
+        # metodo INTERNO `_stop()`, chamado pelo `join()`; um Event com esse
+        # nome sombreia o metodo e o join morre com "TypeError: 'Event' object
+        # is not callable". Era o que quebrava o stop() das TRES threads de
+        # bancada (gravador de movimento, vigia de link, painel de impedancia)
+        # -- justamente no caminho de cancelar/abortar a sessao.
+        self._stop_event = threading.Event()
         self._rows = 0
         self._t0_mono = None
         self._t0_wall = None
@@ -2965,7 +3153,7 @@ class MotionRecorder(threading.Thread):
                       f"{1.0 / self._dt:.0f} Hz ({N_MOTION_COLS} colunas)",
                       flush=True)
                 next_t = time.monotonic()
-                while not self._stop.is_set():
+                while not self._stop_event.is_set():
                     now = time.monotonic()
                     if now < next_t:
                         time.sleep(min(0.005, next_t - now))
@@ -2985,7 +3173,7 @@ class MotionRecorder(threading.Thread):
                   flush=True)
 
     def stop(self):
-        self._stop.set()
+        self._stop_event.set()
         self.join(timeout=2.0)
 
 
@@ -3066,11 +3254,11 @@ class LinkWatchdog(threading.Thread):
         self._queue = marker_queue
         self._timeout = float(timeout)
         self._period = float(period)
-        self._stop = threading.Event()
+        self._stop_event = threading.Event()   # nao usar `_stop` (ver MotionRecorder)
         self.perdas = 0                # numero de vezes que o link caiu
 
     def stop(self):
-        self._stop.set()
+        self._stop_event.set()
         self.join(timeout=1.5)
 
     def _event(self, code):
@@ -3083,7 +3271,7 @@ class LinkWatchdog(threading.Thread):
         ultimo = self._muxer.samples_written
         visto = time.monotonic()
         perdido = False
-        while not self._stop.is_set():
+        while not self._stop_event.is_set():
             time.sleep(self._period)
             atual = self._muxer.samples_written
             agora = time.monotonic()
@@ -3129,12 +3317,12 @@ class ImpedanceMonitor(threading.Thread):
         self._state = state
         self._limite = float(limite_kohm)
         self._period = float(period)
-        self._stop = threading.Event()
+        self._stop_event = threading.Event()   # nao usar `_stop` (ver MotionRecorder)
         self._primeiro = True
         self._ultimo_ruins = None
 
     def stop(self):
-        self._stop.set()
+        self._stop_event.set()
         self.join(timeout=2.5)
 
     def run(self):
@@ -3142,7 +3330,7 @@ class ImpedanceMonitor(threading.Thread):
             self._state.set_impedance(
                 None, "(medicao de impedancia indisponivel nesta fonte)")
             return
-        while not self._stop.is_set():
+        while not self._stop_event.is_set():
             try:
                 valores = np.asarray(self._device.get_impedance(self._primeiro),
                                      dtype=float)
@@ -3430,11 +3618,11 @@ class CancelamentoGarantido:
 def _resumo_cancelado(writer, events_name, csv_name, motion_name):
     """Fecha o JSON e imprime onde ficaram os arquivos de uma sessao cancelada."""
     try:
-        _align_event_json(writer, events_name, csv_name)
+        events_name = _align_event_json(writer, events_name, csv_name)
     except Exception as exc:                 # noqa: BLE001 - resumo e' opcional
         print(f"[paradigma] aviso: alinhamento do JSON falhou ({exc})",
               flush=True)
-    atual = getattr(writer, "_file_path", None)
+    atual = _caminho_real_csv(writer)
     print("[paradigma] gravacao INTERROMPIDA (sessao cancelada):\n"
           f"  EEG        -> {os.path.abspath(atual or csv_name)}\n"
           f"  Movimento  -> {os.path.abspath(motion_name)}\n"
@@ -3590,18 +3778,186 @@ def parse_args():
     return parser.parse_args()
 
 
+#: Pastas padrao do runtime do GDS (g.tec Suite) no Windows. Medido em
+#: 29/09/2026 nesta maquina, depois de instalar o g.tec Suite 2024: o instalador
+#: registra APENAS "C:\Program Files\gtec\gNEEDaccess" no PATH de MAQUINA, e e'
+#: dessa pasta que saem GDSClientAPI.dll/GDSServer.dll -- que o gtec_gds 1.7.1
+#: procura PELO NOME (nao ha caminho embutido). Dai' a armadilha desta bancada:
+#: um terminal/IDE aberto ANTES da instalacao herda o PATH antigo e o
+#: `--source gnautilus` falha com "GDS library not found" -- a MESMA mensagem do
+#: Suite ausente -- com o Suite perfeitamente instalado.
+GDS_DLL_DIRS = (
+    r"C:\Program Files\gtec\gNEEDaccess",
+    r"C:\Program Files (x86)\gtec\gNEEDaccess",
+)
+GDS_DLL_NOMES = ("GDSClientAPI.dll", "GDSServer.dll")
+
+
+def _gds_dll_instalada():
+    """(pasta, dll) do runtime do GDS presente no DISCO, ou (None, None).
+
+    Ordem: `GDS_LIBRARY` (se o usuario ja' apontou), `GNEEDACCESS_DIR` e as
+    pastas padrao do Suite (`GDS_DLL_DIRS`). E' o que separa as duas causas de
+    "GDS library not found": Suite AUSENTE ("instale o g.tec Suite") x Suite
+    instalado nesta maquina e invisivel para ESTA sessao ("abra o terminal de
+    novo") -- consertos e mensagens diferentes. Vive fora de
+    `_check_gtec_environment` de proposito: os testes fingem maquinas com e sem
+    o Suite.
+    """
+    pastas = []
+    apontada = os.environ.get("GDS_LIBRARY")
+    if apontada and os.path.dirname(apontada):
+        pastas.append(os.path.dirname(apontada))
+    if os.environ.get("GNEEDACCESS_DIR"):
+        pastas.append(os.environ["GNEEDACCESS_DIR"])
+    pastas.extend(GDS_DLL_DIRS)
+    for pasta in pastas:
+        for nome in GDS_DLL_NOMES:
+            caminho = os.path.join(pasta, nome)
+            if os.path.isfile(caminho):
+                return pasta, caminho
+    return None, None
+
+
+def _gds_apontar_para(pasta, dll):
+    """Faz ESTA sessao achar o runtime do GDS -- sem instalar nada.
+
+    Duas coisas, e as duas foram medidas em 29/09/2026 (PATH velho de proposito,
+    com o `_gtec_check.py`): `GDS_LIBRARY` com o CAMINHO COMPLETO da DLL e a
+    pasta do Suite prependada no `PATH`. O `os.environ` atualiza o PATH do
+    processo e o loader do Windows resolve o nome por ele -- isso vale tambem
+    para as DLLs irmas de que o GDSServer depende (o que um GDS_LIBRARY apontando
+    para fora da pasta nao garante). Idempotente: nao repete a pasta no PATH nem
+    sobrescreve um `GDS_LIBRARY` que o usuario tenha definido.
+    """
+    os.environ.setdefault("GDS_LIBRARY", dll)
+    caminho = os.environ.get("PATH", "")
+    partes = [parte.strip().lower() for parte in caminho.split(os.pathsep)]
+    if pasta.lower() not in partes:
+        os.environ["PATH"] = pasta + os.pathsep + caminho
+
+
+def _gds_no_path():
+    """True quando o runtime do GDS ja' e' resolvido PELO PATH desta sessao.
+
+    Nada de `shutil.which` aqui: no Windows ele so' casa nomes por PATHEXT
+    (`.COM;.EXE;.BAT;...`, que NAO tem `.DLL`), entao `which("GDSClientAPI.dll")`
+    devolve None COM a DLL no PATH -- medido em 29/09/2026, e a resposta seria
+    sempre "precisa reparar". A conta abaixo e' a mesma que o loader faz: para
+    cada pasta do PATH, o arquivo existe?
+    """
+    pastas = os.environ.get("PATH", "").split(os.pathsep)
+    return any(os.path.isfile(os.path.join(pasta, nome))
+               for pasta in pastas for nome in GDS_DLL_NOMES)
+
+
+def _erro_pede_gds(erro):
+    """True quando a falha e' "nao achei as DLLs" (ver `_gds_dll_instalada`)."""
+    texto = str(erro)
+    return "GDS library not found" in texto or "Install GDS" in texto
+
+
+def _erro_pede_headers(erro):
+    """True quando o wrapper passou a EXIGIR headers C (culpa do GNEEDACCESS_DIR)."""
+    texto = str(erro)
+    return ("GDS header not found" in texto
+            or "load either header or DLL" in texto
+            or "gds_headers" in texto)
+
+
+def _mensagem_gds(erro, version, venv_python, pasta, dll, notas):
+    """Mensagem da falha do GDS com a CAUSA SEPARADA (ver `_check_gtec_environment`).
+
+    `pasta`/`dll` = o que existe no DISCO (`_gds_dll_instalada`), nao o que o
+    wrapper conseguiu carregar: e' essa diferenca que decide entre "instale o
+    g.tec Suite" e "o Suite esta' aqui e esta sessao nao o ve". `notas` = os
+    reparos ja' tentados (entram na mensagem para o usuario nao refazer o que o
+    programa tentou).
+    """
+    cabeca = (f"gtec_gds {version} ({sys.executable}) nao inicializou o GDS "
+              f"({type(erro).__name__}: {erro})")
+    rodape = "".join(f"\n  {nota}" for nota in notas)
+    sem_amplificador = ("  Enquanto isso a bancada inteira roda sem "
+                        "amplificador:\n"
+                        f"      {venv_python} eeg_motor_paradigm.py "
+                        "--source generator")
+    if _erro_pede_headers(erro):
+        return (
+            f"{cabeca}{rodape}\n"
+            "  Causa: GNEEDACCESS_DIR aponta para uma pasta SEM os headers C do "
+            "g.tec -- e o gtec_gds deste .venv NAO precisa deles (traz as "
+            "declaracoes do GDS dentro do pacote): com a variavel definida ele "
+            "passa a exigir o GDSClientAPI.h e falha.\n"
+            "  Solucao: remova GNEEDACCESS_DIR (nao precisa definir nada) e "
+            "rode de novo.\n" + sem_amplificador)
+    if _erro_pede_gds(erro):
+        if pasta is None:
+            return (
+                f"{cabeca}{rodape}\n"
+                "  Causa: o RUNTIME do g.tec Suite/GDS NAO esta' nesta maquina "
+                "(nenhum GDSClientAPI.dll/GDSServer.dll em Program Files\\gtec) "
+                "-- trocar de Python NAO resolve: o pacote Python esta' certo e "
+                "o que falta e' o driver.\n"
+                "  Solucao: instale o g.tec Suite (GDS) e FECHE/ABRA o terminal "
+                "depois (o instalador poe C:\\Program Files\\gtec\\gNEEDaccess "
+                "no PATH de maquina); se a DLL ficar em outra pasta, aponte "
+                "GDS_LIBRARY com o caminho COMPLETO dela.\n" + sem_amplificador)
+        return (
+            f"{cabeca}{rodape}\n"
+            f"  Causa: o g.tec Suite ESTA' instalado ({pasta}) e a DLL existe "
+            f"({dll}), mas o gtec_gds nao carregou a DLL NESTA sessao -- o "
+            "programa ja' tentou GDS_LIBRARY + PATH aqui e ainda falhou. O caso "
+            "tipico e' o PATH: o instalador acrescenta a pasta ao PATH de "
+            "MAQUINA e um terminal/IDE aberto ANTES da instalacao continua com "
+            "o PATH antigo.\n"
+            "  Solucao: feche e abra o terminal (ou o VS Code) e rode de novo "
+            "(trocar de Python NAO resolve); se persistir, defina GDS_LIBRARY "
+            "com o caminho completo do GDSClientAPI.dll.\n"
+            + sem_amplificador)
+    return (
+        f"{cabeca}{rodape}\n"
+        "  Causa mais comum: o GDS nao esta' rodando (servico do g.tec Suite) "
+        "ou esta' ocupado por outro programa.\n"
+        "  Solucao: confira o servico (`Get-Service GDS`) e rode com o .venv do "
+        "projeto:\n"
+        f"      {venv_python} eeg_motor_paradigm.py ...")
+
+
 def _check_gtec_environment():
     """Confere se o gtec_gds desta Python consegue falar com o GDS/g.Nautilus.
 
-    Existem duas instalacoes de gtec_gds na maquina tipica deste projeto:
-      * .venv\\Scripts\\python.exe -> gtec_gds 1.6.0 (cdefs COMPILADOS no
-        pacote: nao precisa dos headers C do g.tec) -> funciona;
-      * Python do PATH (C:\\Program Files\\Python) -> gtec_gds 1.4.0, que
-        exige os headers em Documentos\\gtec\\gNEEDaccessClientAPI\\C
-        (que podem nao estar instalados) -> falha com
-        "Initialize failed to load either header or DLL" e depois
-        NameError: name '_ffi' is not defined.
-    Esta checagem transforma esse erro criptico numa instrucao clara.
+    TRES causas de falha distintas, e a mensagem abaixo separa as tres:
+
+      1. PACOTE gtec_gds ausente / Python errada. A segunda instalacao tipica
+         desta maquina (C:\\Program Files\\Python, gtec_gds 1.4.0) exige os
+         headers C do g.tec em Documentos\\gtec\\gNEEDaccessClientAPI\\C e
+         morre com "Initialize failed to load either header or DLL" seguido de
+         "NameError: name '_ffi' is not defined". O .venv do projeto tem o
+         gtec_gds com as cdefs compiladas dentro do pacote (medido em
+         28/09/2026: 1.7.1) -> nesse caso use o .venv;
+
+      2. RUNTIME do GDS ausente: "GDS library not found; tried GDSServer.dll,
+         GDSClientAPI.dll". Aqui NAO e' problema do Python (trocar de
+         interpretador nao resolve): falta instalar o g.tec Suite/GDS;
+
+      3. SUITE INSTALADO, INVISIVEL PARA ESTA SESSAO (medido em 29/09/2026,
+         depois de o usuario instalar o g.tec Suite 2024): as DLLs estao em
+         C:\\Program Files\\gtec\\gNEEDaccess -- pasta que o instalador poe no
+         PATH de MAQUINA --, mas um terminal/IDE aberto ANTES da instalacao
+         carrega o PATH antigo e o gtec_gds (que procura a DLL PELO NOME) falha
+         com a mensagem do caso 2, mandando instalar o que ja' esta' instalado.
+         Este caso e' REPARADO aqui, em memoria, por `_gds_apontar_para`
+         (`GDS_LIBRARY` + PATH), com nota no console; `_gds_dll_instalada` diz
+         qual dos dois casos e' (o DISCO responde).
+
+    E a variavel a NAO definir: a mensagem antiga mandava "apontar o diretorio
+    em GNEEDACCESS_DIR" quando a DLL estivesse fora do PATH -- medido em
+    29/09/2026 que neste gtec_gds (cdefs dentro do pacote) ela Piora tudo: o
+    wrapper passa a exigir os headers C e falha com "GDS header not found ...
+    unset GNEEDACCESS_DIR". O reparo 1 remove a variavel da sessao e diz isso.
+
+    Todos os tres casos sao NAO-fatais para a bancada: sem amplificador a
+    mensagem termina com o comando `--source generator`.
     """
     try:
         import gtec_gds
@@ -3612,26 +3968,66 @@ def _check_gtec_environment():
         ) from exc
     version = getattr(gtec_gds, "__version__", "?")
     venv_python = os.path.join(os.getcwd(), ".venv", "Scripts", "python.exe")
-    try:
+
+    def _conectados():
+        # Atributo resolvido A CADA CHAMADA (e nao com um `from ... import` no
+        # topo): os testes trocam `gtec_gds_wrapper.ConnectedDevices` por um
+        # duble para fingir GDS ausente/sem headers.
         from gtec_gds.lib.gtec_gds_wrapper import ConnectedDevices
-        devices = [(name, dtype, inuse) for name, dtype, inuse in
-                   ConnectedDevices()]
+        return [(nome, tipo, uso) for nome, tipo, uso in ConnectedDevices()]
+
+    # REPAROS PREEMPTIVOS -- obrigatoriamente ANTES da primeira chamada ao
+    # wrapper: medido em 29/09/2026 (`_gtec_order.py`, casos A/B/C) que o
+    # `import gtec_gds` NAO cacheia nada (definir GDS_LIBRARY/PATH depois do
+    # import e antes da 1a chamada FUNCIONA), mas uma ConnectedDevices() que
+    # FALHOU cacheia a falha (`_initialize_failed`): repetir a chamada depois de
+    # corrigir as variaveis falha IGUAL. Ou seja: reparo depois do erro nao
+    # serve; tem de ser antes.
+    notas = []
+
+    # REPARO 1: GNEEDACCESS_DIR sem os headers C. A mensagem ANTIGA mandava
+    # definir essa variavel ("se a DLL ficar fora do PATH") e neste gtec_gds ela
+    # ATRAPALHA: o wrapper passa a exigir GDSClientAPI.h. Medido apontando-a
+    # para a pasta do Suite, que nao tem os .h. Se a pasta TIVER os headers, a
+    # variavel e' respeitada (nao mexemos no que o usuario configurou de proposito).
+    dir_gneed = os.environ.get("GNEEDACCESS_DIR")
+    if dir_gneed and not os.path.isfile(os.path.join(dir_gneed, "GDSClientAPI.h")):
+        os.environ.pop("GNEEDACCESS_DIR", None)
+        notas.append(
+            f"[gtec] GNEEDACCESS_DIR={dir_gneed} ignorada nesta sessao: o "
+            "gtec_gds do .venv traz as declaracoes do GDS dentro do pacote e "
+            "com a variavel definida passa a exigir os headers C "
+            "(GDSClientAPI.h), que nao existem nessa pasta")
+
+    # REPARO 2: Suite instalado no disco e invisivel para ESTA sessao (PATH
+    # velho: o instalador so' mexe no PATH de MAQUINA).
+    if not os.environ.get("GDS_LIBRARY") and not _gds_no_path():
+        pasta, dll = _gds_dll_instalada()
+        if pasta is not None:
+            _gds_apontar_para(pasta, dll)
+            notas.append(
+                f"[gtec] o runtime do GDS esta' em {pasta} e nao no PATH desta "
+                "sessao (terminal/IDE aberto ANTES do g.tec Suite): apontei "
+                f"GDS_LIBRARY={dll} e prependi a pasta no PATH")
+
+    erro = None
+    try:
+        dispositivos = _conectados()
     except Exception as exc:
+        # Nao so' RuntimeError: o wrapper compilado levanta GDSError e afins.
+        erro, dispositivos = exc, None
+
+    if dispositivos is None:
+        pasta, dll = _gds_dll_instalada()
         raise RuntimeError(
-            f"gtec_gds {version} desta Python nao inicializou o GDS "
-            f"({type(exc).__name__}: {exc}).\n"
-            "  Causa mais comum: esta e a Python do PATH, que usa gtec_gds "
-            "1.4.0 e exige os headers C do g.tec em "
-            "'Documentos\\gtec\\gNEEDaccessClientAPI\\C' (ausentes).\n"
-            "  Solucao: rode com o .venv do projeto, que tem o gtec_gds "
-            "1.6.0 (cdefs compilados):\n"
-            f"      {venv_python} eeg_motor_paradigm.py ..."
-        ) from exc
-    if not devices:
+            _mensagem_gds(erro, version, venv_python, pasta, dll, notas)) from erro
+    for nota in notas:
+        print(nota, flush=True)
+    if not dispositivos:
         print(f"[gtec] gtec_gds {version} OK, mas nenhum dispositivo "
               "conectado encontrado (ligue o g.Nautilus)", flush=True)
     else:
-        print(f"[gtec] gtec_gds {version} OK | dispositivos: {devices}",
+        print(f"[gtec] gtec_gds {version} OK | dispositivos: {dispositivos}",
               flush=True)
 
 
@@ -3640,12 +4036,45 @@ def build_source(args):
         _check_gtec_environment()
         print(f"g.Nautilus: {args.channel_count} canais, "
               f"frame_size={args.frame_size}")
-        return gp.GNautilus(sampling_rate=args.fs,
-                            channel_count=args.channel_count,
-                            frame_size=args.frame_size)
+        try:
+            return gp.GNautilus(sampling_rate=args.fs,
+                                channel_count=args.channel_count,
+                                frame_size=args.frame_size)
+        except Exception as exc:
+            if "No g.Nautilus devices found" not in str(exc):
+                raise
+            # Medido em 29/09/2026 (g.tec Suite 2024 instalado, GDS rodando e o
+            # amplificador desligado): a construcao do node morre AQUI DENTRO,
+            # com um traceback de quatro camadas so' do ioiocore/gpype e sem
+            # dizer o que fazer -- a pre-checagem acima ja' avisou "nenhum
+            # dispositivo", mas quem le' a ultima linha ve' "No g.Nautilus
+            # devices found" e nenhum proximo passo. Esta mensagem fecha o caso.
+            venv_python = os.path.join(os.getcwd(), ".venv", "Scripts",
+                                       "python.exe")
+            raise RuntimeError(
+                "g.Nautilus: o GDS esta' funcionando, mas NENHUM amplificador "
+                "foi encontrado.\n"
+                "  Causa: o gtec_gds e o GDS estao OK (a pre-checagem acima "
+                "passou) -- o que falta e' o APARELHO: desligado, sem bateria, "
+                "sem o dongle/pareamento (Wi-Fi) ou nao registrado na "
+                "configuracao do g.Recorder/g.HIsys.\n"
+                "  Solucao: ligue o g.Nautilus, confirme a configuracao dele no "
+                "g.Recorder e rode de novo. Sem EEG real a bancada inteira "
+                "roda com:\n"
+                f"      {venv_python} eeg_motor_paradigm.py --source generator"
+            ) from exc
     print(f"Generator sintetico: {args.channel_count} canais (teste)")
+    # O `frame_size` TEM de ser repassado aqui tambem: o `gp.Generator` tem
+    # `frame_size=None` como padrao (o gpype escolhe o dele) e o
+    # `RecordingMuxer.setup()` exige 1 amostra por frame. Sem esta linha o modo
+    # de BANCADA (`--source generator`, o unico que roda sem o g.Nautilus)
+    # morria com "RecordingMuxer exige frame_size=1 na fonte" -- e nem o
+    # `--frame-size 1` do terminal resolvia, porque o valor nao chegava ao no
+    # (medido em 28/09/2026; era o que impedia testar o cancelamento de trial
+    # sem o amplificador conectado).
     return gp.Generator(sampling_rate=args.fs,
                         channel_count=args.channel_count,
+                        frame_size=args.frame_size,
                         signal_frequency=10.0, signal_amplitude=10.0,
                         noise_amplitude=5.0)
 
@@ -3954,8 +4383,11 @@ def main():
         tracking.join(timeout=3.0)
         imu.stop()
         _fechar_janelas_kinect(tracking, args.sem_janela_tracking)
-        _align_event_json(writer, events_name, csv_name)
-        actual_csv = getattr(writer, "_file_path", None)
+        # O g.Pype anexa timestamp ao CSV: o JSON e' renomeado para o mesmo
+        # prefixo e os metadados passam a apontar para os arquivos que existem
+        # em disco (antes o resumo anunciava o nome PEDIDO, inexistente).
+        events_name = _align_event_json(writer, events_name, csv_name)
+        actual_csv = _caminho_real_csv(writer)
         print(f"\nGravacao finalizada:\n"
               f"  EEG        -> {os.path.abspath(actual_csv or csv_name)}\n"
               f"  Movimento  -> {os.path.abspath(motion_name)} "
@@ -4040,11 +4472,40 @@ def _impedance_report(source_node, attempts=3, seconds=6.0):
     return values
 
 
+def _caminho_real_csv(writer):
+    """Caminho REAL do CSV de EEG, depois que o g.Pype abriu o arquivo.
+
+    `writer` e' o `RecordingCsvWriter`, uma CHAIN do ioiocore: quem guarda o
+    caminho final em `_file_path` e' o NO' INTERNO (`_CsvWriterCore`, subclasse
+    de `FileWriter`), criado em `create_internal_nodes()`. A chain em si NAO
+    tem `_file_path` -- por isso o `getattr(writer, "_file_path", None)` que
+    existia nos dois resumos voltava SEMPRE None, e o programa anunciava (e
+    gravava nos metadados) o nome PEDIDO em vez do nome em disco.
+    Medido em 28/09/2026: a sessao gerou
+    `..._20260928_121041_20260928_121043_779.csv` enquanto o JSON apontava
+    para `..._20260928_121041.csv` (inexistente). Como o `FileWriter` insere
+    timestamp + sufixo de colisao, o nome so' e' conhecido DEPOIS do start();
+    ler o no' interno e' o que torna isso possivel.
+    """
+    caminho = getattr(writer, "_file_path", None)
+    if caminho:
+        return caminho
+    for no in getattr(writer, "_internal_nodes", None) or []:
+        caminho = getattr(no, "_file_path", None)
+        if caminho:
+            return caminho
+    return None
+
+
 def _align_event_json(writer, events_name, csv_name):
-    """Alinha o JSON ao nome real do CSV (gp.FileWriter anexa timestamp)."""
-    actual_csv = getattr(writer, "_file_path", None)
+    """Alinha o JSON ao nome real do CSV (gp.FileWriter anexa timestamp).
+
+    Devolve o caminho (talvez renomeado) do JSON de eventos, para que quem
+    chamou possa imprimir/anunciar o arquivo que EXISTE.
+    """
+    actual_csv = _caminho_real_csv(writer)
     if not actual_csv:
-        return
+        return events_name
     new_json = os.path.splitext(actual_csv)[0] + "_eventos.json"
     if os.path.exists(events_name) and new_json != events_name:
         os.replace(events_name, new_json)
@@ -4053,10 +4514,21 @@ def _align_event_json(writer, events_name, csv_name):
         with open(events_name, "r+", encoding="utf-8") as handle:
             payload = json.load(handle)
             payload["arquivo_csv"] = os.path.basename(actual_csv)
+            # Os metadados guardam os caminhos PEDIDOS (montados antes de o
+            # g.Pype escolher o nome real): sem esta correcao o JSON apontava
+            # para um CSV e para um JSON inexistentes. `arquivos.eeg_csv` e'
+            # justamente a chave que os scripts de analise usam para achar a
+            # gravacao, entao tem de bater com o disco.
+            arquivos = payload.get("meta", {}).get("arquivos")
+            if isinstance(arquivos, dict):
+                arquivos["eeg_csv"] = actual_csv
+                arquivos["eventos_json"] = events_name
             handle.seek(0)
+            handle.truncate()
             json.dump(payload, handle, ensure_ascii=False, indent=2)
     except (OSError, json.JSONDecodeError):
         pass
+    return events_name
 
 
 if __name__ == "__main__":

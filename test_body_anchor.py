@@ -5,6 +5,9 @@ Mocka o body frame do SDK (PyKinectV2) sem hardware. Verifica:
 2. Junta Inferred -> ignora (so Tracked conta).
 3. Z fora da faixa (0.3-4.0 m) -> ignora e tenta a proxima junta.
 4. Nenhum corpo tracked -> None.
+5. (casos 7-8) Mascara ABAIXO_DO_TRONCO: junta mais de
+   MASCARA_ABAIXO_TRONCO_M abaixo do SpineBase (a mesa bloqueia a vista do
+   SDK) -> rejeitada; na altura do tronco -> aceita.
 """
 import sys
 import types
@@ -77,5 +80,31 @@ tracker.last_bodies = make_bodies(
 r = tracker.body_hand_anchor()
 assert r is not None and abs(r[2] - 0.88) < 1e-9, f"caso 6 falhou: {r}"
 
-print("BODY_ANCHOR_OK: 6/6 casos")
+# 7) Mascara ABAIXO_DO_TRONCO: punho claramente abaixo do fim do tronco (a
+#    mesa bloqueia a vista do SDK ali -> inferido/fantasma) e' rejeitado;
+#    punho NA ALTURA do tronco (mao na mesa) continua valendo.
+SB = kig.PyKinectV2.JointType_SpineBase
+tracker.last_bodies = make_bodies(
+    [make_body({
+        SB: (0.0, -0.20, 1.0, TS_TRACKED),     # fim do tronco, y=-0.20
+        WR: (0.2, -0.45, 1.0, TS_TRACKED),     # 0,25 m abaixo -> mascarado
+        WL: (-0.3, -0.18, 0.95, TS_TRACKED),   # na altura do tronco -> vale
+    })]
+)
+r = tracker.body_hand_anchor()
+assert r is not None and r[3] == "wrist_left", f"caso 7 falhou: {r}"
+assert abs(r[2] - 0.95) < 1e-9, f"caso 7: z errado {r}"
+
+# 8) TODOS os candidatos abaixo do tronco -> None (sem ancora corrompida)
+tracker.last_bodies = make_bodies(
+    [make_body({
+        SB: (0.0, -0.20, 1.0, TS_TRACKED),
+        WR: (0.2, -0.50, 1.0, TS_TRACKED),
+        WL: (-0.3, -0.55, 0.95, TS_TRACKED),
+        HR: (0.22, -0.52, 1.02, TS_TRACKED),
+    })]
+)
+assert tracker.body_hand_anchor() is None, "caso 8 falhou"
+
+print("BODY_ANCHOR_OK: 8/8 casos")
 sys.exit(0)

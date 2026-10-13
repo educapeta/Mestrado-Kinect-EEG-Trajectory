@@ -43,9 +43,34 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Optional
 
-import cv2
-import mediapipe as mp
-import numpy as np
+try:
+    import cv2
+    import mediapipe as mp
+    import numpy as np
+except ImportError as exc:          # dependencia do PROJETO, nao do Python global
+    # Aconteceu de verdade (05/10/2026): rodar este arquivo com o Python do
+    # Windows Store (`WindowsApps\python3.11.exe`) morria em
+    # "ModuleNotFoundError: No module named 'cv2'" sem dizer o que fazer -- e o
+    # que fazer e' usar o `.venv` do projeto, onde as dependencias vivem.
+    raise SystemExit(
+        f"Faltam as dependencias do projeto: {exc}\n"
+        "\n"
+        "Elas vivem no `.venv` DESTE projeto. Use:\n"
+        "    .venv\\Scripts\\python.exe tools\\kinect_groundtruth_tool.py   "
+        "(a ferramenta)\n"
+        "    .venv\\Scripts\\python.exe tools\\probe_lateralidade.py      "
+        "(probe de lateralidade)\n"
+        "\n"
+        "E note: ESTE arquivo e' a biblioteca do projeto (nao abre nada sozinho)."
+    ) from None
+
+# pykinect2 64 BITS: o pacote do PyPI foi gerado para Python 32 bits e o import
+# morre no assert do `tagSTATSTG` (issues #37/#115 do upstream). `kinect_compat`
+# instala o import hook que aceita as duas ABIs -- e TEM de vir ANTES do import
+# do pykinect2 (ver o docstring de `kinect_compat.py`).
+import kinect_compat
+
+kinect_compat.aplicar()
 
 try:
     from pykinect2 import PyKinectV2
@@ -53,7 +78,8 @@ try:
     from _ctypes import COMError
 except ImportError as exc:
     raise RuntimeError(
-        "pykinect2 nao esta instalado. Instale pykinect2 e o Kinect for Windows SDK 2.0."
+        "pykinect2 nao esta instalado. Instale pykinect2 e o Kinect for Windows "
+        f"SDK 2.0 (compatibilidade: {kinect_compat.motivo()})."
     ) from exc
 
 UDP_PORT = 4210
@@ -133,16 +159,147 @@ HAND_SIDE_CODE = {"": 0, "right": 1, "left": 2}
 #: do Kinect NAO e' espelhado -> o rotulo do Kinect precisa ser invertido.
 #: Sem isso, uma trial de mao ESQUERDA poderia triangular a mao DIREITA.
 MEDIAPIPE_KINECT_HANDEDNESS_FLIP = True
+# --- LATERALIDADE POR CAMERA AUXILIAR (o que estava trocando as maos) ---------
+#: Inversao do rotulo do MediaPipe POR CAMERA auxiliar (indice OpenCV -> bool).
+#: True = o rotulo DESTA camera sai trocado em relacao ao Kinect e tem de ser
+#: invertido antes de casar as maos.
+#:
+#: Por que o flip global nao bastava (bug de bancada, 05/10/2026): o pipeline
+#: espelha TODAS as auxiliares com o MESMO `AUXILIARY_MIRROR_HORIZONTAL` e o
+#: rotulo do MediaPipe depende de o frame estar espelhado (convencao "selfie").
+#: Com duas webcams de MODELOS DIFERENTES (nesta maquina: 0 = SIGMA-W780M e
+#: 1 = Trust USB Camera) o driver de uma delas pode JA' entregar o fluxo
+#: espelhado: o nosso flip entao DESespelha, a premissa do MediaPipe cai e SO'
+#: aquela camera fica com o rotulo invertido. Sintoma exato do relato: com as
+#: duas maos no quadro uma auxiliar concorda com o Kinect e a outra troca as
+#: maos -- e o casamento por lado (que e' o que liga cada mao ao IMU certo)
+#: passa a triangular/desenhar a mao errada naquela camera.
+#:
+#: Quem descobre o valor NAO e' o usuario: `ArbitroDeLateralidade` compara o
+#: rotulo com o lado medido pela GEOMETRIA (o Kinect tem o punho em 3D e cada
+#: auxiliar tem a homografia no-a-no da mao) e grava aqui quando ha' consenso --
+#: `tools\probe_lateralidade.py` faz o mesmo ao vivo, por camera, e o tool aceita
+#: `--aux-flip-lateralidade N` para forcar/limpar na mao.
+AUX_HANDEDNESS_FLIP_FILE = Path(__file__).with_name("aux_handedness_flip.json")
+_AUX_HANDEDNESS_FLIP = {}
+
+
+def aux_handedness_flip(aux_index):
+    """True quando o rotulo do MediaPipe DESTA auxiliar tem de ser invertido."""
+    return bool(_AUX_HANDEDNESS_FLIP.get(int(aux_index), False))
+
+
+def carrega_aux_handedness_flip(caminho=None):
+    """Le o json das inversoes APRENDIDAS (arquivo ausente ou corrompido = nada
+    aprendido -- nunca chuta: sem o arquivo vale o flip global do pipeline)."""
+    global _AUX_HANDEDNESS_FLIP
+    arquivo = Path(caminho or AUX_HANDEDNESS_FLIP_FILE)
+    if not arquivo.exists():
+        return dict(_AUX_HANDEDNESS_FLIP)
+    try:
+        with open(arquivo, "r", encoding="utf-8") as aberto:
+            conteudo = json.load(aberto)
+        _AUX_HANDEDNESS_FLIP = {
+            int(indice): bool(invertido)
+            for indice, invertido in (conteudo.get("flip") or {}).items()
+        }
+    except (OSError, ValueError, AttributeError, TypeError) as exc:
+        print(f"AVISO: {arquivo.name} foi ignorado ({exc}); nenhuma inversao de "
+              "lateralidade sera' aplicada ate' ser medida de novo", flush=True)
+    return dict(_AUX_HANDEDNESS_FLIP)
+
+
+def set_aux_handedness_flip(aux_index, invertido, motivo="", persistir=True,
+                            silencioso=False):
+    """Grava a inversao de UMA camera auxiliar (e persiste no json).
+
+    Persiste SEMPRE, mesmo quando o valor nao mudou: o json e' o unico canal
+    pelo qual o PROXIMO programa (protocolo, sand, demo) recebe a descoberta --
+    um `True` que ficasse so' na memoria desta sessao faria a sessao seguinte
+    voltar a trocar as maos.
+    """
+    global _AUX_HANDEDNESS_FLIP
+    indice = int(aux_index)
+    valor = bool(invertido)
+    mudou = _AUX_HANDEDNESS_FLIP.get(indice) != valor
+    _AUX_HANDEDNESS_FLIP[indice] = valor
+    if persistir:
+        arquivo = Path(AUX_HANDEDNESS_FLIP_FILE)
+        try:
+            with open(arquivo, "w", encoding="utf-8") as saida:
+                json.dump(
+                    {"flip": {str(chave): estado for chave, estado
+                              in sorted(_AUX_HANDEDNESS_FLIP.items())},
+                     "motivo": motivo or "",
+                     "escrito_em": time.strftime("%d/%m/%Y %H:%M:%S")},
+                    saida, indent=2, sort_keys=True)
+        except OSError as exc:                     # disco cheio / somente leitura
+            if not silencioso:
+                print(f"AVISO: nao consegui gravar {arquivo.name} ({exc}); a "
+                      "inversao vale SO' nesta sessao", flush=True)
+    if (mudou or valor) and not silencioso:
+        estado = "INVERTIDO (corrigido)" if valor else "normal"
+        print(f"Lateralidade da camera auxiliar {indice}: {estado}"
+              + (f" -- {motivo}" if motivo else ""), flush=True)
+    return valor
+
+
+def limpa_aux_handedness_flip(persistir=True):
+    """Esquece as inversoes aprendidas (memoria E arquivo).
+
+    Devolve o que estava gravado (para a mensagem poder dizer o que foi
+    esquecido). Usado por `--aux-flip-lateralidade limpar`.
+    """
+    global _AUX_HANDEDNESS_FLIP
+    antes = dict(_AUX_HANDEDNESS_FLIP)
+    _AUX_HANDEDNESS_FLIP = {}
+    if persistir:
+        try:
+            Path(AUX_HANDEDNESS_FLIP_FILE).unlink(missing_ok=True)
+        except OSError as exc:                     # arquivo em uso/sem permissao
+            print(f"AVISO: nao consegui apagar {AUX_HANDEDNESS_FLIP_FILE.name} "
+                  f"({exc}); o arquivo volta a valer na proxima abertura",
+                  flush=True)
+    return antes
+
+
+carrega_aux_handedness_flip()
 # Precisa casar EXATAMENTE com stereo_calibration.py: o stereo salvo e' validado
 # contra estes dois valores (se mudarem, a calibracao antiga fica INVALIDA e o
 # arquivo tem de ser regerado com a placa nova; `CameraAlignment.stereo_status`
 # diz o MOTIVO da recusa -- tabuleiro/quadrado diferente x RMS alto).
-# PLACA ATUAL (impressa em 23/09/2026, medida com regua): 6 x 4 QUADRADOS de
-# 57 mm -> 5 x 3 CANTOS internos (o cv2 conta cantos internos = quadrados - 1).
-# A placa anterior era 5x3 @ 52 mm -- os npz gravados com ela (aux1/aux2, 52 mm)
-# sao RECUSADOS por aqui ate' serem refeitos com a placa nova.
-CHECKERBOARD_SIZE = (5, 3)
-SQUARE_SIZE_M = 0.057
+# PLACA ATUAL (impressa em 01/10/2026): 8 x 6 QUADRADOS de 45 mm -> 7 x 5 CANTOS
+# internos (o cv2 conta cantos internos = quadrados - 1). A aresta de cantos mede
+# 270 x 180 mm (diagonal 324 mm = 1,27x a da placa de 57 mm): e' o que faz o
+# tabuleiro chegar a 35% da diagonal do Kinect a ~0,44 m (antes 0,35 m) e, com
+# isso, a webcam auxiliar tambem enxerga-lo na mesma pose.
+# Historico: 4x3/52 mm -> 5x3/52 mm -> 5x3/57 mm (23/09) -> 7x5/45 mm (01/10).
+# MEDIDO em 01/10/2026: as duas constantes ficaram desalinhadas por uma sessao (o
+# stereo ja' gravava 7x5/45 mm e aqui ainda estava 5x3/57 mm) e o sintoma NAO era
+# "RMS alto": os DOIS npz recem-gravados voltavam
+# 'rejeitada -- tabuleiro gravado 7x5 != 5x3 cantos da placa atual -> RECALIBRE',
+# e o `kinect_intrinsics.npz` (5x3/57 mm) deixou de ser aceito por
+# `carrega_intrinsecas_kinect` -- ou seja, a sessao voltou a RE-ESTIMAR o Kinect,
+# que e' exatamente o bug que o modelo congelado existe para matar. Quem trava a
+# divergencia daqui para a frente e' `test_intrinsecas_kinect.py`.
+CHECKERBOARD_SIZE = (7, 5)
+SQUARE_SIZE_M = 0.045
+# --- Deteccao do tabuleiro no CAMINHO DE DIAGNOSTICO (CameraAlignment.find_board)
+# Por que estes tres valores existem (medido na bancada, 28/09/2026, tecla T):
+# o diagnostico respondia "tabuleiro nao visto nas duas cameras" com o tabuleiro
+# NA MESA e as tres cameras abertas, porque `find_board` rodava SO' na resolucao
+# cheia, sem CLAHE e com CALIB_CB_ACCURACY -- exatamente as tres coisas que o
+# caminho da CALIBRACAO (`stereo_calibration.find_corners`) evita desde 23/09
+# (ver o bloco DETECTION_WIDTHS de la: o SB fica na FRONTEIRA e a mesma
+# configuracao acerta numa rodada e falha na outra; ACCURACY so' pesa). Aqui o
+# diagnostico passou a usar o MESMO tipo de caminho, para ele nao negar o que a
+# calibracao ve.
+#: Larguras-alvo tentadas em cascata (0 = resolucao cheia, por ultimo).
+BOARD_DETECTION_WIDTHS = (960, 640, 0)
+#: CLAHE no cinza antes de detectar (0 desliga): o que mais ajuda com impressao
+#: de baixo contraste, papel brilhante ou luz desigual.
+BOARD_DETECTION_CLAHE_CLIP = 2.0
+BOARD_DETECTION_CLAHE_GRID = 8
 CALIBRATION_SAMPLES_REQUIRED = 15
 CALIBRATION_VERSION = 7
 MAX_STEREO_RMS_PX = 2.0
@@ -226,6 +383,28 @@ def indices_auxiliares_automaticos(recarregar=False):
     return tuple(com_calibracao + sem_calibracao)
 
 
+def indice_auxiliar_automatico(preferidas=None, reserva=None):
+    """Indice da auxiliar ATIVA quando ninguem passa `--aux-index`.
+
+    O default HISTORICO era a constante AUX_CAMERA_INDEX (2), que so' valia na
+    maquina de 23/09/2026. Medido em 28/09/2026 nesta maquina: existem as DUAS
+    externas nos indices 0 (SIGMA-W780M) e 1 (Trust USB Camera) e NENHUM indice
+    2 -- a ferramenta abortava com "a webcam auxiliar ATIVA (indice 2) nao
+    abriu" mesmo com as duas externas funcionando e ABRINDO nos indices 0 e 1.
+
+    Agora o padrao sai do NOME (`indices_auxiliares_automaticos()`: todas as
+    cameras menos a do laptop, as que TEM calibracao stereo primeiro) e a
+    constante fica como ULTIMO recurso, quando a enumeracao nao devolve nada.
+
+    `preferidas` existe para o teste injetar a lista sem tocar no Windows.
+    """
+    lista = (indices_auxiliares_automaticos() if preferidas is None
+             else list(preferidas))
+    if lista:
+        return int(lista[0])
+    return int(AUX_CAMERA_INDEX if reserva is None else reserva)
+
+
 def nome_auxiliar(indice):
     """Nome real (Windows) da camera do indice, ou o apelido estatico, ou '?'.
 
@@ -234,6 +413,39 @@ def nome_auxiliar(indice):
     """
     real = None if camera_names is None else camera_names.nome_da_camera(indice)
     return real or AUX_CAMERA_NAMES.get(int(indice), "?")
+
+
+def nome_da_camera_do_indice(indice):
+    """Nome (Windows) da camera daquele indice -- None se nao der para saber.
+
+    Serve para CONFERIR A QUAL CAMERA um npz pertence (o indice do OpenCV e' a
+    posicao na enumeracao do DirectShow: muda quando uma webcam entra/sai do
+    USB). Nunca levanta: sem comtypes, com COM falhando ou indice inexistente o
+    resultado e' None, e quem chama simplesmente nao faz a checagem -- nome e'
+    conveniencia, nunca pre-requisito para o programa rodar.
+    """
+    if camera_names is None:
+        return None
+    try:
+        return camera_names.nome_da_camera(indice)
+    except Exception:                     # pragma: no cover - COM/ctypes
+        return None
+
+
+def nome_de_camera_confere(gravado, indice):
+    """True se der para afirmar que o npz e' DESTA camera (ou se nao da' para saber).
+
+    Confere o nome do Windows gravado no npz com o nome da camera do indice hoje,
+    ignorando caixa e espacos. Devolve True (nada a declarar) quando um dos dois
+    nomes e' desconhecido -- npz anterior a 29/09/2026, sem comtypes, indice fora
+    da enumeracao: nome e' prova, nunca pre-requisito.
+    """
+    if not gravado:
+        return True
+    atual = nome_da_camera_do_indice(indice)
+    if not atual:
+        return True
+    return gravado.strip().lower() == atual.strip().lower()
 
 
 def aviso_camera_do_laptop(indice, papel="webcam auxiliar"):
@@ -587,6 +799,15 @@ ARM_JOINT_TYPES = {
              PyKinectV2.JointType_ElbowLeft,
              PyKinectV2.JointType_WristLeft),
 }
+#: Quanto (m, camera space) uma junta tem de estar ABAIXO do fim do tronco
+#: (SpineBase) para ser DESCARTADA. A MESA bloqueia a vista do Kinect abaixo do
+#: tronco (bancada 09/10/2026, pedido do usuario): o SDK infere quadril/joelho/
+#: pe ATRAVES da mesa (state Inferred, que o desenho ACEITAVA) e esses pontos sao
+#: fantasma -- esqueleto desenhado atravessando a mesa e medida errada se
+#: consumidos (ancora de profundidade do punho, modelo do braco). Margem de
+#: 0,10 m: joelhos/pes (~0,25 m abaixo) somem; quadril (~0,05 m) e PUNHO NA MESA
+#: (mesma altura do tronco sentado) continuam. 0 = mascara desligada.
+MASCARA_ABAIXO_TRONCO_M = 0.10
 HAND_CONNECTIONS = [
     (0, 1), (1, 2), (2, 3), (3, 4),
     (0, 5), (5, 6), (6, 7), (7, 8),
@@ -938,6 +1159,121 @@ def triangulate_aux_pairs(alignment, deteccoes):
 
 
 
+def _cinza_para_detectar_tabuleiro(gray, largura_alvo):
+    """(cinza reduzido com CLAHE, fator para voltar a resolucao cheia).
+
+    Ver o comentario de BOARD_DETECTION_WIDTHS: a deteccao roda numa largura
+    reduzida (mais robusta e ~8x mais barata) e os cantos achados sao
+    multiplicados pelo fator devolvido. Largura 0 = sem reducao.
+    """
+    if largura_alvo and gray.shape[1] > int(largura_alvo):
+        fator = gray.shape[1] / float(largura_alvo)
+        reduzido = cv2.resize(
+            gray,
+            (int(largura_alvo), max(1, int(round(gray.shape[0] / fator)))),
+            interpolation=cv2.INTER_AREA)
+    else:
+        reduzido = gray
+    if BOARD_DETECTION_CLAHE_CLIP > 0:
+        reduzido = cv2.createCLAHE(
+            clipLimit=BOARD_DETECTION_CLAHE_CLIP,
+            tileGridSize=(BOARD_DETECTION_CLAHE_GRID,
+                          BOARD_DETECTION_CLAHE_GRID)).apply(reduzido)
+    return reduzido, gray.shape[1] / float(reduzido.shape[1])
+
+
+def grupos_centro_borda(cantos, fracao_borda=0.75):
+    """Separa os cantos do tabuleiro em CENTRO e BORDAS pela GEOMETRIA.
+
+    Devolve `(indice_do_canto_central, mascara_das_bordas, raio_de_cada_canto)`,
+    onde `raio` e' a distancia do canto ao centroide do tabuleiro.
+
+    Por que por geometria e nao por indice fixo: o resumo do diagnostico (tecla
+    T) usava `errors[24]` para "centro" e `errors[:8]`/`errors[-8:]` para
+    "bordas" -- indices da placa ANTIGA, de 11x7 = 77 cantos. Com a placa atual
+    (5x3 = 15) a tecla T estourava `IndexError` DEPOIS de acertar o tabuleiro e
+    medir a profundidade (medido 28/09/2026). Assim o resumo acompanha a placa
+    sozinho, como `CHECKERBOARD_SIZE` manda.
+    """
+    pontos = np.asarray(cantos, np.float64).reshape(-1, 2)
+    raios = np.linalg.norm(pontos - pontos.mean(axis=0), axis=1)
+    indice_centro = int(np.argmin(raios))
+    if float(raios.max()) > 0.0:
+        bordas = raios >= float(fracao_borda) * float(raios.max())
+    else:                                   # tabuleiro degenerado (1 canto)
+        bordas = np.ones(raios.shape, bool)
+    return indice_centro, bordas, raios
+
+
+def simetrias_do_tabuleiro(board_size=None):
+    """As 4 simetrias da grade -> permutacao de indices (com o nome de cada uma).
+
+    Espelha `stereo_calibration.symmetry_indices` (mesmos nomes e mesma
+    convencao row-major): 'id', 'rot180', 'hflip' e 'vflip'. O sensor de
+    tabuleiro e' simetrico, entao a ORDEM que o detector devolve nao diz qual
+    canto fisico e' o primeiro -- e cada camera escolhe o seu. Quem resolve isso
+    e' `ordem_canonica_do_tabuleiro` (a regra da calibracao) ou, no diagnostico,
+    testar as quatro e ficar com a de menor erro (como o solver faz).
+    """
+    cols, rows = CHECKERBOARD_SIZE if board_size is None else board_size
+    cols, rows = int(cols), int(rows)
+    total = cols * rows
+    rr, cc = np.mgrid[0:rows, 0:cols]
+    return {
+        "id": np.arange(total),
+        "rot180": (total - 1) - np.arange(total),
+        "hflip": (rr * cols + (cols - 1 - cc)).reshape(-1),
+        "vflip": ((rows - 1 - rr) * cols + cc).reshape(-1),
+    }
+
+
+def ordem_canonica_do_tabuleiro(cantos, board_size=None):
+    """Cantos na ORDEM CANONICA da calibracao: `(pontos, nome_da_simetria)`.
+
+    Espelha `stereo_calibration.canonical_order` (mesma regra, mesmo desempate):
+    e' a convencao que o solver usa para casar os dois tabuleiros -- o primeiro
+    canto e' o canto externo mais proximo do canto superior esquerdo da IMAGEM,
+    a primeira linha segue o eixo mais horizontal e as linhas avancam para
+    baixo.
+
+    Por que nao comparar as listas CRUAS: cada camera escolhe a ORDEM de deteccao
+    por conta propria (o cv2 nao fixa a origem e o padrao e' simetrico). Comparar
+    ou projetar as duas listas cruas compara cantos que NAO se correspondem e o
+    erro sai na casa das centenas de px mesmo com a calibracao perfeita (medido
+    na bancada em 28/09/2026: 'id' 491 px, 'rot180' 494 px e a canonica 494 px,
+    com uma homografia NOVA do mesmo par fechando em 0,3 px -- a calibracao
+    gravada e' que era de outra montagem).
+
+    Existe aqui, e nao importada de `stereo_calibration`, porque aquele modulo
+    importa ESTE -- a duplicacao e' travada por `test_deteccao_cascata.py`, que
+    compara as duas implementacoes em tabuleiros aleatorios.
+    """
+    cols, rows = CHECKERBOARD_SIZE if board_size is None else board_size
+    cols, rows = int(cols), int(rows)
+    pontos = np.asarray(cantos, np.float64).reshape(-1, 2)
+    esperado = cols * rows
+    if pontos.shape[0] != esperado:
+        raise ValueError(
+            "tabuleiro %dx%d cantos esperado (%d); recebidos %d -- calibracao "
+            "de outra placa?" % (cols, rows, esperado, pontos.shape[0]))
+    simetrias = simetrias_do_tabuleiro((cols, rows))
+    melhor_nome, melhor, melhor_penalidade = "id", pontos, None
+    for nome, indices in simetrias.items():
+        candidato = pontos[indices]
+        inicio = candidato[0]
+        vetor_linha = candidato[cols - 1] - inicio
+        vetor_coluna = candidato[cols] - inicio
+        outros = np.array([candidato[cols - 1], candidato[cols], candidato[-1]])
+        penalidade = (
+            max(0.0, float(outros.sum(axis=1).min()) - float(inicio.sum()))
+            + max(0.0, abs(vetor_linha[1]) - abs(vetor_linha[0]))
+            + max(0.0, -vetor_coluna[1])
+        )
+        if melhor_penalidade is None or penalidade < melhor_penalidade - 1e-9:
+            melhor_nome, melhor, melhor_penalidade = nome, candidato, penalidade
+    return melhor, melhor_nome
+
+
 class CameraAlignment:
     def __init__(self, aux_indices=None):
         # Cameras auxiliares registradas (por indice OpenCV). O padrao vem da
@@ -956,6 +1292,10 @@ class CameraAlignment:
         self.stereo_rotation = None
         self.stereo_translation = None
         self.stereo_rms = None
+        # Nome (Windows) da camera para a qual o npz carregado foi GRAVADO: e' o
+        # unico jeito de pegar o npz carregado pela camera errada (ver
+        # stereo_status).
+        self.stereo_camera_name = None
         self.calibrated_auxiliary_size = None
         self.calibrated_kinect_size = None
         # Calibração do esqueleto (correspondência nó-a-nó auxiliar -> Kinect).
@@ -1022,7 +1362,7 @@ class CameraAlignment:
             "rotation": None, "translation": None, "rms": None,
             # O que o npz DIZ que foi calibrado (placa e quadrado): guardado
             # para `stereo_status` poder explicar a recusa por extenso.
-            "board_size": None, "square_size_m": None,
+            "board_size": None, "square_size_m": None, "camera_name": None,
             "stereo_ready": False, "stereo_usable": False,
             "auxiliary_size": None, "kinect_size": None,
             "hand_homography": None, "hand_residuals": None, "hand_rms": None,
@@ -1052,6 +1392,12 @@ class CameraAlignment:
                                 if "square_size_m" in stereo_data.files else None)
                 model["board_size"] = saved_board
                 model["square_size_m"] = saved_square
+                # Nome da camera que GRAVOU o npz (vazio/ausente nos arquivos
+                # anteriores a 29/09/2026: nesses nao ha' como conferir).
+                gravado = (stereo_data["camera_name"]
+                           if "camera_name" in stereo_data.files else None)
+                model["camera_name"] = (str(gravado).strip() or None
+                                        if gravado is not None else None)
                 model["rms"] = (float(stereo_data["rms"])
                                 if "rms" in stereo_data.files else None)
                 model["stereo_ready"] = (
@@ -1059,7 +1405,10 @@ class CameraAlignment:
                     and saved_square is not None
                     and abs(saved_square - SQUARE_SIZE_M) < 1e-6
                     and model["rms"] is not None
-                    and model["rms"] <= MAX_STEREO_RMS_PX)
+                    and model["rms"] <= MAX_STEREO_RMS_PX
+                    # e o arquivo tem de ser DESTA camera (se o npz diz o nome):
+                    # geometria de outro par nao fica "pronta" nem com RMS bom.
+                    and nome_de_camera_confere(model["camera_name"], aux_index))
                 model["stereo_usable"] = (
                     model["rms"] is not None
                     and model["rms"] <= STEREO_OVERLAY_MAX_RMS_PX)
@@ -1111,6 +1460,7 @@ class CameraAlignment:
         self.stereo_rotation = model["rotation"]
         self.stereo_translation = model["translation"]
         self.stereo_rms = model["rms"]
+        self.stereo_camera_name = model["camera_name"]
         self.stereo_ready = bool(model["stereo_ready"])
         self.calibrated_auxiliary_size = model["auxiliary_size"]
         self.calibrated_kinect_size = model["kinect_size"]
@@ -1152,6 +1502,26 @@ class CameraAlignment:
             and self.stereo_rms <= STEREO_OVERLAY_MAX_RMS_PX
         )
 
+    def camera_name_conflict(self, aux_index=None):
+        """Nome gravado no npz quando esse npz NAO e' da camera de agora.
+
+        Devolve o nome da camera para a qual o arquivo foi gravado quando os dois
+        nomes (gravado x o daquele indice hoje) sao conhecidos e DIFERENTES;
+        None quando nao da' para saber (npz anterior a 29/09/2026, sem comtypes,
+        indice fora da lista) ou quando conferem -- nunca inventa conflito.
+
+        Motivo: o indice do OpenCV e' a POSICAO na enumeracao do DirectShow e
+        muda quando uma webcam entra/sai do USB. Sem esta checagem, um npz pode
+        ser carregado pela camera errada sem sintoma nenhum alem de um erro
+        geometrico que o RMS do proprio arquivo nao ve'.
+        """
+        index = self.active_aux if aux_index is None else int(aux_index)
+        model = None if index is None else self.aux_models.get(int(index))
+        gravado = None if model is None else model.get("camera_name")
+        if nome_de_camera_confere(gravado, index):
+            return None
+        return gravado
+
     def stereo_status(self, aux_index=None):
         """(estado, motivo) do stereo de uma auxiliar -- com o motivo POR EXTENSO.
 
@@ -1166,6 +1536,17 @@ class CameraAlignment:
         model = None if index is None else self.aux_models.get(int(index))
         if model is None or model.get("matrix") is None:
             return "sem calibracao", "arquivo stereo ausente ou sem intrinsecas"
+        # DE QUAL CAMERA E' ESTE ARQUIVO? O npz novo grava o nome do Windows da
+        # camera calibrada (ver camera_name_conflict). Nome desconhecido de um
+        # dos lados (npz antigo, sem comtypes, indice fora da lista) = sem
+        # checagem, como antes.
+        conflito = self.camera_name_conflict(index)
+        if conflito:
+            return ("rejeitada",
+                    "gravado para a camera '%s', mas o indice %d agora e' '%s' "
+                    "-> confira o mapa (tools\\diagnostico_cameras.py) e "
+                    "RECALIBRE se o par mudou"
+                    % (conflito, index, nome_da_camera_do_indice(index)))
         board = model.get("board_size")
         square = model.get("square_size_m")
         rms = model.get("rms")
@@ -1441,30 +1822,52 @@ class CameraAlignment:
         return projected
 
     def find_board(self, frame):
-        gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
-        if hasattr(cv2, "findChessboardCornersSB"):
-            found, corners = cv2.findChessboardCornersSB(
-                gray,
-                CHECKERBOARD_SIZE,
-                cv2.CALIB_CB_EXHAUSTIVE | cv2.CALIB_CB_ACCURACY,
-            )
-        else:
-            found, corners = cv2.findChessboardCorners(
-                gray,
-                CHECKERBOARD_SIZE,
-                cv2.CALIB_CB_ADAPTIVE_THRESH | cv2.CALIB_CB_NORMALIZE_IMAGE,
-            )
-        if not found:
+        """Cantos internos do tabuleiro (N,2) NA ESCALA DO FRAME, ou None.
+
+        Caminho ROBUSTO de proposito (ver BOARD_DETECTION_WIDTHS): CLAHE +
+        cascata de larguras (SB EXHAUSTIVE, com o detector classico como
+        fallback na mesma escala) + refinamento na resolucao cheia. Antes rodava
+        so' na resolucao cheia, sem CLAHE e com CALIB_CB_ACCURACY, e respondia
+        "Diagnostico: tabuleiro nao visto nas duas cameras" com a placa na mesa
+        e as tres cameras abertas (medido 28/09/2026, tecla T).
+        """
+        if frame is None:
             return None
-        if hasattr(cv2, "findChessboardCornersSB"):
-            return corners.reshape(-1, 2)
-        return cv2.cornerSubPix(
-            gray,
-            corners,
-            (11, 11),
-            (-1, -1),
-            (cv2.TERM_CRITERIA_EPS + cv2.TERM_CRITERIA_MAX_ITER, 30, 0.001),
-        ).reshape(-1, 2)
+        gray_cheio = (cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
+                      if frame.ndim == 3 else frame)
+        for largura in BOARD_DETECTION_WIDTHS:
+            gray, fator = _cinza_para_detectar_tabuleiro(gray_cheio, largura)
+            achou, cantos = False, None
+            if hasattr(cv2, "findChessboardCornersSB"):
+                achou, cantos = cv2.findChessboardCornersSB(
+                    gray,
+                    CHECKERBOARD_SIZE,
+                    cv2.CALIB_CB_EXHAUSTIVE,
+                )
+            if not achou:
+                achou, cantos = cv2.findChessboardCorners(
+                    gray,
+                    CHECKERBOARD_SIZE,
+                    cv2.CALIB_CB_ADAPTIVE_THRESH | cv2.CALIB_CB_NORMALIZE_IMAGE,
+                )
+            if not achou:
+                continue
+            pontos = cantos.reshape(-1, 2).astype(np.float64) * fator
+            try:
+                # Refina na resolucao CHEIA: a deteccao reduzida sozinha deixa
+                # ~1-2 px de erro (era o que estourava o RMS do stereo).
+                pontos = cv2.cornerSubPix(
+                    gray_cheio,
+                    pontos.astype(np.float32).reshape(-1, 1, 2),
+                    (11, 11),
+                    (-1, -1),
+                    (cv2.TERM_CRITERIA_EPS + cv2.TERM_CRITERIA_MAX_ITER, 30,
+                     0.001),
+                ).reshape(-1, 2).astype(np.float64)
+            except cv2.error:               # mantem os cantos da deteccao
+                pass
+            return pontos
+        return None
 
     def draw_board_detection(self, frame):
         corners = self.find_board(frame)
@@ -1482,6 +1885,12 @@ class CameraAlignment:
         kinect_corners = self.find_board(kinect_frame)
         if auxiliary_corners is None or kinect_corners is None:
             return False
+        # Guarda as duas listas na MESMA ordem canonica que o solver usa (o cv2
+        # nao fixa a origem da ordem de deteccao e o padrao e' simetrico): um
+        # `findHomography` com os pares trocados sai errado e iria direto para o
+        # arquivo de calibracao.
+        auxiliary_corners, _ = ordem_canonica_do_tabuleiro(auxiliary_corners)
+        kinect_corners, _ = ordem_canonica_do_tabuleiro(kinect_corners)
         self.auxiliary_points.append(auxiliary_corners)
         self.kinect_points.append(kinect_corners)
         return True
@@ -2295,10 +2704,16 @@ class KinectHandTracker:
         for body in self.last_bodies.bodies:
             if not body.is_tracked:
                 continue
+            #: Mascara ABAIXO_DO_TRONCO: a MESA bloqueia a vista do Kinect ali e
+            #: o SDK infere perna/pe ATRAVES da tampo -- desenhar isso seria
+            #: linha lixo atravessando a mesa (pedido da bancada 09/10/2026).
+            y_base = self._tronco_base_y(body.joints)
             points = {}
             for joint_type in range(PyKinectV2.JointType_Count):
                 joint = body.joints[joint_type]
                 if joint.TrackingState == PyKinectV2.TrackingState_NotTracked:
+                    continue
+                if self._abaixo_do_tronco(joint.Position.y, y_base):
                     continue
                 point = self.mapper.MapCameraPointToDepthSpace(joint.Position)
                 if not np.isfinite((point.x, point.y)).all():
@@ -2400,6 +2815,41 @@ class KinectHandTracker:
         return palm_frame(wrist, index_mcp, pinky_mcp, middle_mcp)
 
     @staticmethod
+    def _tronco_base_y(joints):
+        """y (camera space, Y pra cima) do fim do tronco (SpineBase) ou None.
+
+        Referencia da mascara ABAIXO_DO_TRONCO: sem SpineBase valido (corpo sem
+        tronco tracked, ou `joints` sem aquela junta) devolve None e a mascara
+        nao descarta nada (melhor nao mexer do que descartar certo).
+        """
+        try:
+            joint = joints[PyKinectV2.JointType_SpineBase]
+        except (IndexError, KeyError, TypeError):
+            return None
+        not_tracked = getattr(PyKinectV2, "TrackingState_NotTracked", 0)
+        if getattr(joint, "TrackingState", not_tracked) == not_tracked:
+            return None
+        try:
+            y = float(joint.Position.y)
+        except (AttributeError, TypeError, ValueError):
+            return None
+        return y if np.isfinite(y) else None
+
+    @staticmethod
+    def _abaixo_do_tronco(y, y_base):
+        """True quando a junta esta' claramente ABAIXO do fim do tronco.
+
+        `y`/`y_base` em camera space (Y pra cima); ver MASCARA_ABAIXO_TRONCO_M.
+        """
+        if y_base is None or not MASCARA_ABAIXO_TRONCO_M:
+            return False
+        try:
+            y = float(y)
+        except (TypeError, ValueError):
+            return False
+        return bool(np.isfinite(y) and y < y_base - MASCARA_ABAIXO_TRONCO_M)
+
+    @staticmethod
     def _joint_camera_position(joints, jtype, z_range=(0.3, 4.0)):
         """Posicao (m) de uma junta do SDK: devolve (vetor, tracked) ou
         (None, False). Juntas 'Inferred' (extrapoladas pelo SDK numa oclusao
@@ -2415,6 +2865,12 @@ class KinectHandTracker:
         pos = joint.Position
         x, y, z = float(pos.x), float(pos.y), float(pos.z)
         if not np.all(np.isfinite([x, y, z])):
+            return None, False
+        #: Mascara ABAIXO_DO_TRONCO: joelho/pé/etc inferidos ATRAVES da mesa
+        #: nao servem nem pro modelo do braco (punho na mesa fica: a margem e'
+        #: MASCARA_ABAIXO_TRONCO_M).
+        if KinectHandTracker._abaixo_do_tronco(
+                y, KinectHandTracker._tronco_base_y(joints)):
             return None, False
         if not z_range[0] < z < z_range[1]:
             return None, False
@@ -2519,6 +2975,11 @@ class KinectHandTracker:
             joints = getattr(body, "joints", None)
             if joints is None:
                 continue
+            #: Linha do fim do tronco: punho/HandTip ABAIXO dela (mais de
+            #: MASCARA_ABAIXO_TRONCO_M) esta' atras da MESA -- o SDK infere
+            #: atraves da tampo e a "medida" e' fantasma; usa-la corromperia a
+            #: profundidade (inclusive o EMA last_hand_depth_m).
+            y_base = self._tronco_base_y(joints)
             # Pulso primeiro (coincide com o no 0 do MediaPipe); HandTip
             # como reserva. Qualquer das duas maos serve.
             for jtype, name in self._anchor_joint_order(prefer_side):
@@ -2531,6 +2992,8 @@ class KinectHandTracker:
                 pos = joint.Position
                 x, y, z = float(pos.x), float(pos.y), float(pos.z)
                 if not np.all(np.isfinite([x, y, z])) or not 0.3 < z < 4.0:
+                    continue
+                if self._abaixo_do_tronco(y, y_base):
                     continue
                 return (x, y, z, name)
         return None
@@ -2603,13 +3066,21 @@ class KinectHandTracker:
         return hands
 
     def detect_auxiliary_hands(self, auxiliary_frame, aux_index=None,
-                               want_side=None):
+                               want_side=None, flip=None):
         """Detecta maos na webcam auxiliar.
 
         `aux_index` None usa a camera primaria (compatibilidade com chamadas
         legadas); com indice usa o detector/timestamp daquela camera.
         `want_side` ('left'/'right') coloca a mao daquele lado em [0] e
-        devolve [] se o detector viu somente a outra mao."""
+        devolve [] se o detector viu somente a outra mao.
+
+        `flip` None usa a inversao APRENDIDA daquela camera
+        (`aux_handedness_flip`): o pipeline espelha a auxiliar, mas com duas
+        webcams de modelos diferentes o driver de uma delas pode ja' entregar o
+        fluxo espelhado, e entao SO' aquela camera sai com o rotulo trocado.
+        Antes daqui sair `False` fixo, o rotulo invertido de UMA camera trocava
+        as maos nela e nada no programa percebia.
+        """
         if auxiliary_frame is None:
             return []
         if aux_index is not None:
@@ -2624,9 +3095,9 @@ class KinectHandTracker:
                         int(time.monotonic() * 1000))
             self.auxiliary_timestamps_ms[index] = stamp
             result = detector.detect_for_video(image, stamp)
-            # A auxiliar e' espelhada no pipeline -> rotulo do MediaPipe ja
-            # corresponde a mao fisica (sem flip).
-            return self._order_hands(result, want_side)
+            if flip is None:
+                flip = aux_handedness_flip(index)
+            return self._order_hands(result, want_side, flip)
         rgb = cv2.cvtColor(auxiliary_frame, cv2.COLOR_BGR2RGB)
         image = mp.Image(image_format=mp.ImageFormat.SRGB, data=rgb)
         self.auxiliary_frame_timestamp_ms = max(
@@ -2928,12 +3399,27 @@ class KinectHandTracker:
             if rotulos:
                 rotulo = "aux %s" % nome_auxiliar(index)
             for hand_index, landmarks in enumerate(maos):
+                # REFERENCIA POR MAO quando o chamador passou uma lista do
+                # tamanho da lista de maos (bimanual: cada lado leva o SEU
+                # triangulated_3d/z). Formato ANTIGO continua igual: tri (ndarray)
+                # so' na mao 0 e z ([z]) broadcast para todas. Antes TODAS as
+                # maos recebiam o dado da PRIMARIA: com as duas maos na tela a
+                # nao primaria era desenhada na profundidade/3D da outra (roxo
+                # offset na mao esquerda, bancada 09/10/2026).
+                tri_all = (triangulados or {}).get(int(index))
+                z_all = (depths or {}).get(int(index))
+                if isinstance(tri_all, (list, tuple)):
+                    tri_mao = (tri_all[hand_index]
+                               if hand_index < len(tri_all) else None)
+                else:
+                    tri_mao = tri_all if hand_index == 0 else None
+                if isinstance(z_all, (list, tuple)):
+                    z_mao = (z_all[hand_index] if hand_index < len(z_all)
+                             else (z_all[0] if z_all else None))
+                else:
+                    z_mao = z_all
                 pixels = self._projetar_mao_no_kinect(
-                    view, landmarks,
-                    (depths or {}).get(int(index)),
-                    ((triangulados or {}).get(int(index))
-                     if hand_index == 0 else None),
-                    alignment.overlay_trim,
+                    view, landmarks, z_mao, tri_mao, alignment.overlay_trim,
                 )
                 if pixels is None or pixels.shape[0] < 21:
                     continue
@@ -3000,10 +3486,16 @@ class KinectHandTracker:
         for body in self.last_bodies.bodies:
             if not body.is_tracked:
                 continue
+            #: Mascara ABAIXO_DO_TRONCO (mesma da depth): sem ela o esqueleto
+            #: do SDK desenha quadril/joelho/pe inferidos ATRAVES da MESA --
+            #: pontos fantasma abaixo do tronco (bancada 09/10/2026).
+            y_base = self._tronco_base_y(body.joints)
             points = {}
             for joint_type in range(PyKinectV2.JointType_Count):
                 joint = body.joints[joint_type]
                 if joint.TrackingState == PyKinectV2.TrackingState_NotTracked:
+                    continue
+                if self._abaixo_do_tronco(joint.Position.y, y_base):
                     continue
                 point = self.mapper.MapCameraPointToColorSpace(joint.Position)
                 if not np.isfinite((point.x, point.y)).all():
@@ -3119,13 +3611,22 @@ class KinectHandTracker:
         )
         return color_frame, maos
 
-    def detect_auxiliary_hands_sides(self, auxiliary_frame, aux_index=None):
+    def detect_auxiliary_hands_sides(self, auxiliary_frame, aux_index=None,
+                                     flip=None):
         """Detecta TODAS as maos na auxiliar com a lateralidade de cada uma.
 
-        Devolve lista de {"side": ..., "landmarks": [...]}. SEM reordenacao: o
-        groundtruth bimanual casa as maos PELO LADO. A auxiliar e' espelhada no
-        pipeline -> o rotulo do MediaPipe ja' corresponde a mao fisica (sem
-        flip), como em detect_auxiliary_hands.
+        Devolve lista de {"side": ..., "side_bruto": ..., "landmarks": [...]},
+        em ORDEM CANONICA (direita primeiro, depois esquerda, depois as sem
+        rotulo): o pareamento do groundtruth bimanual e' PELO LADO, e a ordem
+        estavel e' o que faz "mao 1" e "mao 2" significarem a MESMA coisa em
+        todas as cameras (antes a lista vinha na ordem de ESCORE do MediaPipe,
+        que muda de camera para camera e de frame para frame).
+
+        A auxiliar e' espelhada no pipeline, entao o rotulo do MediaPipe ja'
+        corresponde a mao fisica -- EXCETO na camera cujo driver ja' entrega o
+        fluxo espelhado (o bug relatado na bancada em 05/10/2026). Por isso o
+        `flip` e' POR CAMERA: None usa o valor aprendido por
+        `ArbitroDeLateralidade` (`aux_handedness_flip.json`).
 
         `aux_index` None usa o detector PRIMARIO (compatibilidade); com indice usa
         o detector/timestamp DAQUELA camera -- necessario com duas auxiliares: o
@@ -3146,6 +3647,7 @@ class KinectHandTracker:
             self.auxiliary_timestamps_ms[index] = stamp
             result = detector.detect_for_video(image, stamp)
         else:
+            index = None
             self.auxiliary_frame_timestamp_ms = max(
                 self.auxiliary_frame_timestamp_ms + 1,
                 int(time.monotonic() * 1000)
@@ -3153,15 +3655,18 @@ class KinectHandTracker:
             result = self.auxiliary_hands.detect_for_video(
                 image, self.auxiliary_frame_timestamp_ms
             )
-        return [
+        if flip is None:
+            flip = aux_handedness_flip(index) if index is not None else False
+        return ordena_maos_por_lado([
             {
-                "side": self._handedness_of(result, index, False),
+                "side": self._handedness_of(result, posicao, flip),
+                "side_bruto": self._handedness_of(result, posicao, False),
                 "landmarks": hand_landmarks,
             }
-            for index, hand_landmarks in enumerate(
+            for posicao, hand_landmarks in enumerate(
                 getattr(result, "hand_landmarks", None) or []
             )
-        ]
+        ])
 
     def detect_hand(self, color_frame, depth_frame, want_side=None):
         """Detecta a mao no RGB do Kinect.
@@ -3262,6 +3767,581 @@ class KinectHandTracker:
         self.kinect.close()
 
 
+# --- LATERALIDADE DAS MAOS AUXILIARES: ORDEM CANONICA + ARBITRO GEOMETRICO ----
+#: Ordem canonica dos lados -- a MESMA do laco por mao do groundtruth/tool
+#: ("right" antes de "left", porque a direita e' a mao PRIMARIA dos recursos de
+#: mao unica: teclas H/K/L).
+ORDEM_DOS_LADOS = ("right", "left")
+#: Indice do landmark da PALMA: o MESMO no' que o resto do modulo usa como "a mao
+#: esta aqui" (profundidade da palma, vetor da palma, ancoras). O arbitro compara
+#: esse ponto e nao os 21 nos: os dedos tem ruido proprio e sao justamente o que a
+#: calibracao de esqueleto existe para corrigir.
+PALM_LANDMARK_INDEX = 9
+
+
+def ordena_maos_por_lado(maos):
+    """Maos (dicts com "side") em ordem canonica e ESTAVEL (sorted e' estavel).
+
+    A lista do MediaPipe vem ordenada por ESCORE, que muda de camera para camera
+    e de frame para frame: "mao 1" podia ser a ESQUERDA numa auxiliar e a DIREITA
+    na outra no MESMO instante, o que torna a conferencia visual (e qualquer log)
+    impossivel de ler. Sem rotulo (`side` "") vai para o fim.
+    """
+    def chave(entrada):
+        lado = (entrada or {}).get("side") or ""
+        return (ORDEM_DOS_LADOS.index(lado) if lado in ORDEM_DOS_LADOS
+                else len(ORDEM_DOS_LADOS))
+
+    return sorted(maos or [], key=chave)
+
+
+def pontos_normalizados(landmarks):
+    """(N,2) normalizado (0..1) dos landmarks do MediaPipe, ou None se vazio."""
+    pontos = [(float(ponto.x), float(ponto.y)) for ponto in (landmarks or [])]
+    if not pontos:
+        return None
+    return np.asarray(pontos, np.float64)
+
+
+def projeta_mao_aux_no_kinect(homography, residuals, landmarks, kinect_size):
+    """Palma (px) no RGB do Kinect a partir dos landmarks da AUXILIAR, ou None.
+
+    Mesma matematica de `CameraAlignment.auxiliary_to_kinect_landmark` (homografia
+    dos 21 nos + residual por no), mas com a homografia PASSADA como argumento:
+    o arbitro precisa comparar TODAS as auxiliares no MESMO frame, e os campos
+    vivos do alignment (`hand_landmark_homography`) descrevem UMA camera so'.
+    """
+    if homography is None or kinect_size is None:
+        return None
+    pontos = pontos_normalizados(landmarks)
+    if pontos is None:
+        return None
+    try:
+        projetado = cv2.perspectiveTransform(
+            pontos.reshape(-1, 1, 2), np.asarray(homography, np.float64)
+        ).reshape(-1, 2)
+    except cv2.error:                      # homografia degenerada no npz
+        return None
+    if residuals is not None:
+        residual = np.asarray(residuals, np.float64).reshape(-1, 2)
+        contagem = min(len(projetado), len(residual))
+        projetado[:contagem] += residual[:contagem]
+    if len(projetado) <= PALM_LANDMARK_INDEX or not np.isfinite(projetado).all():
+        return None
+    largura, altura = float(kinect_size[0]), float(kinect_size[1])
+    palma = projetado[PALM_LANDMARK_INDEX]
+    return np.array([palma[0] * largura, palma[1] * altura], np.float64)
+
+
+#: Limites do arbitro, em px do RGB do Kinect. MAX_DIST: uma projecao a mais de
+#: X px de QUALQUER mao do Kinect nao e' um casamento -- melhor nao decidir do que
+#: decidir errado (o pior erro possivel e' associar/triangular a mao errada).
+#: MIN_MARGEM: os punhos da bancada ficam a ~40 cm (~500 px com fx ~1050) um do
+#: outro e a projecao 2D erra ~10-20 px (RMS da calibracao de esqueleto), entao
+#: 40 px de folga entre a melhor e a segunda colocada e' conservador.
+ARBITRO_MAX_DIST_PX = 120.0
+ARBITRO_MIN_MARGEM_PX = 40.0
+#: Erro maximo (px) para um frame ENSINAR (votar pela inversao de uma camera). A
+#: margem de `ARBITRO_MAX_DIST_PX` serve para DECIDIR no frame que o usuario ve; o
+#: que fica gravado em `aux_handedness_flip.json` vale para TODOS os programas, e a
+#: projecao boa erra 1-2 px -- 60 px ja' e' folga larga. (Medido ao vivo em
+#: 05/10/2026: sem esse portao, uma coleta com UMA mao visivel de cada vez encheu o
+#: contador de votos de uma camera cujo rotulo era, sim, invertido -- mas por
+#: evidencia que nao distinguia "rotulo trocado" de "as duas cameras viram maos
+#: diferentes".)
+ARBITRO_MAX_DIST_VOTO_PX = 60.0
+#: Consenso para GRAVAR a inversao de uma camera: N vereditos e uma fracao minima
+#: deles pedindo a MESMA correcao (uma leitura ruim nao grava arquivo).
+ARBITRO_MIN_VOTOS = 20
+ARBITRO_MIN_FRACAO = 0.9
+#: POR ONDE o arbitro projeta a palma auxiliar no RGB do Kinect -- e o relatorio
+#: diz QUAL via foi usada, porque o numero so' vale o que vale a via:
+#:  * `stereo 3D` e' o caminho do overlay (extrinsecas + profundidade do punho do
+#:    Kinect; RMS de 1-2 px quando a calibracao esta' boa);
+#:  * `homografia 2D da mao` e' a projecao que o proprio modulo documenta como
+#:    IMPRECISA (centenas de px: a mao e' um objeto 3D visto de angulos
+#:    diferentes). Medido na bancada em 05/10/2026: com ela o arbitro ficava
+#:    indeciso em TODOS os frames ("projecao a ~300 px") e a lateralidade voltava
+#:    a ser o rotulo -- o usuario via o esqueleto projetado confuso e o terminal
+#:    inundado pela mesma linha.
+VIA_STEREO = "stereo 3D"
+VIA_HOMOGRAFIA = "homografia 2D da mao"
+
+
+class ArbitroDeLateralidade:
+    """Diz o LADO de cada mao auxiliar pela GEOMETRIA e APRENDE a inversao.
+
+    Por que nao confiar no rotulo do MediaPipe: a lateralidade dele e' uma
+    classificacao da APARENCIA do frame e assume imagem espelhada (convencao
+    "selfie"). O pipeline espelha todas as auxiliares com o mesmo
+    `AUXILIARY_MIRROR_HORIZONTAL`, mas o DRIVER de uma camera pode ja' entregar o
+    fluxo espelhado (nesta maquina ha' dois modelos: SIGMA-W780M e Trust USB
+    Camera) -- e entao o nosso flip desespelha, a premissa cai e SO' aquela
+    camera sai com as maos trocadas. Foi o relato da bancada em 05/10/2026: uma
+    auxiliar concordava com o Kinect e a outra estava invertida, o que troca as
+    maos justamente no casamento por lado (o que liga cada mao ao IMU certo).
+
+    A geometria nao depende de aparencia: cada auxiliar tem o stereo calibrado com
+    o Kinect (`stereo_calibration_aux{N}.npz`) e o Kinect da' o punho em 3D.
+    Projetamos a PALMA de cada deteccao auxiliar no RGB do Kinect pelo MESMO
+    caminho do overlay (`AuxCameraView.to_kinect_stereo` com a profundidade do
+    punho do Kinect) e perguntamos qual mao do Kinect esta' ali: essa e' a verdade
+    daquele frame. A homografia no-a-no da mao (`hand_landmark_calibration*.npz`)
+    fica de RESERVA, e o relatorio diz qual via foi usada -- porque ela e' a
+    projecao que o modulo documenta como imprecisa (centenas de px: a mao e' um
+    objeto 3D visto de angulos diferentes, e a homografia mapeia um plano). O
+    rotulo passa a ser palpite, e a discordancia alimenta o aprendizado -- que
+    fica GRAVADO (`aux_handedness_flip.json`) e vale tambem para os programas que
+    so' tem o rotulo (protocolo, sand, demo).
+
+    Quando o Kinect nao ve' mao -- exatamente o caso em que o PAR de auxiliares
+    substitui o Kinect -- nao ha' verdade para comparar: cai no rotulo ja'
+    corrigido pelo que foi aprendido, e o relatorio diz que a fonte foi o rotulo
+    (nunca finge que mediu).
+    """
+
+    def __init__(self, ativo=True, max_dist=ARBITRO_MAX_DIST_PX,
+                 min_margem=ARBITRO_MIN_MARGEM_PX, min_votos=ARBITRO_MIN_VOTOS,
+                 min_fracao=ARBITRO_MIN_FRACAO, verbose=True, persistir=True):
+        self.ativo = bool(ativo)
+        self.max_dist = float(max_dist)
+        self.min_margem = float(min_margem)
+        self.min_votos = int(min_votos)
+        self.min_fracao = float(min_fracao)
+        self.verbose = bool(verbose)
+        #: False = aprende em memoria mas NAO grava o json (usado por probes que
+        #: nao devem mexer no que a sessao real usa).
+        self.persistir = bool(persistir)
+        #: {indice: {"oposto": n, "igual": n}} -- votos ACUMULADOS por camera.
+        #: "oposto" = o rotulo discorda da geometria (pede o flip OPOSTO ao
+        #: vigente); "igual" = concorda (confirma o valor vigente).
+        self.votos = {}
+        #: {indice: {...}} do ULTIMO frame -- e' o que a interface mostra.
+        self.ultimo_relatorio = {}
+        #: Cameras que ja' tiveram a confirmacao anunciada (evita log repetido).
+        self.confirmados = set()
+
+
+    # ------------------------------------------------------------- API publica
+    def arbitrar(self, alignment, kinect_hands, aux_por_camera, kinect_size):
+        """Corrige o lado das deteccoes auxiliares (e aprende a inversao).
+
+        Devolve `(aux_por_camera_corrigido, relatorio)`. As listas do chamador
+        NAO sao alteradas (copia). `relatorio[indice]` diz, por camera, a FONTE
+        do lado ("geometria", "rotulo (...)" ou "sem mao"), o erro em px, quantas
+        maos foram decididas e se o rotulo do MediaPipe estava invertido -- e' o
+        que o tool e o `tools\\probe_lateralidade.py` mostram para o usuario saber
+        se o programa MEDIU ou apenas acreditou no rotulo.
+        """
+        corrigido = {int(indice): [dict(entrada) for entrada in (entradas or [])]
+                     for indice, entradas in (aux_por_camera or {}).items()}
+        relatorio = {}
+        maos_kinect = [mao for mao in (kinect_hands or [])
+                       if (mao or {}).get("side") in ORDEM_DOS_LADOS
+                       and mao.get("landmarks")]
+        for indice in sorted(corrigido):
+            entradas = corrigido[indice]
+            if not entradas:
+                relatorio[indice] = {"fonte": "sem mao", "maos": 0}
+                continue
+            if not self.ativo or kinect_size is None or not maos_kinect:
+                relatorio[indice] = {
+                    "fonte": "rotulo (Kinect sem mao para comparar)",
+                    "maos": len(entradas),
+                    "invertido": aux_handedness_flip(indice),
+                }
+                for entrada in entradas:
+                    entrada.setdefault("side_rotulo", entrada.get("side") or "")
+                    entrada.setdefault("lado_fonte", "rotulo")
+                corrigido[indice] = ordena_maos_por_lado(entradas)
+                continue
+            relatorio[indice] = self._arbitrar_uma_camera(
+                alignment, indice, entradas, maos_kinect, kinect_size)
+            # Auditoria uniforme em TODOS os caminhos: a mao sabe dizer qual era
+            # o rotulo do MediaPipe e quem decidiu o lado (geometria ou rotulo).
+            for entrada in entradas:
+                entrada.setdefault("side_rotulo", entrada.get("side") or "")
+                entrada.setdefault("lado_fonte", "rotulo")
+            corrigido[indice] = ordena_maos_por_lado(entradas)
+        self.ultimo_relatorio = relatorio
+        return corrigido, relatorio
+
+    def resumo(self, nomes=None):
+        """(linhas) legiveis do veredito do ULTIMO frame, uma por camera."""
+        nomes = nomes or {}
+        linhas = []
+        for indice in sorted(self.ultimo_relatorio):
+            info = self.ultimo_relatorio[indice]
+            nome = nomes.get(int(indice)) or nomes.get(str(indice)) or ""
+            rotulo = f"aux {indice}" + (f" ({nome})" if nome else "")
+            fonte = info.get("fonte", "")
+            if fonte == "sem mao":
+                linhas.append(f"Lateralidade {rotulo}: sem mao no quadro")
+            elif fonte.startswith("rotulo"):
+                detalhe = info.get("detalhe")
+                linhas.append(
+                    f"Lateralidade {rotulo}: {fonte}"
+                    + (f" -- {detalhe}" if detalhe else "")
+                    + (" | com inversao aprendida"
+                       if info.get("invertido") else ""))
+            else:
+                via = info.get("via")
+                linhas.append(
+                    f"Lateralidade {rotulo}: lado por GEOMETRIA "
+                    f"({info.get('maos', 0)} mao(s) decidida(s), erro "
+                    f"{info.get('dist_px', float('nan')):.0f} px"
+                    + (f", via {via}" if via else "") + ")"
+                    + (" | ROTULO DO MEDIAPIPE INVERTIDO -- corrigido"
+                       if info.get("inverteu") else " | rotulo confere"))
+        return linhas
+
+    # --------------------------------------------------------------- internos
+    def _arbitrar_uma_camera(self, alignment, indice, entradas, maos_kinect,
+                             kinect_size):
+        """Corrige (no lugar) o lado das `entradas` de UMA camera auxiliar."""
+        modelo = (getattr(alignment, "aux_models", None) or {}).get(int(indice))
+        homografia = (modelo or {}).get("hand_homography")
+        vista = self._vista_da_camera(alignment, indice)
+        if vista is None and homografia is None:
+            return {"fonte": "rotulo (sem calibracao da mao desta camera)",
+                    "detalhe": ("calibre o STEREO desta camera "
+                                "(stereo_calibration.py, com ela ativa) -- a "
+                                "tecla H do tool (calibracao do esqueleto) e' "
+                                "so' a reserva imprecisa"),
+                    "maos": len(entradas),
+                    "invertido": aux_handedness_flip(indice)}
+        # A via PREFERIDA e' a mesma do overlay (stereo 3D com a profundidade do
+        # punho que o Kinect mediu -- `AuxCameraView.to_kinect_stereo`); a
+        # homografia 2D do esqueleto fica de reserva e o relatorio diz qual foi.
+        via = VIA_STEREO if vista is not None else VIA_HOMOGRAFIA
+        maos_por_lado = {mao["side"]: mao for mao in maos_kinect}
+        palmas_kinect = {lado: self._palma_no_kinect(mao, kinect_size)
+                         for lado, mao in maos_por_lado.items()}
+        lados = [lado for lado in ORDEM_DOS_LADOS
+                 if palmas_kinect.get(lado) is not None]
+        if not lados:
+            return {"fonte": "rotulo (palma do Kinect indisponivel)",
+                    "maos": len(entradas), "via": via,
+                    "invertido": aux_handedness_flip(indice)}
+        trim = getattr(alignment, "overlay_trim", None)
+        trim = (np.zeros(2, np.float64) if trim is None
+                else np.asarray(trim, np.float64).reshape(-1)[:2])
+        padrao = self._profundidade_padrao(maos_por_lado.values())
+        # Custo POR PAR (deteccao auxiliar x mao do Kinect): com o stereo a
+        # projecao depende da profundidade TESTADA, entao cada candidato tem a
+        # sua propria palma projetada -- e um casamento errado acumula dois erros
+        # (o pixel e a profundidade).
+        custos = {
+            posicao: {lado: self._custo_de_casamento(
+                vista, homografia, (modelo or {}).get("hand_residuals"),
+                entrada.get("landmarks"), maos_por_lado[lado], kinect_size,
+                trim, padrao)
+                for lado in lados}
+            for posicao, entrada in enumerate(entradas)
+        }
+        decisoes, erro_px, detalhe = self._casa(custos, lados)
+        # O rotulo (do jeito que o pipeline o produz HOJE, com o flip vigente)
+        # vale como `side_rotulo`: e' contra ele que o aprendizado compara.
+        for entrada in entradas:
+            entrada["side_rotulo"] = entrada.get("side") or ""
+            entrada["lado_fonte"] = "rotulo"
+        for posicao, lado in decisoes:
+            entradas[posicao]["side"] = lado
+            entradas[posicao]["lado_fonte"] = "geometria"
+        # Um lado NAO pode aparecer duas vezes NA MESMA camera. Acontece de fato
+        # (medido em 05/10/2026): a auxiliar ve 2 maos e o Kinect ve 1 -- a
+        # geometria corrige a deteccao mais proxima para o lado do Kinect e a
+        # outra fica com o rotulo, e as duas acabam no MESMO lado. Deixar passar
+        # seria pior que nao decidir: quem casa por lado (`aux_lado_por_camera`,
+        # `aux_por_lado`) guarda UM landmarks por lado e descartaria uma das
+        # deteccoes em silencio. Aqui a atribuicao inteira e' descartada (e o
+        # frame tambem nao vota: sem decisao nao ha' evidencia de inversao).
+        if decisoes:
+            lados_finais = [entrada.get("side") for entrada in entradas
+                            if entrada.get("side") in ORDEM_DOS_LADOS]
+            if len(lados_finais) != len(set(lados_finais)):
+                for entrada in entradas:
+                    entrada["side"] = entrada.get("side_rotulo") or ""
+                    entrada["lado_fonte"] = "rotulo"
+                decisoes = []
+                detalhe = ("duas deteccoes no mesmo lado nesta camera (o Kinect "
+                           f"viu {len(lados)} mao(s)): atribuicao descartada")
+        if not decisoes and via == VIA_HOMOGRAFIA:
+            # Nao decidiu E a via do numero foi a imprecisa: centenas de px de
+            # erro sao ESPERADOS dela (a homografia 2D mapeia um plano; a mao sai
+            # dele). O que falta e' a calibracao que o overlay usa, o stereo 3D --
+            # dizer isso evita o caminho errado de "recalibrar o esqueleto" quando
+            # o esqueleto nem e' o que projeta o overlay.
+            detalhe = (f"{detalhe} | via {VIA_HOMOGRAFIA}: calibre o STEREO "
+                       "desta camera (stereo_calibration.py) para a geometria "
+                       "medir")
+        # Sem decisao NAO e' "geometria": e' a geometria DIZENDO que nao da' para
+        # separar as maos (juntas no quadro, projecao longe ou lado repetido). O
+        # relatorio tem de poder dizer isso -- o usuario precisa saber quando o
+        # programa NAO mediu.
+        fonte = "geometria" if decisoes else "rotulo (geometria indecisa)"
+        oposto = igual = 0
+        for entrada in entradas:
+            if entrada.get("lado_fonte") != "geometria":
+                continue
+            rotulo = entrada.get("side_rotulo") or ""
+            if rotulo not in ORDEM_DOS_LADOS:
+                continue               # sem rotulo confiavel: nao vota
+            if rotulo == entrada.get("side"):
+                igual += 1
+            else:
+                oposto += 1
+        # SO' VOTA o frame que pode ser conferido INTEIRO -- e inteiro, aqui, e' o
+        # caso BIMANUAL: as DUAS maos vistas pelo Kinect E pela auxiliar, todas
+        # atribuidas. As duas restricoes vem da bancada de 05/10/2026 (ao vivo):
+        #   * com a auxiliar vendo DUAS maos e o Kinect UMA, a correcao do frame
+        #     pega o par mais proximo e o que sobra no rotulo nao foi conferido por
+        #     ninguem;
+        #   * com UMA mao de cada lado o frame NAO distingue "o ROTULO esta' trocado"
+        #     de "as duas cameras viram maos diferentes" -- foi assim que uma coleta
+        #     com uma mao por vez fez o contador oscilar (trocado -> confere -> ...);
+        #   * e o erro tem de ser APERTADO (`ARBITRO_MAX_DIST_VOTO_PX`): 60 px ainda
+        #     DECIDE o frame (limite 120), mas nao serve de prova.
+        # Fora disso o frame segue corrigido e mostrado -- so' nao alimenta o
+        # aprendizado nem o arquivo.
+        if (len(decisoes) == 2 and len(entradas) == 2 and len(lados) == 2
+                and np.isfinite(erro_px)
+                and erro_px <= ARBITRO_MAX_DIST_VOTO_PX):
+            self._votar(indice, oposto, igual)
+        inverteu = any(entrada.get("lado_fonte") == "geometria"
+                       and entrada.get("side_rotulo") != entrada.get("side")
+                       for entrada in entradas)
+        return {"fonte": fonte, "maos": len(decisoes),
+                "dist_px": erro_px, "detalhe": detalhe, "inverteu": inverteu,
+                "via": via, "invertido": aux_handedness_flip(indice)}
+
+    @staticmethod
+    def _vista_da_camera(alignment, indice):
+        """`AuxCameraView` da camera, SE ela puder projetar pelo stereo 3D.
+
+        Devolve None quando o alignment nao expoe `aux_view` (implementacoes
+        minimas, como a das suites de teste) ou quando o stereo daquela camera
+        nao esta' utilizavel (`usable` = stereo aceito + extrinsecas): e' o que
+        faz o arbitro cair na homografia 2D do esqueleto -- e o relatorio DIZER
+        que caiu, em vez de apresentar o numero como medida fina.
+        """
+        construtor = getattr(alignment, "aux_view", None)
+        if not callable(construtor):
+            return None
+        try:
+            vista = construtor(int(indice))
+        except Exception:                       # calibracao corrompida
+            return None
+        if vista is None or not getattr(vista, "usable", False):
+            return None
+        return vista
+
+    @staticmethod
+    def _profundidade_da_mao(mao):
+        """Z (m, referencial de camera do Kinect) do punho de UMA mao, ou None.
+
+        Vem do proprio detector (`mao["position"]`, a palma em 3D): e' a mesma
+        profundidade que o overlay usa para desenhar o esqueleto auxiliar, e por
+        isso o arbitro mede a lateralidade no espaco em que o vermelho aparece.
+        """
+        posicao = (mao or {}).get("position")
+        if posicao is None:
+            return None
+        valores = np.asarray(posicao, np.float64).reshape(-1)
+        if valores.size < 3 or not np.isfinite(valores[2]) or valores[2] <= 0:
+            return None
+        return float(valores[2])
+
+    def _profundidade_padrao(self, maos):
+        """Z (m) de reserva para quando a mao do Kinect nao tem posicao 3D."""
+        valores = [self._profundidade_da_mao(mao) for mao in maos]
+        valores = [valor for valor in valores if valor is not None]
+        if valores:
+            return float(np.median(valores))
+        return None
+
+    def _palma_por_stereo(self, vista, landmarks, mao_kinect, trim, padrao):
+        """Palma (px) no RGB do Kinect projetando a AUXILIAR pelo stereo 3D.
+
+        A profundidade que entra e' a da PROPRIA mao candidata do Kinect
+        (`position[2]`): um casamento errado acumula entao DOIS erros (o pixel e
+        a profundidade), que e' o que separa "esta' na mao" de "esta' perto".
+        Aplica o MESMO `overlay_trim` do overlay -- assim a medida do arbitro e
+        o esqueleto vermelho que o usuario ve falam do mesmo ponto.
+        """
+        if vista is None or not getattr(vista, "usable", False):
+            return None
+        profundidade = self._profundidade_da_mao(mao_kinect)
+        if profundidade is None:
+            profundidade = (padrao if padrao is not None
+                            else NOMINAL_HAND_DEPTH_M)
+        try:
+            pixels = vista.pixels(landmarks)
+            projetado = vista.to_kinect_stereo(pixels, [float(profundidade)])
+        except Exception:                       # calibracao degenerada
+            return None
+        if projetado is None:
+            return None
+        projetado = np.asarray(projetado, np.float64).reshape(-1, 2)
+        if len(projetado) <= PALM_LANDMARK_INDEX:
+            return None
+        if trim is not None and np.any(trim):
+            projetado = projetado + np.asarray(trim, np.float64)[None, :]
+        palma = projetado[PALM_LANDMARK_INDEX]
+        if not np.isfinite(palma).all():
+            return None
+        return palma
+
+    def _custo_de_casamento(self, vista, homografia, residuals, landmarks, mao,
+                            kinect_size, trim, padrao):
+        """Distancia (px) entre a palma projetada da deteccao e a mao candidata.
+
+        Devolve None quando nao ha' como projetar (nem stereo, nem homografia).
+        """
+        palma_kinect = self._palma_no_kinect(mao, kinect_size)
+        if palma_kinect is None or not landmarks:
+            return None
+        palma_aux = self._palma_por_stereo(vista, landmarks, mao, trim, padrao)
+        if palma_aux is None:
+            # Reserva: homografia 2D do esqueleto, a projecao que o modulo
+            # documenta como imprecisa (centenas de px). So' decide com as maos
+            # MUITO separadas -- e o relatorio marca a via.
+            palma_aux = projeta_mao_aux_no_kinect(homografia, residuals,
+                                                  landmarks, kinect_size)
+        if palma_aux is None:
+            return None
+        return self._distancia(palma_aux, palma_kinect)
+
+    def _casa(self, custos, lados):
+        """(decisoes, erro_px, detalhe) escolhendo a atribuicao de menor custo.
+
+        `custos[posicao][lado]` = distancia (px) entre a palma projetada da
+        deteccao auxiliar `posicao` e a mao do Kinect `lado` (None = nao da' para
+        projetar). O custo DEPENDE do lado quando a projecao vem do stereo (a
+        profundidade testada e' a da propria mao candidata do Kinect).
+
+        Com DUAS maos no Kinect e DUAS deteccoes na auxiliar testa as duas
+        atribuicoes possiveis e exige MARGEM entre elas: e' o que separa "as maos
+        sao inconfundiveis" de "as duas estao lado a lado no quadro e qualquer
+        casamento serve". Com um lado so' no Kinect (ou uma deteccao so' na
+        auxiliar) decide apenas o par mais proximo -- o resto fica no rotulo.
+
+        `detalhe` explica POR QUE nao decidiu (margem pequena, projecao longe):
+        sem esse numero, "INDECISO" nao diz ao experimentador se ele precisa
+        separar mais as maos ou se a calibracao daquela camera esta' velha.
+        """
+        # Uma deteccao so' entra se projetar contra TODOS os lados candidatos:
+        # meio casamento nao pode virar "mais barato" por falta de dado.
+        validos = [posicao for posicao, linha in custos.items()
+                   if linha and all(linha.get(lado) is not None
+                                    for lado in lados)]
+        if not validos:
+            return [], float("nan"), "projecao da palma indisponivel"
+        melhor = None
+        melhor_custo, segundo_custo = float("inf"), float("inf")
+        if len(lados) == 2 and len(validos) >= 2:
+            for posicao_d in validos:
+                for posicao_e in validos:
+                    if posicao_d == posicao_e:
+                        continue
+                    total = (custos[posicao_d][lados[0]]
+                             + custos[posicao_e][lados[1]])
+                    if total < melhor_custo:
+                        segundo_custo, melhor_custo = melhor_custo, total
+                        melhor = ((posicao_d, lados[0]), (posicao_e, lados[1]))
+                    elif total < segundo_custo:
+                        segundo_custo = total
+            if melhor is None:
+                return [], float("nan"), "sem par valido para casar"
+            custos_da_escolha = [custos[posicao][lado]
+                                 for posicao, lado in melhor]
+            erro = float(np.mean(custos_da_escolha))
+            pior = float(max(custos_da_escolha))
+            if pior > self.max_dist:
+                return [], erro, (f"projecao a {pior:.0f} px "
+                                  f"(limite {self.max_dist:.0f} px): conferir a "
+                                  "calibracao da mao desta camera")
+            margem = segundo_custo - melhor_custo
+            if margem < self.min_margem:
+                return [], erro, (f"margem {margem:.0f} px entre as duas "
+                                  f"atribuicoes (< {self.min_margem:.0f} px): as "
+                                  "maos estao juntas demais no quadro")
+            return list(melhor), erro, "ok"
+        # Um lado so' (ou uma deteccao so'): o par mais proximo, sem ambiguidade.
+        for posicao in validos:
+            for lado in lados:
+                custo = custos[posicao][lado]
+                if custo < melhor_custo:
+                    melhor_custo, melhor = custo, (posicao, lado)
+        if melhor is None:
+            return [], float("nan"), "sem par valido para casar"
+        if melhor_custo <= self.max_dist:
+            return [melhor], melhor_custo, "ok"
+        return [], melhor_custo, (f"projecao a {melhor_custo:.0f} px "
+                                  f"(limite {self.max_dist:.0f} px)")
+
+    @staticmethod
+    def _distancia(palma_aux, palma_kinect):
+        return float(np.linalg.norm(np.asarray(palma_aux, np.float64)
+                                    - np.asarray(palma_kinect, np.float64)))
+
+    @staticmethod
+    def _palma_no_kinect(mao, kinect_size):
+        """Palma (px) da mao do KINECT a partir dos landmarks normalizados."""
+        pontos = pontos_normalizados(mao.get("landmarks"))
+        if pontos is None or len(pontos) <= PALM_LANDMARK_INDEX:
+            return None
+        largura, altura = float(kinect_size[0]), float(kinect_size[1])
+        palma = pontos[PALM_LANDMARK_INDEX]
+        return np.array([palma[0] * largura, palma[1] * altura], np.float64)
+
+    def _votar(self, indice, oposto, igual):
+        """Acumula o voto da camera e grava a inversao quando ha' consenso.
+
+        Voto por FRAME (e nao por mao): um frame com as duas maos concordando em
+        que o rotulo esta' trocado vale UM voto, senao duas maos contariam dobrado
+        e o consenso chegaria na metade do tempo com a mesma evidencia.
+        """
+        votos = self.votos.setdefault(int(indice), {"oposto": 0, "igual": 0})
+        if oposto and not igual:
+            votos["oposto"] += 1
+        elif igual and not oposto:
+            votos["igual"] += 1
+        total = votos["oposto"] + votos["igual"]
+        if total < self.min_votos:
+            return None
+        if votos["oposto"] / total >= self.min_fracao:
+            # Pede o OPOSTO do que esta' vigente: e' o caso do driver que entrega
+            # o fluxo espelhado -- e tambem o de uma inversao aprendida que ficou
+            # velha (por exemplo depois de trocar a webcam de porta USB).
+            self._grava(indice, not aux_handedness_flip(indice), votos["oposto"],
+                        total)
+        elif votos["igual"] / total >= self.min_fracao:
+            if int(indice) not in self.confirmados:
+                self.confirmados.add(int(indice))
+                if self.verbose:
+                    print(f"Lateralidade da camera auxiliar {indice}: rotulo do "
+                          f"MediaPipe CONFERIDO com a geometria do Kinect em "
+                          f"{total} frames (nada a corrigir)", flush=True)
+            self.votos[int(indice)] = {"oposto": 0, "igual": 0}
+        return None
+
+    def _grava(self, indice, valor, votos, total):
+        """Grava a inversao aprendida (com o motivo, para o arquivo explicar-se)."""
+        if valor:
+            motivo = (f"{votos}/{total} frames com o rotulo do MediaPipe trocado "
+                      "em relacao ao Kinect, medido pela geometria (punho em 3D "
+                      "do Kinect projetado pelo stereo daquela camera)")
+        else:
+            motivo = (f"{votos}/{total} frames concordando com a geometria do "
+                      "Kinect -- a inversao gravada antes NAO se confirma e foi "
+                      "desfeita")
+        set_aux_handedness_flip(indice, valor, motivo=motivo,
+                                silencioso=not self.verbose,
+                                persistir=self.persistir)
+        self.votos[int(indice)] = {"oposto": 0, "igual": 0}
+
+
 def transform_auxiliary_frame(frame):
     if frame is None:
         return None
@@ -3277,3 +4357,16 @@ def transform_auxiliary_frame(frame):
 # `main()` deste arquivo) vive em tools/kinect_groundtruth_tool.py. Este
 # modulo e' uma BIBLIOTECA: e' importada pelos programas de aquisicao e
 # pelo sistema online, e nao deve ter entrada propria.
+
+
+if __name__ == "__main__":                        # pragma: no cover
+    # Rodar a BIBLIOTECA direto nao faz nada: quem tenta (ja' aconteceu, e o
+    # silencio nao ensina) tem de receber a instrucao e um codigo de saida
+    # diferente de zero, para nao passar por "rodou e nao fez nada".
+    raise SystemExit(
+        "Este arquivo e' a BIBLIOTECA do projeto (nao tem entrada propria).\n"
+        "  ferramenta de ground truth: .venv\\Scripts\\python.exe "
+        "tools\\kinect_groundtruth_tool.py\n"
+        "  probe de lateralidade:      .venv\\Scripts\\python.exe "
+        "tools\\probe_lateralidade.py"
+    )

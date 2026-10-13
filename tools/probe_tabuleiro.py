@@ -220,6 +220,8 @@ def simula_cortado():
 def abre_fonte(args):
     """Devolve (funcao_que_le_um_frame, descricao)."""
     if args.fonte == "kinect":
+        import kinect_compat    # pykinect2 64 bits: ANTES do import do pacote
+        kinect_compat.aplicar()
         from pykinect2 import PyKinectV2
         from pykinect2.PyKinectRuntime import PyKinectRuntime
         rt = PyKinectRuntime(PyKinectV2.FrameSourceTypes_Color)

@@ -1,0 +1,8 @@
+{
+  "escrito_em": "05/10/2026 16:44:00",
+  "flip": {
+    "0": true,
+    "1": true
+  },
+  "motivo": "20/20 frames com o rotulo do MediaPipe trocado em relacao ao Kinect, medido pela geometria (punho em 3D do Kinect projetado pelo stereo daquela camera)"
+}

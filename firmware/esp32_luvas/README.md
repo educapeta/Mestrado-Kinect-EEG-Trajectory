@@ -114,6 +114,19 @@ pio run -e luva_direita  -t upload --upload-port COM6
 pio run -e luva_esquerda -t upload --upload-port COM7
 ```
 
+Nesta bancada o Core ficou instalado **no `.venv` do projeto** (a extensão do VS
+Code pode estar presente sem o Core provisionado — foi o caso em 28/09/2026:
+`%USERPROFILE%\.platformio` não existia e não havia `pio` no PATH). Use o `pio`
+do venv; é a 2ª opção que os `.bat` procuram:
+
+```powershell
+.venv\Scripts\pio.exe run                            # compila os dois envs
+.venv\Scripts\pio.exe run -e luva_direita -t upload --upload-port COM6
+```
+
+Conferido em 28/09/2026 nesta máquina: **os dois envs compilam** (RAM 13,9 %,
+Flash 57,7 % — os mesmos números da máquina antiga).
+
 Ou use os atalhos, que perguntam a porta e mostram o procedimento:
 `gravar_direita.bat` (UDP 4210) e `gravar_esquerda.bat` (UDP 4211).
 

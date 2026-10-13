@@ -81,6 +81,7 @@ gravacoes_sinteticas_teste/
 # O tools/publicar.ps1 faz `git add -A`, entao a regra TEM de estar aqui, e
 # nao so' na boa intencao de quem publica.
 *_participante.json
+_*.json
 
 # Sondas descartaveis (`_probe*`), quadros de diagnostico (`_diag_*`) e resumos
 # de suite (`_suite*`): sao DEPURACAO de bancada e mudam de nome a cada sessao.

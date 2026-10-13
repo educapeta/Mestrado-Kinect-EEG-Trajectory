@@ -14,6 +14,17 @@ comtypes
 
 # Rede SAND
 torch
+# Leitura/escrita dos CSVs de sessao e do WAY-EEG-GAL (sand_traj_treino.py).
+# Entrou no requirements so' em 28/09/2026: sem ele, 4 suites que importam o
+# sand_traj_treino (test_alvo_velocidade, test_anatomical_reg, test_filtro_causal
+# e test_treino_loader) falhavam com ModuleNotFoundError.
+pandas
 
 # GUI (gpype traz PySide6; listado explicito para ambientes novos)
 PySide6
+# pyqtgraph: o `gp.TimeSeriesScope` do paradigma importa no INTERNO do gpype
+# (gpype/.../_cores/time_series_scope.py) e o gpype 4.0.0 NAO o declara como
+# dependencia (`pip show gpype` -> Requires: ... sem pyqtgraph). Sem ele o
+# programa morria na linha do `scope = gp.TimeSeriesScope(...)`, antes de
+# qualquer gravacao (28/09/2026).
+pyqtgraph

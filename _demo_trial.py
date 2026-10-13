@@ -150,7 +150,8 @@ class WebcamClip(threading.Thread):
             copia = quadro.copy()
             self._rotula(copia, t - t0, max(1e-6, t1 - t0))
             clipe.extend([copia] * self.destaque)
-        self.state.publish_video(clipe)
+        dur_real = (quadros[-1][0] - quadros[0][0]) if len(quadros) > 1 else 0.0
+        self.state.publish_video(clipe, duracao_real=dur_real)
         self.clipes += 1
         print(f"[webcam] clipe {self.clipes}: {len(quadros)} quadros reais -> "
               f"{len(clipe)} em 0,5x "

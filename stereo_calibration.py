@@ -36,16 +36,54 @@ individual de ~0.5-1.0 px):
    reordenada de forma canonica e o solver testa as 4 simetrias da
    grade por pose: corrige as poses trocadas e descarta as poses ruins
    (diagnostico por residuo stereo por pose).
-2. INTRINSECAS CONGELADAS. CALIB_FIX_INTRINSIC congela fx/fy/cx/cy/
-   distorcao obtidos separadamente. Se as poses tiverem pouca variacao
-   de distancia/inclinacao (tabuleiro sempre de frente e na mesma
-   distancia), essas intrinsecas ficam imprecisas e o erro so aparece
-   no stereo. O solver final tenta tambem CALIB_USE_INTRINSIC_GUESS
-   (refinamento conjunto de intrinsecas + extrinsecas) e salva o
-   resultado com menor RMS.
+2. INTRINSECAS. CALIB_FIX_INTRINSIC congela fx/fy/cx/cy/distorcao obtidos
+   separadamente. Se as poses tiverem pouca variacao de distancia/inclinacao
+   (tabuleiro sempre de frente e na mesma distancia), essas intrinsecas ficam
+   imprecisas. Pior: o tabuleiro de 6x4 x 57 mm NAO preenche o quadro do Kinect
+   na distancia de trabalho (a camera de cor do Kinect foca longe), entao o
+   modelo do Kinect (fx/fy/cx/cy + k1/k2/k3) estimado por sessao e' fragil.
+   MEDIDO em 30/09/2026: tres sessoes da MESMA bancada produziram tres modelos do
+   Kinect diferentes, que projetam o mesmo ponto 3D de 24 a 50 px de diferenca
+   (ate' 176 px na borda do quadro) -- erro sistematico do overlay que o RMS NAO
+   denuncia, porque o RMS so' mede a coerencia INTERNA de cada npz.
+   Por isso existe o MODELO CONGELADO do Kinect (`kinect_intrinsics.npz`),
+   gravado com --salvar-intrinsecas-kinect (tabuleiro GRANDE preenchendo o
+   quadro) e reusado por --intrinsecas-kinect ou automaticamente quando o
+   arquivo existe. Com ele o Kinect NUNCA e' re-estimado: o stereo resolve so'
+   R/T, que e' o que realmente muda de sessao para sessao. Sem modelo congelado o
+   solver ainda tenta CALIB_USE_INTRINSIC_GUESS (refinamento conjunto) e salva o
+   de menor RMS -- comportamento historico, mantido como ultimo recurso.
+
+   O arranjo que congela POR ESTE CAMINHO tem um limite fisico: quem manda na
+   distancia do tabuleiro e' a AUXILIAR (ela fecha o quadro primeiro), e o
+   tabuleiro grande a ~1 m ocupa so' 11-13% da diagonal do Kinect -- abaixo do
+   portao de 35%. Foi assim que nasceu o paliativo de 30/09/2026 (medoide de 4
+   modelos de sessao, com vies desconhecido de ate' ~46 px). Para congelar DE
+   VERDADE use o arranjo Kinect-only (`freeze_kinect_direto.py`): so' o Kinect, o
+   tabuleiro chega a 0,3-0,45 m, o span passa dos 35% e o modelo sai de uma
+   camera so'.
+   MEDIDO em 01/10/2026: trocar a placa deixou os dois npz da MESMA bancada
+   68,8 px um do outro porque CADA UM re-estimou o Kinect -- o congelado de
+   5x3/57 mm tinha sido recusado POR PLACA. Hoje a placa nao recusa nada (vira
+   aviso: as intrinsecas sao da CAMERA); quem decide sao poses + span + RMS, os
+   MESMOS portoes na gravacao e na leitura (`portoes_do_modelo_kinect`).
 3. QUALIDADE DAS AMOSTRAS. Capturas com tabuleiro pequeno na imagem
    (foco/escala ruins) ou com erro planar do par alto (movimento,
    deteccao ruim) sao rejeitadas antes de entrar na solucao.
+
+MODELO CONGELADO DO KINECT (o fluxo recomendado, UMA vez por bancada):
+
+    # 1) tabuleiro GRANDE (>= ~35% da diagonal do quadro), Kinect + a auxiliar
+    #    enxergando: grava o modelo do Kinect e ja' calibra este par
+    python stereo_calibration.py --salvar-intrinsecas-kinect
+    # 2) sessoes de rotina (uma por auxiliar): reusam o modelo congelado
+    python stereo_calibration.py
+    # 3) confira SEM hardware o que ficou:
+    python tools\\diagnostico_calibracao.py
+
+Sem o modelo congelado, cada sessao re-estima o Kinect (comportamento antigo) e
+os npz ficam com modelos diferentes entre si -- o overlay herda dezenas de px de
+erro sistematico que nenhum RMS denuncia (medido em 30/09/2026; ver o item 2).
 """
 
 import sys
@@ -54,6 +92,11 @@ from pathlib import Path
 
 import cv2
 import numpy as np
+
+import kinect_compat      # pykinect2 64 bits: ANTES do import do pykinect2
+
+kinect_compat.aplicar()
+
 from pykinect2 import PyKinectV2
 from pykinect2.PyKinectRuntime import PyKinectRuntime
 
@@ -105,6 +148,24 @@ DISPLAY_SCALE = 0.5
 #: alguns segundos para comecar a transmitir; se nao vier nada nesse tempo, o
 #: programa para com mensagem clara em vez de ficar mudo para sempre.
 ESPERA_KINECT_S = 20.0
+#: Quantas vezes REABRIR o runtime do Kinect quando ele abre e nao entrega frame.
+#: MEDIDO na bancada de 07/10/2026: depois de usar o Kinect Studio o sensor ficou
+#: enumerado (VID_045E&PID_02C4, driver KinectSensor, `ConfigFlags=0`) e o
+#: `PyKinectRuntime` ABRIA em 0,0 s reportando 1920x1080 -- mas NENHUM frame saiu
+#: em 20 s, em color, depth, body e nos tres juntos. Fechar e reabrir o runtime
+#: custa um segundo e ja' recuperou sensores nesse estado; esperar para sempre
+#: num runtime morto, nao.
+TENTATIVAS_KINECT = 3
+#: Programas que tomam o sensor para si. Entram na mensagem de erro porque "fechei
+#: o Kinect Studio" e' o que o operador lembra -- e o watch/gravador fica vivo.
+APLICATIVOS_QUE_SEGURAM_O_KINECT = (
+    "Kinect Studio", "Kinect Configuration Verifier", "KinectService",
+    "Kinect Monitor", "gravador do Kinect Studio", "any application using the "
+    "sensor")
+#: Etiqueta de arquivo FORA DO AR: `carrega_intrinsecas_kinect` so' le o nome
+#: exato (`KINECT_INTRINSICS_FILE`), entao este sufixo aposenta um npz sem
+#: apagar nada e sem que ele volte a ser carregado por engano.
+SUFIXO_ARQUIVADO = ".arquivado"
 # Tabuleiro: PLACA ATUAL (impressa 23/09/2026) = 6 x 4 QUADRADOS de 57 mm ->
 # 5 x 3 CANTOS internos (a regra do cv2 e' sempre quadrados - 1 por lado).
 # Precisa casar com CHECKERBOARD_SIZE/SQUARE_SIZE_M em
@@ -114,10 +175,10 @@ ESPERA_KINECT_S = 20.0
 # Historico: 4x3/52 mm (subgrade, geometria 2x grande) -> 12x8 quadrados/26 mm
 # (11x7 cantos, a placa antiga) -> 6x4/57 mm (a atual).
 # Sobrescrevivel na linha de comando com --checkerboard CxR e --quadrado MM.
-CHECKERBOARD_COLS = 5
-CHECKERBOARD_ROWS = 3
+CHECKERBOARD_COLS = 7
+CHECKERBOARD_ROWS = 5
 CHECKERBOARD_SIZE = (CHECKERBOARD_COLS, CHECKERBOARD_ROWS)
-SQUARE_SIZE_M = 0.057
+SQUARE_SIZE_M = 0.045
 SAMPLES_REQUIRED = 15
 SOLVE_EVERY_EXTRA = 3          # depois das 15, resolve a cada +3 amostras
 MAX_STEREO_RMS_PX = 2.0
@@ -195,6 +256,46 @@ OUTPUT_FILE = Path(__file__).with_name("stereo_calibration.npz")
 # propria solucao; o refinamento afim recomeca da identidade).
 CAMERA_ALIGNMENT_FILE = Path(__file__).with_name("camera_alignment.npz")
 CAMERA_ALIGNMENT_VERSION = 7
+# --- MODELO CONGELADO DO KINECT (ver item 2 do docstring) -------------------
+# O Kinect RGB e' UMA camera: o modelo dela vale para todas as sessoes. Este
+# arquivo e' gravado UMA vez (--salvar-intrinsecas-kinect, com um tabuleiro que
+# preencha o quadro) e reusado por TODAS as calibracoes de par
+# (--intrinsecas-kinect, ou automaticamente quando ele existe ao lado do codigo).
+# Com o modelo congelado, o Kinect NAO e' re-estimado em sessao nenhuma -- era
+# assim que cada sessao inventava um k1/k2/k3 diferente e o overlay saia dezenas
+# de px fora (medido em 30/09/2026; ver tools\diagnostico_calibracao.py).
+KINECT_INTRINSICS_FILE = Path(__file__).with_name("kinect_intrinsics.npz")
+KINECT_INTRINSICS_VERSION = 1
+#: Minimo de poses para GRAVAR o modelo congelado (menos que isso o
+#: calibrateCamera tem parametros demais para os dados que tem).
+KINECT_INTRINSICS_MIN_POSES = 12
+#: Fracao MINIMA da diagonal do quadro do Kinect que o tabuleiro tem de ocupar
+#: (span MEDIANO das poses). 0.35 = o tabuleiro grande, feito para isto: com o
+#: tabuleiro pequeno (8-20% da diagonal) o modelo NAO e' gravavel -- e' esse o
+#: motivo do modelo ser congelado em vez de re-estimado.
+#: E' ESTA a grandeza que decide se um modelo congelado serve -- nao a placa em
+#: que ele foi gravado (ver `carrega_intrinsecas_kinect`). Os tres portoes sao os
+#: mesmos ao GRAVAR e ao CARREGAR (`portoes_do_modelo_kinect`): se divergissem,
+#: existiria o arquivo que o programa escreve e depois recusa.
+KINECT_INTRINSICS_MIN_SPAN = 0.35
+#: Fracao MAXIMA da diagonal aceita na CAPTURA (arranjo Kinect-only). Acima disto
+#: o tabuleiro esta' a menos de ~0,28 m: o RGB do Kinect foca longe, o quadro sai
+#: borrado e o tabuleiro gigante domina o ajuste de fx (MEDIDO em 30/09/2026:
+#: 77% da diagonal = tabuleiro a ~0,16 m). E' portao de CAPTURA, nunca do modelo:
+#: a amostra e' so' descartada, com o numero medido.
+KINECT_INTRINSICS_MAX_SPAN = 0.60
+#: RMS individual maximo do Kinect aceito ao gravar o modelo congelado (o RMS de
+#: uma camera so', com o tabuleiro grande, tem de ser bem melhor que o do par).
+KINECT_INTRINSICS_MAX_RMS = 0.75
+#: Grade de avaliacao de `compara_modelos_kinect` (m, referencial do Kinect):
+#: a regiao onde a mao anda na bancada. Espelhada em
+#: tools\diagnostico_calibracao.py (JANELA_X/JANELA_Y/PASSOS_X/PASSOS_Y) e
+#: travada por test_diagnostico_calibracao.py -- os dois tem de dar o mesmo px.
+KINECT_EVAL_JANELA_X = (-0.35, 0.35)
+KINECT_EVAL_JANELA_Y = (-0.30, 0.30)
+KINECT_EVAL_PASSOS_X = 9
+KINECT_EVAL_PASSOS_Y = 7
+KINECT_EVAL_PROFUNDIDADE_M = 0.8
 
 
 def output_file(aux_index):
@@ -203,6 +304,39 @@ def output_file(aux_index):
         return OUTPUT_FILE
     return Path(__file__).with_name(
         f"stereo_calibration_aux{int(aux_index)}.npz")
+
+
+def indices_padrao_auxiliares():
+    """Indices das webcams EXTERNAS desta maquina (default de `--aux-index`).
+
+    A constante AUX_CAMERA_INDICES_PADRAO = (2, 0) estava certa na maquina de
+    23/09/2026 e esta' ERRADA nesta (28/09/2026): aqui existem 0 = SIGMA-W780M
+    e 1 = Trust USB Camera, e NENHUM indice 2 -- com o default antigo a
+    calibracao tentava o indice 2 primeiro e o operador nao chegava na camera
+    boa. A regra e' a MESMA do resto do projeto (fonte unica:
+    `kinect_imu_groundtruth.indices_auxiliares_automaticos`): todas as cameras
+    MENOS a webcam do laptop, pelo NOME do Windows, as que ja' tem calibracao
+    primeiro (mesma ordem do `tools/kinect_groundtruth_tool.py`, entao calibrar
+    na ordem mantem camera e calibracao pareadas).
+    """
+    try:                                # import tardio: so' quando ninguem fixou
+        import kinect_imu_groundtruth as gt
+        automaticos = gt.indices_auxiliares_automaticos()
+        if automaticos:
+            return [int(indice) for indice in automaticos]
+    except Exception:                   # noqa: BLE001 - enumeracao e' diagnostico
+        pass
+    try:
+        # `camera_names` e' leve (ctypes/comtypes) e aqui se importa direto: o
+        # `nomes_mod` do modulo so' existe DEPOIS (import tardio na hora de
+        # abrir a camera).
+        import camera_names
+        externas = camera_names.indices_fora_do_laptop()
+        if externas:
+            return [int(indice) for indice in externas]
+    except Exception:                   # noqa: BLE001 - idem
+        pass
+    return list(AUX_CAMERA_INDICES_PADRAO)
 
 
 def parse_args():
@@ -237,13 +371,77 @@ def parse_args():
                              "Padrao: usa a constante do arquivo "
                              "(%g mm)." % (SQUARE_SIZE_M * 1000))
     parser.add_argument("--aux-index", type=int, nargs="+",
-                        default=list(AUX_CAMERA_INDICES_PADRAO), metavar="N",
+                        default=None, metavar="N",
                         help="Indice(s) da(s) webcam(s) auxiliar(es) a "
-                             "calibrar, na ordem. Aceita varias de uma vez "
-                             "(ex.: --aux-index 1 2). Salva em "
+                             "calibrar, na ordem. PADRAO = AUTOMATICO: as "
+                             "webcams EXTERNAS desta maquina pelo NOME do "
+                             "Windows (todas menos a do laptop; as que ja' tem "
+                             "calibracao primeiro). Fixe para forcar (ex.: "
+                             "--aux-index 1 0). Salva em "
                              "stereo_calibration_aux{N}.npz (0 usa o arquivo "
                              "legado stereo_calibration.npz).")
+    parser.add_argument("--intrinsecas-kinect", type=str, default=None,
+                        metavar="ARQUIVO",
+                        help="Modelo CONGELADO do Kinect a usar (padrao: "
+                             "kinect_intrinsics.npz ao lado do codigo, quando ele "
+                             "existe). Com o modelo congelado o Kinect NAO e' "
+                             "re-estimado: o stereo resolve so' R/T -- e' isso "
+                             "que impede o overlay de sair dezenas de px fora "
+                             "(ver o item 2 do docstring).")
+    parser.add_argument("--sem-intrinsecas-kinect", action="store_true",
+                        help="IGNORA o modelo congelado existente (comportamento "
+                             "antigo: cada sessao re-estima o Kinect). Serve para "
+                             "comparar A/B na mesma bancada.")
+    parser.add_argument("--salvar-intrinsecas-kinect", action="store_true",
+                        help=("Ao resolver, grava o modelo congelado do Kinect a "
+                              "partir das poses desta sessao -- exige tabuleiro "
+                              "GRANDE preenchendo o quadro (>= {span:.0f}%% da "
+                              "diagonal, {poses} poses e RMS <= {rms} px), senao "
+                              "recusa com o motivo medido. Rode UMA vez por "
+                              "bancada, com o tabuleiro grande, antes das sessoes "
+                              "de rotina. PREFIRA freeze_kinect_direto.py (arranjo "
+                              "Kinect-only): aqui quem manda na distancia do "
+                              "tabuleiro e' a auxiliar, que fecha o quadro primeiro "
+                              "e deixa o span em 11-13%% -- abaixo do portao.")
+                              .format(span=KINECT_INTRINSICS_MIN_SPAN * 100,
+                                      poses=KINECT_INTRINSICS_MIN_POSES,
+                                      rms=KINECT_INTRINSICS_MAX_RMS))
     return parser.parse_args()
+
+
+def aplica_tabuleiro(checkerboard=None, quadrado_mm=None):
+    """Aplica --checkerboard/--quadrado nas globais. Devolve (ok, mensagem).
+
+    Existe para o arranjo Kinect-only (`freeze_kinect_direto.py`) aceitar os
+    MESMOS overrides sem copiar a analise do texto: uma copia aqui seria a
+    duplicata que ja' custou uma sessao inteira (MEDIDO em 01/10/2026: os dois
+    modulos declarando placas diferentes, os npz recusados na leitura e o Kinect
+    de volta ao re-estimado por sessao).
+    """
+    global CHECKERBOARD_COLS, CHECKERBOARD_ROWS, CHECKERBOARD_SIZE, SQUARE_SIZE_M
+    if checkerboard:
+        texto = checkerboard.lower().replace(" ", "")
+        for separador in ("x", ",", "*"):
+            if separador in texto:
+                cols_txt, rows_txt = texto.split(separador, 1)
+                break
+        else:
+            return False, (f"--checkerboard '{checkerboard}' nao esta' no "
+                           "formato COLSxROWS (ex.: 5x3)")
+        try:
+            cols, rows = int(cols_txt), int(rows_txt)
+        except ValueError:
+            return False, (f"--checkerboard '{checkerboard}' nao esta' no "
+                           "formato COLSxROWS (ex.: 5x3)")
+        if cols < 3 or rows < 3:
+            return False, f"--checkerboard {cols}x{rows} invalido (minimo 3x3)"
+        CHECKERBOARD_COLS, CHECKERBOARD_ROWS = cols, rows
+        CHECKERBOARD_SIZE = (cols, rows)
+    if quadrado_mm:
+        if quadrado_mm <= 0:
+            return False, f"--quadrado {quadrado_mm} tem de ser > 0"
+        SQUARE_SIZE_M = quadrado_mm / 1000.0
+    return True, None
 
 
 def prepare_gray(frame, largura_alvo):
@@ -280,15 +478,43 @@ def refina_cantos(frame, cantos):
     """
     if not DETECTION_REFINO_CHEIO or len(cantos) == 0:
         return cantos
+    pontos = np.asarray(cantos, np.float64).reshape(-1, 2).copy()
+    altura, largura = frame.shape[:2]
+    #: GUARDA DE BORDA (MEDIDA em 30/09/2026, aberta desde entao). Com um canto a
+    #: MENOS de meia janela da borda o `cv2.cornerSubPix` do OpenCV 5 LEVANTA
+    #: ("initial corner is outside the image") e a excecao sem tratamento encerra
+    #: a sessao de captura inteira, sem mensagem final -- reproduzido ao vivo com
+    #: o tabuleiro colado na camera (span 53-77%) e num caso isolado (canto em
+    #: x=700 de uma imagem de 640 px). E' exatamente o quadro que o arranjo
+    #: Kinect-only precisa: `freeze_kinect_direto.py` pede ao operador para levar
+    #: o tabuleiro as BORDAS e aos CANTOS do quadro, porque e' isso que ensina a
+    #: DISTORCAO do Kinect. Entao: os cantos COM folga sao refinados (o ganho de
+    #: precisao continua) e os que nao tem ficam com o valor do detector -- que ja'
+    #: entrega sub-pixel (test_deteccao_cascata.py mede a mesma precisao nas tres
+    #: larguras da cascata). O pior caso deixa de ser "a sessao morreu" e passa a
+    #: ser "esta amostra entrou com ~1,5 px a mais de ruido num canto", que a
+    #: limpeza de outliers do solver ja' trata.
+    margem = 6.0                     # meia janela (11x11 -> raio 5) + 1 px
+    com_folga = ((pontos[:, 0] >= margem) & (pontos[:, 0] <= largura - 1 - margem)
+                 & (pontos[:, 1] >= margem)
+                 & (pontos[:, 1] <= altura - 1 - margem))
+    if not com_folga.any():
+        return pontos
     gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
-    refinados = cv2.cornerSubPix(
-        gray,
-        cantos.reshape(-1, 1, 2).astype(np.float32),
-        (11, 11),
-        (-1, -1),
-        (cv2.TERM_CRITERIA_EPS + cv2.TERM_CRITERIA_MAX_ITER, 30, 0.001),
-    )
-    return refinados.reshape(-1, 2).astype(np.float64)
+    try:
+        refinados = cv2.cornerSubPix(
+            gray,
+            pontos[com_folga].reshape(-1, 1, 2).astype(np.float32),
+            (11, 11),
+            (-1, -1),
+            (cv2.TERM_CRITERIA_EPS + cv2.TERM_CRITERIA_MAX_ITER, 30, 0.001),
+        )
+    except cv2.error:
+        #: Rede de seguranca: se o cv2 reclamar mesmo com a folga conferida, a
+        #: amostra vale menos que a sessao.
+        return pontos
+    pontos[com_folga] = refinados.reshape(-1, 2).astype(np.float64)
+    return pontos
 
 
 def find_corners(frame, allow_fallback=True):
@@ -447,6 +673,310 @@ def pair_planar_error(kinect_corners, auxiliary_corners):
     return float(np.mean(np.linalg.norm(kin.reshape(-1, 2) - projected, axis=1)))
 
 
+def grade_de_avaliacao(profundidade=KINECT_EVAL_PROFUNDIDADE_M):
+    """(N,3) pontos da regiao de trabalho, no referencial do Kinect (m).
+
+    Serve para COMPARAR dois modelos do Kinect em pixel -- a unica medida que
+    responde "este npz vai projetar no lugar certo nesta bancada?". O RMS nao
+    responde: ele mede so' a coerencia interna do proprio arquivo.
+    """
+    xs = np.linspace(KINECT_EVAL_JANELA_X[0], KINECT_EVAL_JANELA_X[1],
+                     KINECT_EVAL_PASSOS_X)
+    ys = np.linspace(KINECT_EVAL_JANELA_Y[0], KINECT_EVAL_JANELA_Y[1],
+                     KINECT_EVAL_PASSOS_Y)
+    z = float(profundidade)
+    return np.array([[x, y, z] for y in ys for x in xs], np.float64)
+
+
+def compara_modelos_kinect(matriz_a, dist_a, matriz_b, dist_b):
+    """(mediana, max) px entre dois modelos do Kinect RGB, na regiao de trabalho.
+
+    Espelha `espalhamento_px` de tools\\diagnostico_calibracao.py (mesma grade e
+    mesma profundidade -- travado por test_diagnostico_calibracao.py). Aquela
+    ferramenta mede isso entre ARQUIVOS; aqui a mesma medida existe para o
+    programa poder avisar em tempo de calibracao, sem depender de tools\\.
+    """
+    pontos = grade_de_avaliacao()
+    px_a = _project_camera_points(pontos, np.asarray(matriz_a, np.float64),
+                                  np.asarray(dist_a, np.float64).reshape(-1, 1))
+    px_b = _project_camera_points(pontos, np.asarray(matriz_b, np.float64),
+                                  np.asarray(dist_b, np.float64).reshape(-1, 1))
+    diferencas = np.linalg.norm(px_a - px_b, axis=1)
+    return float(np.median(diferencas)), float(diferencas.max())
+
+
+def carrega_intrinsecas_kinect(caminho=None):
+    """(matriz, distorcao, info) do modelo CONGELADO do Kinect, ou (None, None, info).
+
+    Nunca levanta: arquivo ausente, npz sem os campos ou modelo fraco viram
+    (None, None, {"motivo": ...}) e o programa segue no caminho antigo. O modelo
+    congelado e' melhoria, nunca pre-requisito para calibrar.
+
+    O QUE DECIDE (e o que NAO decide mais):
+
+    * a PLACA em que o modelo foi gravado NAO decide nada -- ela vira AVISO em
+      `info["aviso_placa"]`. As intrinsecas sao propriedade da CAMERA: trocar o
+      tabuleiro impresso (foi o que aconteceu em 01/10/2026, 5x3/57 mm ->
+      7x5/45 mm) nao muda fx/fy/cx/cy/distorcao de camera nenhuma. Recusar por
+      placa transformava uma troca de placa em "toda sessao volta a RE-ESTIMAR o
+      Kinect" -- exatamente o bug que o congelamento existe para matar, MEDIDO
+      nos dois npz de 01/10/2026 (68,8 px de divergencia entre dois arquivos da
+      MESMA bancada).
+    * quem decide sao os MESMOS portoes da gravacao (`portoes_do_modelo_kinect`):
+      numero de poses, cobertura do quadro (span) e RMS. E' o SPAN -- nao a placa
+      -- que diz se um modelo do Kinect presta: com o tabuleiro pequeno no quadro
+      o calibrateCamera recebe geometria de menos e devolve um modelo diferente a
+      cada sessao.
+    * um arquivo SEM `poses`/`span` e' recusado: ele foi gravado por um caminho
+      que nao media a cobertura, entao nao ha' como saber se o modelo presta (e'
+      o caso do paliativo de 30/09/2026).
+    """
+    caminho = Path(caminho) if caminho is not None else KINECT_INTRINSICS_FILE
+    if not caminho.exists():
+        return None, None, {"motivo": f"{caminho.name} nao existe"}
+    try:
+        dados = np.load(caminho, allow_pickle=True)
+    except (OSError, ValueError) as exc:
+        return None, None, {"motivo": f"nao consegui ler {caminho.name}: {exc}"}
+    if "kinect_matrix" not in dados.files or "kinect_dist" not in dados.files:
+        return None, None, {"motivo": f"{caminho.name} sem kinect_matrix/dist"}
+
+    def escalar(nome):
+        if nome not in dados.files:
+            return None
+        valor = np.asarray(dados[nome]).reshape(-1)
+        return float(valor[0]) if valor.size else None
+
+    def texto(nome):
+        return (str(np.asarray(dados[nome]).reshape(-1)[0])
+                if nome in dados.files else "")
+
+    poses = escalar("poses")
+    info = {
+        "arquivo": str(caminho),
+        "rms": escalar("rms"),
+        "poses": int(poses) if poses is not None else None,
+        "span": escalar("span"),
+        "congelado_em": texto("frozen_at"),
+        #: Resolucao de origem do modelo: fx/cx so' valem NAQUELA resolucao.
+        "kinect_size": (tuple(int(v) for v in
+                              np.asarray(dados["kinect_size"]).reshape(-1))
+                        if "kinect_size" in dados.files else None),
+    }
+    # --- OS MESMOS portoes da gravacao (nunca uma regra paralela) ------------
+    ok, motivo = aceita_modelo_kinect(info["poses"], info["span"], info["rms"])
+    if not ok:
+        return None, None, {"motivo": f"{caminho.name}: {motivo}"}
+    # --- PLACA: AVISO (ver a docstring: as intrinsecas sao da CAMERA) --------
+    avisos = []
+    if "checkerboard_size" in dados.files:
+        tabuleiro = tuple(int(v) for v in
+                          np.asarray(dados["checkerboard_size"]).reshape(-1))
+        if tabuleiro != tuple(CHECKERBOARD_SIZE):
+            avisos.append(
+                "gravado com tabuleiro %dx%d != %dx%d da placa atual (as "
+                "intrinsecas sao da CAMERA e nao mudam com a placa: segue "
+                "valendo)" % (tabuleiro + tuple(CHECKERBOARD_SIZE)))
+    if "square_size_m" in dados.files:
+        quadrado = float(np.asarray(dados["square_size_m"]).reshape(-1)[0])
+        if abs(quadrado - SQUARE_SIZE_M) > 1e-6:
+            avisos.append(
+                "gravado com quadrado de %g mm != %g mm da placa atual (idem: "
+                "segue valendo)" % (quadrado * 1000.0, SQUARE_SIZE_M * 1000.0))
+    info["aviso_placa"] = " | ".join(avisos)
+    return (np.asarray(dados["kinect_matrix"], np.float64).reshape(3, 3),
+            np.asarray(dados["kinect_dist"], np.float64).reshape(-1), info)
+
+
+def salva_intrinsecas_kinect(matriz, distorcao, kinect_size, rms, poses, span,
+                            caminho=None):
+    """Grava o modelo congelado do Kinect (ver docstring, item 2).
+
+    `caminho` = arquivo de saida (padrao `KINECT_INTRINSICS_FILE`). Existe para o
+    arranjo Kinect-only (`freeze_kinect_direto.py --saida`) poder gravar num
+    arquivo de teste sem tocar no modelo bom da bancada.
+
+    `poses` e `span` NAO sao decoracao: sao os portoes que a LEITURA refaz
+    (`portoes_do_modelo_kinect`). Um arquivo sem eles e' recusado na leitura, por
+    mais bonito que o RMS seja.
+    """
+    destino = Path(caminho) if caminho is not None else KINECT_INTRINSICS_FILE
+    np.savez(
+        destino,
+        version=KINECT_INTRINSICS_VERSION,
+        kinect_matrix=np.asarray(matriz, np.float64).reshape(3, 3),
+        kinect_dist=np.asarray(distorcao, np.float64).reshape(-1),
+        kinect_size=np.asarray([int(v) for v in kinect_size]),
+        rms=float(rms),
+        poses=int(poses),
+        span=float(span),
+        checkerboard_size=np.asarray(CHECKERBOARD_SIZE),
+        square_size_m=float(SQUARE_SIZE_M),
+        frozen_at=time.strftime("%Y-%m-%d %H:%M:%S"),
+    )
+    print(f"Modelo do Kinect CONGELADO em {destino.name}: "
+          f"RMS {rms:.3f} px | {poses} poses | tabuleiro a {span:.0%} da diagonal. "
+          "A partir de agora TODA calibracao de par reusa este modelo.")
+
+
+def span_do_tabuleiro(pontos_kinect, kinect_size):
+    """Fracao MEDIANA da diagonal do quadro do Kinect que o tabuleiro ocupou.
+
+    E' a medida que os portoes do modelo congelado usam (ver
+    `portoes_do_modelo_kinect`): com o tabuleiro pequeno no quadro o
+    calibrateCamera tem parametros demais para a geometria que recebeu, e o
+    modelo do Kinect sai diferente a cada sessao -- foi MEDIDO em 30/09/2026
+    (24 a 50 px na projecao do mesmo ponto 3D, ate' 176 px na borda).
+    """
+    spans = [board_span(np.asarray(pontos, np.float64).reshape(-1, 2))
+             for pontos in pontos_kinect]
+    diagonal = float(np.hypot(*kinect_size))
+    return float(np.median(spans)) / diagonal if spans else 0.0
+
+
+def portoes_do_modelo_kinect(poses, span, rms=None):
+    """(ok, motivo) dos TRES portoes do modelo congelado -- funcao PURA.
+
+    Usada DE PROPOSITO nos DOIS lados: ao GRAVAR
+    (`talvez_salvar_intrinsecas_kinect` e `freeze_kinect_direto.py`) e ao
+    CARREGAR (`carrega_intrinsecas_kinect`). Se os dois lados usassem regras
+    diferentes existiria o arquivo que o proprio programa escreve e depois
+    recusa -- e o Kinect voltaria a ser re-estimado por sessao, que e' o bug que
+    o congelamento existe para matar.
+
+    `rms=None` = ainda NAO medido, e o portao do RMS e' pulado: o caminho de
+    gravacao mede o RMS DEPOIS de saber que ha' poses e cobertura, porque o
+    calibrateCamera e' caro e nao vale gastar com o tabuleiro pequeno (que seria
+    recusado logo em seguida).
+    """
+    if poses < KINECT_INTRINSICS_MIN_POSES:
+        return False, (
+            f"{poses} poses (minimo {KINECT_INTRINSICS_MIN_POSES}) -- junte "
+            "mais poses")
+    if span < KINECT_INTRINSICS_MIN_SPAN:
+        return False, (
+            f"o tabuleiro ocupou {span:.0%} da diagonal do quadro (minimo "
+            f"{KINECT_INTRINSICS_MIN_SPAN:.0%}) -- use um tabuleiro GRANDE e "
+            "chegue mais perto do Kinect: o modelo dele e' fragil por falta de "
+            "cobertura, e foi esse o motivo de ele ser congelado")
+    if rms is not None and rms > KINECT_INTRINSICS_MAX_RMS:
+        return False, (
+            f"RMS {rms:.3f} px acima de {KINECT_INTRINSICS_MAX_RMS} px -- "
+            "melhore luz/nitidez (o RMS de uma camera so', com o tabuleiro "
+            "grande, tem de ser bem baixo)")
+    return True, None
+
+
+def aceita_modelo_kinect(poses, span, rms=None):
+    """(ok, motivo) de um modelo congelado -- a decisao COMPLETA, num lugar so'.
+
+    Junta as duas coisas que decidem: os campos obrigatorios (`poses` e `span`,
+    sem os quais nao ha' como saber a cobertura do quadro) e os tres portoes.
+    Existe para quem LE' o arquivo POR FORA (`tools/diagnostico_calibracao.py`)
+    poder dar o MESMO veredito que a calibracao, em vez de reimplementar a regra.
+    Foi uma regra paralela -- a recusa por placa -- que deixou o diagnostico
+    dizer "modelo congelado do Kinect: SIM" enquanto a calibracao re-estimava o
+    Kinect em silencio (01/10/2026).
+    """
+    faltando = [campo for campo, valor in (("poses", poses), ("span", span))
+                if valor is None]
+    if faltando:
+        return False, ("nao registra %s: gravado por um caminho que nao mede a "
+                       "cobertura do quadro, entao nao ha' como saber se o "
+                       "modelo presta -- refaca com freeze_kinect_direto.py "
+                       "(arranjo Kinect-only) ou com stereo_calibration.py "
+                       "--salvar-intrinsecas-kinect" % " nem ".join(faltando))
+    return portoes_do_modelo_kinect(poses, span, rms)
+
+
+def resolve_modelo_kinect(obj, kin, kinect_size):
+    """(rms, matriz, distorcao, poses, span) do modelo do Kinect destas poses.
+
+    Unico lugar que sabe COMO o modelo congelado e' calculado, para o arranjo
+    Kinect-only (`freeze_kinect_direto.py`) e o caminho do par nao divergirem.
+    Nao decide nada: quem decide sao os portoes (`portoes_do_modelo_kinect`).
+    """
+    poses = len(obj)
+    span = span_do_tabuleiro(kin, kinect_size)
+    rms, matriz, distorcao, _, _ = calibrate_single(
+        _as_float32_points(obj), _as_float32_points(kin), kinect_size)
+    return rms, matriz, distorcao, poses, span
+
+
+def aceita_pose_kinect(cantos, pontos_ja, kinect_size,
+                       min_span=MIN_BOARD_SPAN_FRACTION,
+                       max_span=KINECT_INTRINSICS_MAX_SPAN,
+                       min_separacao=MIN_POSE_SEPARATION):
+    """(ok, motivo, fracao) -- portao de CAPTURA das poses do Kinect so'.
+
+    Tres regras, as MESMAS da captura do par onde elas existem
+    (MIN_BOARD_SPAN_FRACTION e MIN_POSE_SEPARATION), na forma de funcao pura para
+    poder ser provada sem hardware:
+
+    * SPAN MINIMO -- o tabuleiro tem de ocupar ao menos `min_span` da diagonal do
+      quadro. A meta de verdade e' KINECT_INTRINSICS_MIN_SPAN (35%), mas aqui a
+      porta e' mais frouxa: uma pose distante ainda ajuda na DISTORCAO, e recusar
+      a captura seria perder trabalho. Quem reprova o conjunto no fim e' o portao
+      do modelo.
+    * SPAN MAXIMO -- `max_span` (ver KINECT_INTRINSICS_MAX_SPAN): tabuleiro
+      colado na camera sai de foco e domina fx.
+    * SEPARACAO -- o centro do tabuleiro tem de estar a >= `min_separacao` do
+      span de distancia de TODAS as poses ja' coletadas. Sem isto, 12 amostras de
+      UMA pose nao cobrem geometria nenhuma: o calibrateCamera devolve um RMS
+      otimo com intrinsecas erradas -- o pior caso possivel para algo que vai ser
+      CONGELADO e passar a valer para todas as sessoes seguintes.
+    """
+    span = board_span(cantos)
+    diagonal = float(np.hypot(*kinect_size))
+    fracao = span / diagonal if diagonal else 0.0
+    if fracao < min_span:
+        return False, ("tabuleiro a %.0f%% da diagonal do quadro (minimo %.0f%%)"
+                       " -- chegue mais perto do Kinect"
+                       % (fracao * 100.0, min_span * 100.0)), fracao
+    if max_span and fracao > max_span:
+        return False, ("tabuleiro a %.0f%% da diagonal do quadro (maximo %.0f%%)"
+                       " -- AFASTE do Kinect: mais perto que isto o RGB fica "
+                       "fora de foco e o tabuleiro domina o ajuste de fx"
+                       % (fracao * 100.0, max_span * 100.0)), fracao
+    if pontos_ja:
+        centros = np.array([np.asarray(pontos, np.float64).reshape(-1, 2)
+                            .mean(axis=0) for pontos in pontos_ja])
+        centro = np.asarray(cantos, np.float64).reshape(-1, 2).mean(axis=0)
+        separacao = float(np.linalg.norm(centros - centro, axis=1).min())
+        if separacao < min_separacao * span:
+            return False, ("pose quase igual a uma ja' coletada (%.0f px) -- "
+                           "MEXA no tabuleiro: mude distancia, inclinacao ou "
+                           "posicao" % separacao), fracao
+    return True, None, fracao
+
+
+def talvez_salvar_intrinsecas_kinect(obj, kin, kinect_size):
+    """Grava o modelo congelado do Kinect se a SESSAO tiver dados para isso.
+
+    Tres portas de qualidade, cada uma negando com o numero medido:
+    poses minimas, cobertura do quadro (span MEDIANO do tabuleiro) e RMS
+    individual. Congelar um modelo ruim seria PIOR que nao congelar: ele passa a
+    valer, calado, para TODAS as sessoes seguintes.
+
+    As tres portas moram em `portoes_do_modelo_kinect` porque a LEITURA usa
+    exatamente as mesmas (ver `carrega_intrinsecas_kinect`).
+    """
+    poses = len(obj)
+    span = span_do_tabuleiro(kin, kinect_size)
+    ok, motivo = portoes_do_modelo_kinect(poses, span)
+    if not ok:
+        print(f"Intrinsecas do Kinect NAO gravadas: {motivo}.")
+        return False
+    rms, matriz, distorcao, _, _ = calibrate_single(
+        _as_float32_points(obj), _as_float32_points(kin), kinect_size)
+    ok, motivo = portoes_do_modelo_kinect(poses, span, rms)
+    if not ok:
+        print(f"Intrinsecas do Kinect NAO gravadas: {motivo}.")
+        return False
+    salva_intrinsecas_kinect(matriz, distorcao, kinect_size, rms, poses, span)
+    return True
+
+
 def calibrate_single(object_points, image_points, size):
     rms, matrix, dist, rvecs, tvecs = cv2.calibrateCamera(
         object_points,
@@ -498,8 +1028,17 @@ def run_stereo(
     kinect_size,
     auxiliary_size,
     refine_intrinsics,
+    ref_kinect=None,
 ):
-    """Roda uma solucao completa (individual + stereo) e devolve um dict."""
+    """Roda uma solucao completa (individual + stereo) e devolve um dict.
+
+    `ref_kinect` = (matriz, distorcao) do MODELO CONGELADO do Kinect (ver
+    `carrega_intrinsecas_kinect`). Quando ele vem, o Kinect NAO e' estimado nem
+    refinado nesta sessao: usa-se o modelo congelado e o stereo resolve so' R/T
+    (`refine_intrinsics` e' ignorado). O modelo estimado na sessao ainda e'
+    calculado, mas so' para MEDIR o desvio (`kinect_deviation_px`): e' o numero
+    que diz quanto aquele modelo teria custado em px no overlay.
+    """
     object_points = _as_float32_points(object_points)
     kinect_points = _as_float32_points(kinect_points)
     auxiliary_points = _as_float32_points(auxiliary_points)
@@ -513,6 +1052,21 @@ def run_stereo(
     auxiliary_rms, auxiliary_matrix, auxiliary_dist, _, _ = calibrate_single(
         object_points, auxiliary_points, auxiliary_size
     )
+    desvio_px = None
+    congelado = ref_kinect is not None
+    if congelado:
+        referencia = tuple(np.asarray(valor, np.float64) for valor in ref_kinect)
+        if len(referencia) == 2:
+            desvio_px = compara_modelos_kinect(
+                kinect_matrix, kinect_dist, referencia[0], referencia[1])
+            kinect_matrix = referencia[0].reshape(3, 3).copy()
+            kinect_dist = referencia[1].reshape(-1).copy()
+            # Com o modelo congelado nao ha' o que refinar no Kinect, e o
+            # candidato "refinado" so' sabe vencer no RMS (que nao mede o
+            # problema) -- ver o item 2 do docstring.
+            refine_intrinsics = False
+        else:
+            congelado = False
     if refine_intrinsics:
         flags = cv2.CALIB_USE_INTRINSIC_GUESS | CALIB_FLAGS
     else:
@@ -553,6 +1107,8 @@ def run_stereo(
         "kinect_size": tuple(kinect_size),
         "auxiliary_size": tuple(auxiliary_size),
         "refine_intrinsics": bool(refine_intrinsics),
+        "kinect_frozen": bool(congelado),
+        "kinect_deviation_px": desvio_px,
         "kinect_rvecs": kinect_rvecs,
         "kinect_tvecs": kinect_tvecs,
     }
@@ -642,8 +1198,25 @@ def pose_rms(result, object_points, kinect_points, auxiliary_points, rvecs=None,
     )
 
 
-def solve_best(object_points, kinect_points, auxiliary_points, kinect_size, auxiliary_size):
-    """Resolve com intrinsecas congeladas e com refinadas; guarda a melhor."""
+def solve_best(object_points, kinect_points, auxiliary_points, kinect_size,
+               auxiliary_size, ref_kinect=None):
+    """Resolve com intrinsecas congeladas e com refinadas; guarda a melhor.
+
+    Com `ref_kinect` (modelo do Kinect congelado) ha' UMA candidata so': o
+    refinamento conjunto das intrinsecas deixa de existir, porque ele re-estima
+    justamente o modelo que NAO pode mudar (o Kinect e' a mesma camera) e tem
+    vantagem falsa no RMS.
+    """
+    if ref_kinect is not None:
+        return run_stereo(
+            object_points,
+            kinect_points,
+            auxiliary_points,
+            kinect_size,
+            auxiliary_size,
+            refine_intrinsics=False,
+            ref_kinect=ref_kinect,
+        )
     candidates = []
     for refine in (False, True):
         try:
@@ -655,6 +1228,7 @@ def solve_best(object_points, kinect_points, auxiliary_points, kinect_size, auxi
                     kinect_size,
                     auxiliary_size,
                     refine_intrinsics=refine,
+                    ref_kinect=None,
                 )
             )
         except cv2.error as exc:
@@ -671,6 +1245,7 @@ def solve_with_repair(
     kinect_size,
     auxiliary_size,
     verbose=True,
+    ref_kinect=None,
 ):
     """Resolve a calibracao stereo reparando trocas de ordem dos cantos.
 
@@ -685,8 +1260,8 @@ def solve_with_repair(
        testadas contra o modelo da semente; a simetria correta da erro
        ~1 px e as erradas dezenas de px. Re-resolve e repete.
     3. Poses que continuam ruins mesmo com a melhor simetria sao
-       descartadas. Termina com solve final testando os dois modos de
-       intrinsecas.
+       descartadas. Termina com o solve final, que com `ref_kinect`
+       (modelo CONGELADO do Kinect) resolve so' R/T.
     """
     symmetries = symmetry_indices()
     total = len(object_points)
@@ -745,7 +1320,8 @@ def solve_with_repair(
             trial = sorted(rng.choice(total, size=seed_size, replace=False).tolist())
             try:
                 trial_result = run_stereo(
-                    *subset(trial), kinect_size, auxiliary_size, refine_intrinsics=False
+                    *subset(trial), kinect_size, auxiliary_size,
+                    refine_intrinsics=False, ref_kinect=ref_kinect,
                 )
             except cv2.error:
                 continue
@@ -758,7 +1334,8 @@ def solve_with_repair(
             )
     if seed_result is None:
         obj, kin, aux = subset(active)
-        seed_result = run_stereo(obj, kin, aux, kinect_size, auxiliary_size, refine_intrinsics=False)
+        seed_result = run_stereo(obj, kin, aux, kinect_size, auxiliary_size,
+                                 refine_intrinsics=False, ref_kinect=ref_kinect)
 
     # ---- etapa 2: atribuicao de simetrias por pose + re-solve ----
     model = seed_result
@@ -774,7 +1351,8 @@ def solve_with_repair(
         for i in active:
             name_map[i] = assignments[i]
         obj, kin, aux = subset(active)
-        model = run_stereo(obj, kin, aux, kinect_size, auxiliary_size, refine_intrinsics=False)
+        model = run_stereo(obj, kin, aux, kinect_size, auxiliary_size,
+                           refine_intrinsics=False, ref_kinect=ref_kinect)
 
     # ---- etapa 3: descarte de poses ruins ----
     obj, kin, aux = subset(active)
@@ -793,12 +1371,14 @@ def solve_with_repair(
         active.remove(dropped)
         del name_map[dropped]
         obj, kin, aux = subset(active)
-        model = run_stereo(obj, kin, aux, kinect_size, auxiliary_size, refine_intrinsics=False)
+        model = run_stereo(obj, kin, aux, kinect_size, auxiliary_size,
+                           refine_intrinsics=False, ref_kinect=ref_kinect)
         errors = pose_rms(model, obj, kin, aux, model["kinect_rvecs"], model["kinect_tvecs"])
 
     # ---- solve final ----
     obj, kin, aux = subset(active)
-    final = solve_best(obj, kin, aux, kinect_size, auxiliary_size)
+    final = solve_best(obj, kin, aux, kinect_size, auxiliary_size,
+                       ref_kinect=ref_kinect)
     errors = pose_rms(final, obj, kin, aux)
     return final, name_map, active, errors, obj, kin, aux
 
@@ -809,6 +1389,18 @@ def print_solve_report(final, errors, active, spans, tilt_ratios):
         f"RMS stereo={final['stereo_rms']:.4f} px ({mode}) | "
         f"RMS Kinect={final['kinect_rms']:.4f} px | RMS auxiliar={final['auxiliary_rms']:.4f} px"
     )
+    if final.get("kinect_frozen"):
+        desvio = final.get("kinect_deviation_px")
+        texto = ("--" if desvio is None
+                 else "mediana %.1f px / max %.1f px" % desvio)
+        print("  Kinect CONGELADO (kinect_intrinsics.npz): o modelo que ESTA "
+              "sessao estimaria diverge %s dele" % texto)
+        if desvio is not None and desvio[0] > 10.0:
+            print("  ... divergencia grande = o tabuleiro desta sessao NAO "
+                  "sustenta um modelo do Kinect (pouca cobertura do quadro). E' "
+                  "por isso que ele fica congelado: sem congelar, esse modelo "
+                  "iria para o overlay como erro sistematico (ver docstring).")
+
     for position, index in enumerate(active):
         print(f"  pose {index + 1}: {errors[position]:.2f} px")
     if spans and tilt_ratios:
@@ -858,10 +1450,22 @@ def print_capture_guidance():
     print("  imagem nitida e sem reflexo.")
 
 
-def save_calibration(final, active, errors, obj, kin, aux):
+def save_calibration(final, active, errors, obj, kin, aux, camera_name=""):
+    """Grava o stereo da camera auxiliar ativa em stereo_calibration_aux{N}.npz.
+
+    `camera_name` e' o NOME do Windows da camera deste indice (`camera_names`):
+    o indice do OpenCV e' a POSICAO na enumeracao do DirectShow e muda quando uma
+    webcam entra/sai do USB, entao sem o nome o arquivo `_aux0` pode ser
+    carregado pela camera errada -- e o unico sintoma seria um RMS lindo com a
+    sobreposicao centenas de px fora (foi o que aconteceu em 28/09/2026, com um
+    npz gravado em OUTRA maquina). O campo e' OPCIONAL na leitura: npz antigo
+    (sem ele) segue sendo aceito por placa + quadrado + RMS.
+    """
     output = output_file(AUX_CAMERA_INDEX)
     np.savez(
         output,
+        # `camera_name` e' a unica forma de dizer A QUAL camera o npz pertence.
+        camera_name=str(camera_name or ""),
         kinect_matrix=final["kinect_matrix"],
         kinect_dist=final["kinect_dist"],
         auxiliary_matrix=final["auxiliary_matrix"],
@@ -878,6 +1482,15 @@ def save_calibration(final, active, errors, obj, kin, aux):
         per_pose_rms=errors,
         used_poses=np.asarray(active),
         refined_intrinsics=1 if final["refine_intrinsics"] else 0,
+        # DE ONDE veio o modelo do Kinect gravado neste npz: "congelado"
+        # (kinect_intrinsics.npz, o caminho recomendado) ou "sessao" (estimado
+        # nesta calibracao -- ver o item 2 do docstring). `kinect_deviation_px`
+        # e' o quanto o modelo da sessao divergia do congelado (-1 = nao medido):
+        # e' a estimativa do erro sistematico que o overlay teria.
+        kinect_intrinsics_source=("congelado" if final.get("kinect_frozen")
+                                  else "sessao"),
+        kinect_deviation_px=(-1.0 if final.get("kinect_deviation_px") is None
+                             else float(final["kinect_deviation_px"][0])),
     )
     print(
         f"Melhor calibracao salva em {output}; "
@@ -962,7 +1575,42 @@ def abre_auxiliar(indice):
         "e livre (nenhum outro programa usando)?")
 
 
-def abre_kinect(espera_s=ESPERA_KINECT_S):
+def motivo_do_sensor_mudo(espera_s, tentativas):
+    """Texto unico para "abriu e nao entregou frame" -- usado por todos os callers.
+
+    As tres causas TEM sintomas diferentes e a mensagem separa: (1) outro programa
+    com o sensor aberto (o caso do Kinect Studio, MEDIDO em 07/10/2026); (2) o
+    link USB caiu para 2.0 / faltou banda, em que o driver carrega, o runtime abre
+    e nada transmite; (3) energia -- sem a fonte propria o sensor nao acorda.
+    Nao adianta mandar "confira o cabo" sem dizer o que muda em cada caso.
+    """
+    return (
+        "O Kinect ABRIU mas NAO entregou frame em %.0f s (tentei reabrir %d "
+        "vezes). Ele e' obrigatorio (o par e' Kinect RGB + webcam auxiliar). O "
+        "driver esta' de pe' -- o que falta e' o sensor TRANSMITIR. Em ordem de "
+        "probabilidade:\n"
+        "    1) algum programa esta' com o sensor: FECHE e confira na barra do "
+        "Windows o que ficou vivo -- %s. 'Fechei o Kinect Studio' nao basta se o "
+        "watch/gravador dele continuar aberto; se aparecer 'usbccgp' ou o sensor "
+        "sem frame, DESLIGUE e RELIGUE a fonte do Kinect.\n"
+        "    2) link USB caiu para 2.0 (o runtime abre e nada sai): use porta "
+        "USB 3.0 AZUL direto na placa-mae -- sem hub, sem extensao, sem painel "
+        "frontal (o v2 precisa das duas faixas de banda; as webcams continuam "
+        "funcionando porque sao outra coisa).\n"
+        "    3) energia: a fonte propria do Kinect tem de estar ligada ANTES do "
+        "USB; sem ela o sensor aparece enumerado e mudo.\n"
+        "  Diagnostico rapido (nao exige tabuleiro): "
+        ".venv\\Scripts\\python.exe tools\\checa_kinect.py\n"
+        "  Se o proprio Kinect Studio mostra imagem e o SDK nao, o passo que "
+        "decide e' o `sensor.IsAvailable` (que o pykinect2 nunca le') e o "
+        "checklist do que ja' foi descartado esta' em "
+        "`tools\\checklist_kinect_mudo.py` -- suspensao seletiva de USB, "
+        "porta/controladora, fonte, reinstalar o dispositivo e o verificador "
+        "oficial da Microsoft."
+        % (espera_s, tentativas, ", ".join(APLICATIVOS_QUE_SEGURAM_O_KINECT)))
+
+
+def abre_kinect(espera_s=ESPERA_KINECT_S, tentativas=None):
     """Abre o Kinect RGB e ESPERA o primeiro frame antes de seguir.
 
     O Kinect e' OBRIGATORIO: o par estereo e' (Kinect RGB, auxiliar), nao ha'
@@ -971,32 +1619,59 @@ def abre_kinect(espera_s=ESPERA_KINECT_S):
     faz `continue` ANTES do `cv2.imshow` e NENHUMA JANELA APARECE. O programa
     fica mudo, com cara de travado, sem dizer que o problema e' a camera.
     Aqui ele falha ALTO e diz exatamente o que conferir.
+
+    `tentativas` = quantas vezes REABRIR o runtime antes de desistir. Reabrir
+    recupera o sensor que ficou mudo depois de outro programa soltar a camera
+    (medido em 07/10/2026, ver `TENTATIVAS_KINECT`). Esperas curtas (teste, sonda)
+    NUNCA reabrem: com `espera_s <= 2` vale uma tentativa so', para o teste nao
+    virar uma espera de minutos e para o numero de consultas ao fake ficar
+    previsivel.
     """
+    if tentativas is None:
+        tentativas = TENTATIVAS_KINECT if espera_s > 2.0 else 1
+    tentativas = max(1, int(tentativas))
     print("  Kinect: abrindo o RGB (pode levar alguns segundos)...")
-    try:
-        runtime = PyKinectRuntime(PyKinectV2.FrameSourceTypes_Color)
-    except Exception as exc:
-        raise RuntimeError(
-            "Nao consegui abrir o Kinect v2. Confira: cabo USB 3.0 (porta "
-            "azul) DIRETO na maquina (sem hub/extensor), SDK do Kinect v2 "
-            "instalado, e nenhum outro programa (Kinect Studio, ferramenta de "
-            f"ground truth) usando a camera. Erro: {exc}") from exc
-    inicio = time.time()
-    while time.time() - inicio < espera_s:
-        if runtime.has_new_color_frame():
-            print(f"  Kinect: primeiro frame em {time.time() - inicio:.1f} s")
-            return runtime
-        time.sleep(0.005)
-    runtime.close()
-    raise RuntimeError(
-        f"O Kinect abriu mas NAO entregou frame em {espera_s:.0f} s. Ele e' "
-        "obrigatorio para a calibracao stereo (o par e' Kinect RGB + webcam "
-        "auxiliar). Confira o cabo USB 3.0 direto na maquina e se outro "
-        "programa nao esta' usando a camera.")
+    ultimo_erro = None
+    for tentativa in range(1, tentativas + 1):
+        try:
+            runtime = PyKinectRuntime(PyKinectV2.FrameSourceTypes_Color)
+        except Exception as exc:
+            raise RuntimeError(
+                "Nao consegui abrir o Kinect v2. Confira: cabo USB 3.0 (porta "
+                "azul) DIRETO na maquina (sem hub/extensor), SDK do Kinect v2 "
+                "instalado, e nenhum outro programa (Kinect Studio, ferramenta "
+                "de ground truth) usando a camera. Erro: %s" % (exc,)) from exc
+        inicio = time.time()
+        while time.time() - inicio < espera_s:
+            if runtime.has_new_color_frame():
+                if tentativa > 1:
+                    print("  Kinect: primeiro frame na %da tentativa (%.1f s) -- "
+                          "o sensor estava preso e a REABERTURA resolveu."
+                          % (tentativa, time.time() - inicio))
+                else:
+                    print("  Kinect: primeiro frame em %.1f s"
+                          % (time.time() - inicio))
+                return runtime
+            time.sleep(0.005)
+        ultimo_erro = motivo_do_sensor_mudo(espera_s, tentativa)
+        try:
+            runtime.close()
+        except Exception:                       # noqa: BLE001 - fechar e' higiene
+            pass
+        if tentativa < tentativas:
+            print("  Kinect: sem frame em %.0f s (tentativa %d/%d) -- fechando e "
+                  "reabrindo o runtime..." % (espera_s, tentativa, tentativas))
+    raise RuntimeError(ultimo_erro)
 
 
-def calibrate_one(aux_index):
+def calibrate_one(aux_index, ref_kinect=None, salvar_intrinsecas=False):
     """Calibra o par (Kinect RGB, webcam auxiliar `aux_index`).
+
+    `ref_kinect` = (matriz, distorcao) do MODELO CONGELADO do Kinect: quando vem,
+    o Kinect NAO e' estimado nem refinado nesta sessao (ver o item 2 do
+    docstring) e o npz grava esse modelo, junto com o desvio medido da sessao.
+    `salvar_intrinsecas` = ao resolver, tenta GRAVAR o modelo congelado a partir
+    das poses desta sessao (so' passa quando o tabuleiro preenche o quadro).
 
     Devolve 0 em caso de sucesso. Cada camera auxiliar tem a SUA propria sessao
     de captura e o seu proprio arquivo stereo_calibration_aux{N}.npz.
@@ -1286,12 +1961,16 @@ def calibrate_one(aux_index):
             last_solved = total
             print(f"Resolvendo com {total} poses...")
             final, name_map, active, errors, final_obj, final_kin, final_aux = solve_with_repair(
-                object_points, kinect_points, auxiliary_points, kinect_size, auxiliary_size
+                object_points, kinect_points, auxiliary_points, kinect_size,
+                auxiliary_size, ref_kinect=ref_kinect
             )
             print_solve_report(final, errors, active, kinect_spans, tilt_ratios)
+            if salvar_intrinsecas:
+                talvez_salvar_intrinsecas_kinect(final_obj, final_kin, kinect_size)
             if final["stereo_rms"] < best_rms:
                 best_rms = final["stereo_rms"]
-                save_calibration(final, active, errors, final_obj, final_kin, final_aux)
+                save_calibration(final, active, errors, final_obj, final_kin,
+                                 final_aux, camera_name=nome_real or "")
             if final["stereo_rms"] <= MAX_STEREO_RMS_PX:
                 print(f"Calibracao aceita; RMS stereo={final['stereo_rms']:.4f} px")
                 break
@@ -1317,33 +1996,10 @@ def main():
     """Calibra cada camera auxiliar pedida, uma sessao de captura de cada vez."""
     global DETECTION_WIDTHS, DETECTION_CLAHE_CLIP, DETECTION_SB_FLAGS
     args = parse_args()
-    global CHECKERBOARD_COLS, CHECKERBOARD_ROWS, CHECKERBOARD_SIZE, SQUARE_SIZE_M
-    if args.checkerboard:
-        texto = args.checkerboard.lower().replace(" ", "")
-        for separador in ("x", ",", "*"):
-            if separador in texto:
-                cols_txt, rows_txt = texto.split(separador, 1)
-                break
-        else:
-            print(f"ERRO: --checkerboard '{args.checkerboard}' nao esta' no "
-                  "formato COLSxROWS (ex.: 5x3).")
-            return 2
-        try:
-            cols, rows = int(cols_txt), int(rows_txt)
-        except ValueError:
-            print(f"ERRO: --checkerboard '{args.checkerboard}' nao esta' no "
-                  "formato COLSxROWS (ex.: 5x3).")
-            return 2
-        if cols < 3 or rows < 3:
-            print(f"ERRO: --checkerboard {cols}x{rows} invalido (minimo 3x3).")
-            return 2
-        CHECKERBOARD_COLS, CHECKERBOARD_ROWS = cols, rows
-        CHECKERBOARD_SIZE = (cols, rows)
-    if args.quadrado:
-        if args.quadrado <= 0:
-            print(f"ERRO: --quadrado {args.quadrado} tem de ser > 0.")
-            return 2
-        SQUARE_SIZE_M = args.quadrado / 1000.0
+    pronto, mensagem = aplica_tabuleiro(args.checkerboard, args.quadrado)
+    if not pronto:
+        print(f"ERRO: {mensagem}.")
+        return 2
     print(f"Tabuleiro: {CHECKERBOARD_COLS}x{CHECKERBOARD_ROWS} cantos "
           f"internos, quadrado de {SQUARE_SIZE_M * 1000:g} mm")
     DETECTION_WIDTHS = tuple(int(v) for v in args.largura_deteccao)
@@ -1352,7 +2008,44 @@ def main():
     print(f"Detector: larguras {DETECTION_WIDTHS} (0 = cheia) | "
           f"CLAHE {DETECTION_CLAHE_CLIP:g} | flags {DETECTION_SB_FLAGS}")
     #: dict.fromkeys preserva a ordem e remove indices repetidos.
+    if args.aux_index is None:
+        args.aux_index = indices_padrao_auxiliares()
+        print(f"Webcams auxiliares desta maquina (pelo NOME): {args.aux_index} "
+              "-- use --aux-index N para forcar outros indices")
     indices = list(dict.fromkeys(int(i) for i in args.aux_index))
+    # --- MODELO CONGELADO do Kinect (ver o item 2 do docstring) -------------
+    referencia = None
+    if args.sem_intrinsecas_kinect:
+        print("Modelo do Kinect: --sem-intrinsecas-kinect -> cada sessao "
+              "re-estima o Kinect (comportamento antigo).")
+    else:
+        matriz_ref, dist_ref, info_ref = carrega_intrinsecas_kinect(
+            args.intrinsecas_kinect)
+        if matriz_ref is None:
+            print(f"Modelo do Kinect: SEM modelo congelado ({info_ref['motivo']}).")
+            print("  O Kinect sera' estimado/refinado NESTA sessao. E' assim que "
+                  "cada sessao termina com um modelo do Kinect diferente -- e esse "
+                  "erro NAO aparece no RMS (que so' mede a coerencia interna do "
+                  "npz), ele aparece como dezenas de px no overlay. Para congelar "
+                  "(recomendado, UMA vez por bancada):")
+            print("    python freeze_kinect_direto.py     <- arranjo Kinect-only:"
+                  " o tabuleiro chega a 0,3 m e o span passa (RECOMENDADO)")
+            print("    python stereo_calibration.py --salvar-intrinsecas-kinect"
+                  "   (o mesmo, com a auxiliar na sessao)")
+        else:
+            referencia = (matriz_ref, dist_ref)
+            print(f"Modelo do Kinect CONGELADO: {info_ref['arquivo']}")
+            if info_ref["rms"] is not None:
+                print("  RMS %.3f px | %s poses | tabuleiro a %.0f%% da diagonal "
+                      "| resolucao %s | congelado em %s"
+                      % (info_ref["rms"], info_ref["poses"],
+                         (info_ref["span"] or 0.0) * 100.0,
+                         "x".join(str(v) for v in info_ref["kinect_size"])
+                         if info_ref["kinect_size"] else "?",
+                         info_ref["congelado_em"]))
+            if info_ref.get("aviso_placa"):
+                print(f"  AVISO de placa: {info_ref['aviso_placa']}")
+            print("  -> o Kinect NAO sera' re-estimado: o stereo resolve so' R/T")
     if len(indices) > 1:
         print(f"Vao ser calibradas {len(indices)} auxiliares, UMA DE CADA VEZ: "
               f"{indices}")
@@ -1363,7 +2056,8 @@ def main():
             print(f"\n##### AUXILIAR {posicao}/{len(indices)} "
                   f"(indice {aux_index}) #####")
         try:
-            if calibrate_one(aux_index) != 0:
+            if calibrate_one(aux_index, ref_kinect=referencia,
+                             salvar_intrinsecas=args.salvar_intrinsecas_kinect) != 0:
                 return 1
         except RuntimeError as exc:
             #: Falha de camera sai como INSTRUCAO, nao como traceback cru: e' o

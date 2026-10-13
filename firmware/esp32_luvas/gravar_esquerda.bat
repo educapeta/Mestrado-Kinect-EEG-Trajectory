@@ -12,7 +12,7 @@ if "%PORT%"=="" set "PORT=COM6"
 echo ============================================================
 echo   GRAVAR LUVA ESQUERDA     (env luva_esquerda / UDP 4211)
 echo   Porta serial: %PORT%
-echo   Wi-Fi: hotspot DUDU_LAPTOP 2897 (PSK) -> unicast 192.168.137.1
+echo   Wi-Fi: hotspot EDUARDO-PC 9049 (PSK) -> unicast 192.168.137.1
 echo   (eduroam DESLIGADA no firmware: client isolation derruba o UDP)
 echo ============================================================
 echo.
@@ -26,9 +26,11 @@ echo   Uso:  gravar_esquerda.bat [COMx]    (padrao: COM6)
 echo.
 pause
 
-rem PlatformIO Core: usa o caminho padrao (instalado com a extensao do VS Code)
-rem e, se ele nao existir nesta maquina, cai para o "pio" que estiver no PATH.
+rem PlatformIO Core: 1) o caminho padrao (extensao do VS Code); 2) o `pio` do
+rem .venv do projeto (este .bat vive em firmware\esp32_luvas -> ..\..\.venv);
+rem 3) o "pio" que estiver no PATH.
 set "PIO=%USERPROFILE%\.platformio\penv\Scripts\pio.exe"
+if not exist "%PIO%" set "PIO=%~dp0..\..\.venv\Scripts\pio.exe"
 if not exist "%PIO%" set "PIO=pio"
 
 "%PIO%" run -e luva_esquerda -t upload --upload-port %PORT%

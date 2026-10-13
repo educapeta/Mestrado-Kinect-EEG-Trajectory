@@ -20,6 +20,68 @@ ambíguo. Com dois IMUs:
 
 ## 2. Rede e firmware
 
+### 2.0 A rede da bancada (hotspot do PC) — configurada em 28/09/2026
+
+O firmware dos ESP32 **não está neste repositório** (vive no próprio ESP32), mas
+ele precisa de três coisas deste lado, e as três já falharam em silêncio:
+
+| Item | Valor nesta máquina | Por quê |
+| --- | --- | --- |
+| SSID do hotspot | **`EDUARDO-PC 9049`** | o Windows gera `<nome do computador> <4 dígitos>`: renomear o PC **muda o SSID** |
+| Senha | **`0011223344`** | — |
+| Destino do unicast | **`192.168.137.1`** | `ScopeAddress` do ICS (registro: `HKLM\SYSTEM\CurrentControlSet\Services\SharedAccess\Parameters`). Só existe com o hotspot **ligado** |
+| Portas | **4210** (direita) / **4211** (esquerda) | uma porta por lado (§2.1) |
+
+```cpp
+// ---- luvas IMU (mestradopy): rede da bancada -- cole no sketch do ESP32 ----
+const char *WIFI_SSID  = "EDUARDO-PC 9049";
+const char *WIFI_SENHA = "0011223344";
+IPAddress IP_DO_PC(192, 168, 137, 1);   // Ponto de acesso movel (ICS)
+const uint16_t PORTA_UDP = 4210;        // 4211 na luva esquerda
+
+WiFi.mode(WIFI_STA);
+WiFi.setSleep(false);                   // sem modem sleep: menos jitter no UDP
+WiFi.begin(WIFI_SSID, WIFI_SENHA);
+while (WiFi.status() != WL_CONNECTED) { delay(250); }
+// uma linha ASCII por datagrama: t_us,roll,pitch,yaw,ax,ay,az,gx,gy,gz
+udp.beginPacket(IP_DO_PC, PORTA_UDP);
+udp.print(linha);
+udp.endPacket();
+```
+
+**Ligar o hotspot:** Configurações → Rede e Internet → **Ponto de acesso móvel**.
+Duas armadilhas que o toggle escondem:
+
+1. **Faixa de rede = 2,4 GHz.** O ESP32 é rádio 2,4 GHz: com o hotspot em 5 GHz
+   ele **não vê a rede** (e nada no PC indica erro). Desligue também a
+   "economia de energia" do ponto de acesso.
+2. **O toggle sozinho não garante que o ICS subiu.** Confira que existe
+   `Get-NetIPAddress` com `192.168.137.1` — sem essa interface o ESP32 não tem
+   para onde mandar o datagrama.
+
+**Firewall (medido em 28/09/2026 nesta máquina):** a política de entrada é
+`BlockInbound` nos três perfis, e a única regra UDP existente (nome `Python`,
+perfil Público) vale para o **python da Loja**
+(`...\WindowsApps\...\python3.11.exe`), **não** para o
+`.venv\Scripts\python.exe` que recebe os datagramas — regra de **programa** vale
+só para aquele executável. Sem regra nova, o datagrama do ESP32 é descartado
+**sem erro em lugar nenhum**.
+
+Uma ferramenta resolve o diagnóstico inteiro (SSID/hostname, ICS, firewall,
+portas livres, snippet do firmware e escuta ao vivo):
+
+```powershell
+.venv\Scripts\python.exe tools\diagnostico_hotspot.py            # só diagnostica
+.venv\Scripts\python.exe tools\diagnostico_hotspot.py --escutar 20
+# criar a regra de entrada UDP (só isto precisa de admin):
+.venv\Scripts\python.exe tools\diagnostico_hotspot.py --criar-regra-firewall
+```
+
+As regras são lidas do **registro** (`...\FirewallPolicy\FirewallRules`), que
+funciona sem administrador; `Get-NetFirewallRule`/`Get-NetFirewallPortFilter`
+respondem "Acesso negado" sem elevação — foi o que dava um veredito errado
+sobre o firewall ("sem regra" ou "tem regra") na primeira versão do teste.
+
 ### 2.1 Recomendado: um **ESP32 por mão**, uma **porta UDP por lado**
 
 | Lado | Código (convenção do projeto) | Porta UDP |
@@ -121,10 +183,13 @@ Assinaturas dos emissores falsos: **direita** = `roll +5°` e 1,2 g no eixo vert
 **esquerda** = `roll −5°` e 1,0 g — assim da' para ver num relance se os lados
 estao trocados.
 
-Checagens rápidas se algo não chegar: (a) as duas luvas no mesmo Wi-Fi e com o
-**IP do PC** configurado no firmware; (b) **firewall do Windows** liberando UDP
-(entrada) nas portas escolhidas; (c) a porta de destino do firmware (uma por mão
-ou `--por-remetente`); (d) se `idade` sobe e `Hz` cai, é Wi-Fi/bateria.
+Checagens rápidas se algo não chegar: comece por
+`.venv\Scripts\python.exe tools\diagnostico_hotspot.py --escutar 20` (§2.0 —
+ele confere SSID/hostname, ICS, firewall e portas de uma vez) e depois: (a) as
+duas luvas no mesmo Wi-Fi e com o **IP do PC** configurado no firmware; (b) a
+regra de entrada UDP do firewall (a do python da Loja NÃO vale para o .venv);
+(c) a porta de destino do firmware (uma por mão ou `--por-remetente`); (d) se
+`idade` sobe e `Hz` cai, é Wi-Fi/bateria.
 
 ## 5. O que já está implementado (18/09)
 
@@ -141,7 +206,7 @@ ou `--por-remetente`); (d) se `idade` sobe e `Hz` cai, é Wi-Fi/bateria.
 
 | # | Item | Onde | Status |
 | --- | --- | --- | --- |
-| 1 | firmware: porta por lado (2.1) ou ID no pacote (2.2) | `firmware/esp32_luvas/` | ✅ opção 2.1 + unicast (28/09) |
+| 1 | firmware: porta por lado (2.1) ou ID no pacote (2.2) | `firmware/esp32_luvas/` (dois envs, `GLOVE_SIDE` 1/0) | ✅ opção 2.1 + unicast (28/09); o que colar no sketch (SSID `EDUARDO-PC 9049`, senha, IP `192.168.137.1`) sai de `tools/diagnostico_hotspot.py`, §2.0, e o contrato das portas é travado por `test_firmware_luvas.py` |
 | 2 | decidir as colunas (seção 4) e ajustar `IMU_COLUMNS`/`build_motion_row` | `eeg_motor_paradigm.py` | ✅ opção B implementada |
 | 3 | atualizar o contrato de colunas nos testes | `test_arm_csv.py`, `test_paradigm_protocol.py` | ✅ 6/6 e 9/9 |
 | 4 | ligar o `ImuBank` no `TrackingThread` (`--imu-portas`) e publicar `motion["imu"][lado]` | `eeg_motor_paradigm.py` | ✅ (rastreador com Kinect **e** modo `--sem-kinect`) |

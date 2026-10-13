@@ -1,0 +1,38 @@
+#pragma once
+// ============================================================================
+// TEMPLATE do src/credenciais.h -- copie este arquivo para "credenciais.h" e
+// preencha com os seus dados. O credenciais.h de verdade esta' no .gitignore
+// porque contem SENHA.
+//
+//   copy src\credenciais.h.example src\credenciais.h
+//
+// UNICO FW COM 2 MPU6050: o ESP32 le os dois sensores no mesmo barramento I2C
+// e publica em DUAS portas UDP (4210 direita, 4211 esquerda). A rede continua
+// a mesma de uma luva so (hotspot do PC, unicast para 192.168.137.1).
+// ============================================================================
+
+// --- Rede principal: WPA2-Enterprise (eduroam) -- DESLIGADA na bancada ------
+#define WIFI_ENTERPRISE 0
+#define WIFI_SSID_ENTERPRISE "eduroam"
+//: Identidade (externa) e usuario (interno) costumam ser o mesmo e-mail.
+#define WIFI_IDENTIDADE "seu.login@ufsc.br"
+#define WIFI_USUARIO "seu.login@ufsc.br"
+//: Tempo maximo (ms) esperando a autenticacao 802.1X de UMA senha.
+#define WIFI_TIMEOUT_MS 25000
+//: Cada senha errada CONTA no RADIUS da UFSC: mantenha em 1 ou 2.
+#define WIFI_MAX_TENTATIVAS 1
+static const char *WIFI_SENHAS[] = {
+    "SUA_SENHA",
+    "SUA_SENHA",
+};
+
+// --- Fallback WPA2-PSK: o hotspot do PC desta bancada ----------------------
+#define WIFI_PSK_FALLBACK 1
+#define WIFI_SSID_PSK "EDUARDO-PC 9049"
+#define WIFI_SENHA_PSK "0011223344"
+
+// --- Destino dos datagramas UDP --------------------------------------------
+// 1 = unicast para UDP_DESTINO (bancada: hotspot do PC, com Client Isolation
+//     nenhuma outra opcao funciona). 0 = broadcast 255.255.255.255.
+#define UDP_USAR_UNICAST 1
+#define UDP_DESTINO "192.168.137.1"

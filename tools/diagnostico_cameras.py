@@ -93,11 +93,14 @@ def testa_indice(indice, backend, largura=1280, altura=720):
 
 def testa_kinect():
     """RGB + profundidade do Kinect v2. Devolve True se os dois vieram."""
+    import kinect_compat        # pykinect2 64 bits: ANTES do import do pacote
+    kinect_compat.aplicar()
     try:
         from pykinect2 import PyKinectV2
         from pykinect2.PyKinectRuntime import PyKinectRuntime
     except Exception as exc:  # noqa: BLE001
         print(f"  Kinect: pykinect2 indisponivel ({exc})")
+        print(f"          compatibilidade: {kinect_compat.motivo()}")
         return False
     try:
         rt = PyKinectRuntime(PyKinectV2.FrameSourceTypes_Color
@@ -156,6 +159,7 @@ def lista_calibracoes(indices):
         # "pronto=False" pareceria problema de luz/postura e a acao (recalibrar
         # a camera) passaria escondida.
         placa = "?"
+        camera_gravada = "?"
         if stereo is not None:
             try:
                 with np.load(stereo) as dados:
@@ -165,6 +169,13 @@ def lista_calibracoes(indices):
                                 if "square_size_m" in dados.files
                                 else float("nan"))
                         placa = "%dx%d cantos @ %g mm" % (cols, rows, lado)
+                    # DE QUEM E' O ARQUIVO: o indice do OpenCV e' a posicao na
+                    # enumeracao do USB, entao um npz pode ser carregado pela
+                    # camera errada -- o nome gravado e' a unica defesa (npz
+                    # anteriores a 29/09/2026 nao tem o campo).
+                    camera_gravada = (str(dados["camera_name"]) or "(sem nome)"
+                                      if "camera_name" in dados.files
+                                      else "(sem nome -- npz antigo)")
             except (OSError, ValueError, KeyError):
                 placa = "npz ilegivel"
         estado, motivo = alinhamento.stereo_status(indice)
@@ -173,6 +184,8 @@ def lista_calibracoes(indices):
             else "(falta stereo_calibration_aux%d.npz)" % indice,
             estado))
         print("     placa  : %-38s %s" % (placa, motivo))
+        print("     camera : %-38s gravado=%s | agora=%s" % (
+            "", camera_gravada, real or "?"))
         print("     mao    : %-38s utilizavel=%s" % (
             mao.name if mao is not None
             else "(falta hand_landmark_calibration_aux%d.npz)" % indice,

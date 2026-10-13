@@ -98,6 +98,20 @@ PALM_ALIGNMENT_FILES = {"right": "imu_palm_alignment_right.json",
 #: Duracao da captura do alinhamento (tecla O): tempo para girar a mao devagar
 #: por varios angulos com a palma virada para a camera.
 PALM_ALIGNMENT_CAPTURE_SECONDS = 14.0
+#: Erro (px) do diagnostico do tabuleiro (tecla T) a partir do qual a calibracao
+#: gravada e' considerada de OUTRA montagem. Por que existe: o RMS do arquivo
+#: so' mede a coerencia INTERNA dele -- um stereo feito em outra maquina/sala e'
+#: aceito com RMS 1 px e projeta centenas de px fora daqui (medido 28/09/2026:
+#: a calibracao do repositorio deu 491 px nesta bancada, enquanto uma homografia
+#: nova do mesmo par fechou em 0,3 px). Para comparacao, o esperado com a
+#: calibracao CERTA e' a casa dos poucos px (RMS do stereo ~1 px).
+LIMITE_PX_CALIBRACAO_SUSPEITA = 25.0
+#: Mediana (px) acima da qual a CORRESPONDENCIA dos cantos (a homografia dos
+#: MESMOS cantos, ajustada na hora) ja' esta' ruim -- nesse caso o problema e' a
+#: captura (borrao/reflexo/tabuleiro que mudou entre as duas fotos), nao a
+#: calibracao gravada. O tabuleiro e' plano: com correspondencia correta a
+#: homografia fecha em fracao de px (medido 0,3 px na bancada de 28/09/2026).
+LIMITE_PX_CORRESPONDENCIA = 5.0
 #: Intervalo minimo entre amostras da captura (evita 30 amostras iguais).
 PALM_ALIGNMENT_SAMPLE_INTERVAL = 0.10
 #: Variacao minima (graus) entre a amostra e a ANTERIOR do mesmo lado: sem isso
@@ -350,15 +364,18 @@ def parse_cli():
                      "luvas ESP32 (UDP 4210/4211)."),
     )
     parser.add_argument(
-        "--aux-index", type=int, default=AUX_CAMERA_INDEX, metavar="N",
+        "--aux-index", type=int, default=None, metavar="N",
         help=("indice OpenCV da webcam auxiliar ATIVA (a das teclas K/L/H: trim, "
-              "log de desvio e calibracao do esqueleto). ATENCAO: o indice NAO "
-              "e' estavel -- e' a posicao na enumeracao do DirectShow e muda "
-              "quando uma camera entra/sai do USB (medido em 23/09/2026: com as "
-              "externas ligadas 2 = bancada / 0 = ampla / 1 = webcam do LAPTOP; "
-              "sem elas, 0 = webcam do LAPTOP). A calibracao usada e' "
-              "stereo_calibration_aux{N}.npz. Confira quem e' quem PELO NOME "
-              "com tools\\diagnostico_cameras.py --salvar."),
+              "log de desvio e calibracao do esqueleto). PADRAO = AUTOMATICO: a "
+              "lista sai do NOME do Windows (todas as externas, as que tem "
+              "stereo_calibration_aux{N}.npz primeiro) -- o indice NAO e' "
+              "estavel: e' a posicao na enumeracao do DirectShow e muda quando "
+              "uma camera entra/sai do USB (medido em 28/09/2026: nesta maquina "
+              "so' existem 0 = SIGMA-W780M e 1 = Trust USB Camera, e o antigo "
+              "padrao 2 abortava o programa). Fixe um valor so' para forcar uma "
+              "camera: a calibracao usada e' stereo_calibration_aux{N}.npz e "
+              "quem e' quem se confere com tools\\diagnostico_cameras.py "
+              "--salvar."),
     )
     parser.add_argument(
         "--aux-cameras", default="", metavar="\"N,M\"",
@@ -369,10 +386,31 @@ def parse_cli():
               "delas nao abrir, o programa avisa e segue com as que abriram."),
     )
     parser.add_argument(
+        "--aux-flip-lateralidade", default="", metavar='"N,M"',
+        help=("inverte o rotulo de lateralidade (MediaPipe) das webcams "
+              "auxiliares listadas -- para quando as maos aparecerem TROCADAS "
+              "numa camera em relacao ao Kinect (o driver dela pode ja' entregar "
+              "o fluxo espelhado; com dois MODELOS de webcam isso acontece numa "
+              "so'). '2' = so' a camera 2; '2,0' = as duas; 'limpar' = esquece "
+              "o que foi aprendido. O NORMAL E' NAO PRECISAR: o arbitro "
+              "geometrico descobre sozinho (e grava em aux_handedness_flip.json) "
+              "assim que as DUAS maos aparecem no quadro -- ver a linha "
+              "'Lateralidade aux N' no video."),
+    )
+    parser.add_argument(
         "--salvar-quadros", type=float, default=0.0, metavar="S",
         help=("grava _aux_overlay.png e _kinect_overlay.png a cada S segundos "
               "(0 = desligado). Serve para conferir DEPOIS se a projecao "
               "vermelha caiu na mao, sem depender de olhar a janela."),
+    )
+    parser.add_argument(
+        "--log-overlay", action="store_true",
+        help=("liga o log de desvio da mao (overlay_deviation_log.csv) desde o "
+              "INICIO, sem precisar apertar L: 1 linha/frame com o deslocamento "
+              "de cada um dos 21 nos (n{n}_dev_px/_dx/_dy) e o contexto "
+              "(profundidade, borda, velocidade, palm_err_deg). Use para "
+              "conferir DEPOIS, com calma, onde a projecao vermelha saiu da "
+              "mao (offset grotesco em alguma posicao)."),
     )
     parser.add_argument(
         "--escala-janelas", type=float, default=None, metavar="F",
@@ -390,6 +428,159 @@ def parse_cli():
               "'esquerda' e' mesmo a mao esquerda."),
     )
     return parser.parse_args()
+
+
+def cabecalho_overlay_log():
+    """Cabecalho do overlay_deviation_log.csv (tecla L OU --log-overlay).
+
+    Existe para os DOIS caminhos escreverem o MESMO cabecalho: a lista estava
+    so' dentro da tecla L, e copiar ela em dois lugares e' como o arquivo sai
+    com colunas divergentes dependendo de quem abriu.
+
+    ORDEM = ORDEM DA LINHA escrita no loop (fixas -> nos -> palma). Antes a
+    palma vinha ANTES dos nos no cabecalho, mas a linha grava os nos PRIMEIRO e
+    a palma POR ULTIMO (ver o bloco `row = [...]` em main): o DictReader lia
+    `n0_dev_px` na posicao do `n2_dx` (e o `dev_px` NEGATIVAMENTE, que e'
+    impossivel -- e' magnitude). Quem le por NOME (analise_estatistica.py e o
+    proprio analyzer) ficava com colunas trocadas. Corrigido 08/10/2026.
+    """
+    header = ["t_s", "lado", "z_usado_m", "z_bruto_m", "cx_px",
+              "cy_px", "borda_0c_1b", "vel_px_s", "note"]
+    for n in range(21):
+        header += [f"n{n}_dev_px", f"n{n}_dx", f"n{n}_dy"]
+    header += ["palm_kin_x", "palm_kin_y", "palm_kin_z",
+               "palm_imu_x", "palm_imu_y", "palm_imu_z",
+               "palm_err_deg"]
+    return header
+
+
+def aplica_flip_lateralidade(texto):
+    """Aplica `--aux-flip-lateralidade` (forcar inversao ou limpar o aprendido).
+
+    Existe para o caso em que o usuario JA' SABE qual camera esta' invertida (o
+    arbitro so' descobre com as DUAS maos no quadro, comparando com o Kinect):
+    aqui ele fixa na mao, e o valor fica GRAVADO para as proximas sessoes --
+    inclusive para o protocolo, que so' tem o rotulo do MediaPipe.
+
+    Devolve {indice: True} do que foi forcado (vazio quando nada foi pedido).
+    """
+    pedido = str(texto or "").strip().lower()
+    if not pedido:
+        return {}
+    if pedido in ("limpar", "esquecer", "esquece", "off", "none"):
+        antes = limpa_aux_handedness_flip()
+        print("--aux-flip-lateralidade limpar: "
+              + (f"inversoes esquecidas {sorted(antes)}" if antes
+                 else "nao havia inversao gravada")
+              + " -- a lateralidade volta a ser a do rotulo do MediaPipe")
+        return {}
+    invertidas = {}
+    for parte in pedido.replace(";", ",").split(","):
+        parte = parte.strip()
+        if parte.startswith("aux"):
+            parte = parte[3:].lstrip("=: ")
+        if not parte.lstrip("-").isdigit():
+            raise SystemExit(
+                f"--aux-flip-lateralidade invalido ('{parte}'): use indices das "
+                "webcams (ex.: '2' ou '2,0') ou 'limpar'.")
+        indice = int(parte)
+        set_aux_handedness_flip(
+            indice, True, silencioso=True,
+            motivo="pedido na linha de comando (--aux-flip-lateralidade)")
+        invertidas[indice] = True
+    print(f"--aux-flip-lateralidade: rotulo do MediaPipe INVERTIDO para as cameras "
+          f"{sorted(invertidas)} (gravado em {AUX_HANDEDNESS_FLIP_FILE.name}; "
+          "'limpar' desfaz)")
+    return invertidas
+
+
+def _sem_numeros(texto):
+    """Texto com os NUMEROS trocados por '#'.
+
+    A chave de estado NAO pode carregar o valor medido (\"projecao a 302 px\"): ele
+    muda a cada frame e imprimiria a MESMA linha para sempre. O que interessa
+    para o usuario ver e' a NATUREZA do motivo (margem pequena, projecao longe,
+    lado repetido) -- e essa muda de verdade.
+    """
+    return "".join("#" if caractere.isdigit() else caractere
+                   for caractere in (texto or ""))
+
+
+#: Intervalo minimo (s) entre duas impressoes do veredito de lateralidade. Sem
+#: ele, um motivo que oscila (margem pequena <-> projecao longe) imprimia duas
+#: linhas por frame durante toda a sessao.
+INTERVALO_LOG_LATERALIDADE_S = 2.0
+
+#: --- GATES da triangulacao (picos do overlay em movimento rapido) ------------
+#: (1) Erro de reprojecao mediano em px. As webcams NAO sao sincronizadas com o
+#: Kinect: com a mao rapida, `aux_px` e `kin_px` vem de momentos DIFERENTES, os
+#: raios nao fecham e o erro de reprojecao SOBE. Acima disto a medicao e'
+#: DESCARTADA e o overlay cai no depth do Kinect (suave) em vez de projetar um
+#: 3D errado. 0 = desligado.
+TRI_ERR_MAX_PX = 6.0
+#: (2) Velocidade maxima plausivel da mao (m/s) entre DOIS aceites seguidos. Um
+#: pico de dessincronia implica um SALTO de velocidade absurda e e' SEGURADO (o
+#: ultimo ponto bom fica; o dt ate' ele so' cresce, entao movimento legitimo
+#: rapido passa no frame seguinte enquanto o pico segue rejeitado). 0 = desligado.
+TRI_VEL_MAX_M_S = 5.0
+#: (o TRI_HOLD_MAX_S por IDADE foi removido em 09/10: a regra certa virou
+#: comparar o erro projetado da bruta x do hold e usar o MENOR -- ver o bloco
+#: `else` da triangulacao; idade batia errado: hold "fresco" de 0,25 s deu
+#: med 30 px contra 10 px da bruta rejeitada na bancada da esquerda.)
+
+
+def avalia_triangulacao(tri3d, tri_err, ref_anterior, dt,
+                        max_err_px=None, max_vel_m_s=None):
+    """(aceita, categoria, motivo, palm) de UMA triangulacao, sob os DOIS gates.
+
+    `ref_anterior` = (palm_xyz, t) do ultimo ACEITE (None no 1o frame); `dt` =
+    segundos desde esse aceite (None se desconhecido). `palm` devolvido e' o no'
+    9 (ou a mediana) -- o chamador guarda (palm, agora) SO' quando aceita.
+
+    Nos DOIS rejeitos a referencia NAO avanca: assim o `dt` do proximo frame e'
+    maior, o movimento legitimo rapido passa na hora seguinte, e um pico (salto)
+    segue rejeitado ate' a mao voltar perto do ultimo ponto aceito.
+
+    Funcao PURA (sem estado, sem impressao) -- e' o que o teste exercita.
+    `max_err_px`/`max_vel_m_s` sao 0 para desligar cada gate.
+    """
+    if max_err_px is None:
+        max_err_px = TRI_ERR_MAX_PX
+    if max_vel_m_s is None:
+        max_vel_m_s = TRI_VEL_MAX_M_S
+    tri = np.asarray(tri3d, np.float64).reshape(-1, 3)
+    palm = (tri[9] if tri.shape[0] > 9 and np.isfinite(tri[9]).all()
+            else np.nanmedian(tri, axis=0))
+    # --- Gate 1: erro de reprojecao (dessincronia aux x Kinect) ------------
+    if max_err_px > 0 and tri_err is not None:
+        err = np.asarray(tri_err, np.float64).ravel()
+        err = err[np.isfinite(err)]
+        if err.size:
+            med = float(np.median(err))
+            if med > max_err_px:
+                return False, "reproj", f"reprojecao {med:.1f} px", None
+    # --- Gate 2: velocidade (pico) -----------------------------------------
+    if max_vel_m_s > 0 and ref_anterior is not None and dt and dt > 1e-3:
+        ant = np.asarray(ref_anterior[0], np.float64)
+        if np.isfinite(palm).all() and np.isfinite(ant).all():
+            vel = float(np.linalg.norm(palm - ant) / dt)
+            if vel > max_vel_m_s:
+                return False, "vel", f"velocidade {vel:.1f} m/s", None
+    return True, "ok", None, palm
+
+
+def estado_lateralidade(relatorio):
+    """Chave de estado do veredito de lateralidade, por camera.
+
+    Serve para o tool imprimir UMA vez quando o veredito de uma camera MUDA (ela
+    passou a ser medida pela geometria? o arbitro aprendeu a inversao dela?). O
+    estado e' o que muda quando algo relevante acontece: a fonte do lado, se o
+    rotulo estava invertido e a NATUREZA do motivo de nao decidir (sem os numeros
+    -- ver `_sem_numeros`).
+    """
+    return {int(indice): (info.get("fonte"), info.get("inverteu"),
+                          _sem_numeros(info.get("detalhe")))
+            for indice, info in (relatorio or {}).items()}
 
 
 def abre_camera_auxiliar(indice, tamanho):
@@ -439,18 +630,283 @@ def _indices_auxiliares(args):
     else:
         outros = tuple(int(indice) for indice in pedido.split(",")
                        if indice.strip().lstrip("-").isdigit())
-    ordem = [int(args.aux_index)]
+    # A ATIVA vem do global (o `main` resolve o automatico ANTES daqui); o
+    # `args.aux_index` so' manda quando o usuario fixou um valor.
+    ativa = (int(AUX_CAMERA_INDEX) if args.aux_index is None
+             else int(args.aux_index))
+    ordem = [ativa]
     for indice in outros:
         if int(indice) not in ordem:
             ordem.append(int(indice))
     return ordem
 
+def nome_gravado_no_npz(alignment, aux_index=None):
+    """Nome da camera para a qual o npz carregado foi GRAVADO (None se nao consta).
+
+    Existe para a mensagem poder dizer *qual* camera o arquivo julga ser: em
+    28/09/2026 a bancada estava com uma calibracao de outra maquina e isso nao
+    aparecia em lugar nenhum (o RMS do arquivo nao sabe de quem ele e').
+    """
+    modelos = getattr(alignment, "aux_models", None) or {}
+    if aux_index is not None and int(aux_index) in modelos:
+        return modelos[int(aux_index)].get("camera_name")
+    return getattr(alignment, "stereo_camera_name", None)
+
+
+def diagnostico_tabuleiro(color, color_for_calibration, auxiliary_frame, tracker,
+                          alignment, aux_ok=True, aux_index=None):
+    """Erro ponta-a-ponta da sobreposicao no tabuleiro (o diagnostico da tecla T).
+
+    O tabuleiro e' uma superficie rigida com correspondencia EXATA entre as duas
+    cameras: por isso ele separa erro de projecao/calibracao dos efeitos
+    especificos da mao. Imprime o resumo e devolve os numeros num dicionario (ou
+    None quando o diagnostico nao pode ser feito).
+
+    Esta aqui, e nao dentro do loop de teclas, para poder ser testada sem
+    hardware -- dois bugs reais nasceram deste bloco: o `find_board` que nao
+    achava a placa com a mesa cheia e o `errors[24]`, que era o "centro" da placa
+    ANTIGA de 11x7 = 77 cantos e estourava IndexError com a atual (5x3 = 15).
+
+    Alem do erro ponta-a-ponta, separa DUAS causas que pedem consertos opostos:
+    `homografia_nova_px` (homografia ajustada AGORA com os MESMOS cantos, logo
+    mede a correspondencia/deteccao) e o nome da camera gravada no npz. Erro
+    grande com correspondencia boa = calibracao de outra montagem (RECALIBRE);
+    erro grande sem correspondencia = captura ruim (melhore luz/postura antes).
+    `hasattr` no `camera_name_conflict`: as classes falsas dos testes nao
+    implementam a checagem.
+    """
+    stats = tracker.depth_stats()
+    if stats is None:
+        print("Diagnostico depth: NENHUM frame de profundidade recebido")
+    else:
+        count, dmin, dmax, frac = stats
+        print(
+            f"Diagnostico depth: {count}/{tracker.last_depth.size} px "
+            f"validos ({frac:.0%}) | min {dmin:.0f} max {dmax:.0f} mm | "
+            f"frames recebidos ate agora: {tracker.depth_frame_index}"
+        )
+    if color is None or not aux_ok:
+        print("Diagnostico: sem frame simultaneo das duas cameras")
+        return None
+    if not alignment.stereo_usable:
+        print("Diagnostico: calibracao stereo nao carregada")
+        return None
+    clean_color = (
+        color_for_calibration
+        if color_for_calibration is not None
+        else cv2.cvtColor(color, cv2.COLOR_BGRA2BGR)
+    )
+    if clean_color.ndim == 3 and clean_color.shape[2] == 4:
+        clean_color = cv2.cvtColor(clean_color, cv2.COLOR_BGRA2BGR)
+    board_kinect = alignment.find_board(clean_color)
+    board_aux = alignment.find_board(auxiliary_frame)
+    if board_kinect is None or board_aux is None:
+        # Diz QUAL camera nao viu: a mensagem antiga ("nao visto nas duas
+        # cameras") mandava procurar o problema no tabuleiro quando o caso comum
+        # e' o tabuleiro estar FORA do enquadramento de UMA delas (a auxiliar e'
+        # mais fechada que o Kinect).
+        print(
+            "Diagnostico: tabuleiro NAO visto em "
+            f"Kinect={'OK' if board_kinect is not None else 'nao'}"
+            f" | auxiliar (indice {aux_index})="
+            f"{'OK' if board_aux is not None else 'nao'}"
+            " -- se o tabuleiro esta' na mesa, confira o que cada camera enxerga "
+            "(diagnostico_tabuleiro.py) e se ele cabe no quadro")
+        return None
+    print("Diagnostico: processando tabuleiro...")
+    # O npz pode ser de OUTRA camera (o indice do OpenCV e' a posicao na
+    # enumeracao do USB): nesse caso nenhum numero abaixo vale. So' os npz
+    # gravados a partir de 29/09/2026 dizem de quem sao (ver camera_name_conflict).
+    conflito = None
+    if hasattr(alignment, "camera_name_conflict"):
+        conflito = alignment.camera_name_conflict(aux_index)
+    if conflito:
+        print(f"Diagnostico: este npz foi GRAVADO PARA OUTRA CAMERA "
+              f"('{conflito}' x '{_gt.nome_da_camera_do_indice(aux_index)}' no "
+              f"indice {aux_index} agora): os numeros abaixo saem de um par que "
+              "nao e' este -- recalibre (python stereo_calibration.py)")
+    depths = np.full(len(board_kinect), np.nan, np.float32)
+    for index, (corner_x, corner_y) in enumerate(board_kinect.reshape(-1, 2)):
+        depth_pixel = tracker._color_to_depth_pixel(int(corner_x),
+                                                    int(corner_y))
+        if depth_pixel is None:
+            continue
+        depth_mm = tracker._median_depth(*depth_pixel,
+                                        radius=DEPTH_PATCH_RADIUS * 3)
+        if depth_mm is not None:
+            depths[index] = depth_mm / 1000.0
+    valid = np.isfinite(depths)
+    print(f"Diagnostico: {int(valid.sum())}/{len(depths)} cantos com "
+          "profundidade valida do Kinect")
+    if int(valid.sum()) < 5:
+        print(
+            "Diagnostico: tabuleiro fora do alcance do depth do Kinect; afaste "
+            "o tabuleiro para >= 0.8 m e mantenha-o dentro do FOV do depth "
+            "(evite as bordas extremas do video)")
+        return None
+    depths = np.where(valid, depths, float(np.nanmedian(depths)))
+    # PAREAMENTO DOS CANTOS: o tabuleiro e' simetrico, entao a ordem que cada
+    # detector devolve nao diz qual canto fisico e' o primeiro -- e cada camera
+    # escolhe o seu. Projetar as listas cruas assim compara cantos que NAO se
+    # correspondem (centenas de px com a calibracao perfeita). Aqui as 4
+    # simetrias da grade sao testadas e fica a de MENOR erro, que e' o que o
+    # solver da calibracao tambem faz (`solve_with_repair`): com a calibracao
+    # certa o pareamento correto e' ordens de grandeza melhor que os outros.
+    candidatos = []
+    for nome, indices in _gt.simetrias_do_tabuleiro().items():
+        cantos = board_aux.reshape(-1, 2)[indices]
+        proj = np.asarray(
+            alignment.auxiliary_to_kinect_stereo(cantos, depths), np.float64
+        ).reshape(-1, 2)
+        erros_c = np.linalg.norm(proj - board_kinect.reshape(-1, 2), axis=1)
+        candidatos.append({
+            "nome": nome,
+            "media_px": float(np.nanmedian(erros_c)),
+            "cantos": cantos,
+            "projetado": proj,
+            "erros": erros_c,
+        })
+    candidatos.sort(key=lambda item: item["media_px"])
+    escolhido = candidatos[0]
+    alternativas = ", ".join(
+        "%s %.0f" % (item["nome"], item["media_px"]) for item in candidatos[1:])
+    print(f"Diagnostico: pareamento dos cantos {escolhido['nome']} "
+          f"({escolhido['media_px']:.0f} px) | as outras dariam: {alternativas}")
+    projected = escolhido["projetado"]
+    errors = escolhido["erros"]
+    board_aux = escolhido["cantos"]
+    pareamento = escolhido["nome"]
+    alternativas_px = {item["nome"]: item["media_px"] for item in candidatos}
+    finite = np.isfinite(errors)
+    finite_err = errors[finite]
+    # A CORRESPONDENCIA EM SI ESTA' BOA? Ajusta uma homografia NOVA entre os
+    # cantos DESTE par, agora: o tabuleiro e' plano, entao correspondencia
+    # correta = homografia quase perfeita. Separar as duas coisas importa porque
+    # o conserto e' oposto -- correspondencia ruim pede MELHOR CAPTURA,
+    # calibracao de outra montagem pede RECALIBRAR (medido 28/09/2026: 214 px
+    # com o npz gravado x 0,3 px com a homografia do mesmo par).
+    homografia_nova = None
+    if int(finite.sum()) >= 4:
+        cantos_aux32 = board_aux.reshape(-1, 1, 2).astype(np.float32)
+        cantos_kin32 = board_kinect.reshape(-1, 1, 2).astype(np.float32)
+        matriz, _ = cv2.findHomography(cantos_aux32, cantos_kin32, cv2.RANSAC,
+                                      3.0)
+        if matriz is not None:
+            reescalonado = cv2.perspectiveTransform(cantos_aux32,
+                                                    matriz).reshape(-1, 2)
+            residuos = np.linalg.norm(
+                reescalonado - board_kinect.reshape(-1, 2), axis=1)
+            homografia_nova = float(np.nanmedian(residuos))
+            if homografia_nova <= LIMITE_PX_CORRESPONDENCIA:
+                print(
+                    "Diagnostico: deteccao/correspondencia OK -- a homografia "
+                    f"dos MESMOS cantos, ajustada agora, fecha em "
+                    f"{homografia_nova:.2f} px (entao um erro grande no resumo "
+                    "e' da CALIBRACAO, nao do detector)")
+            else:
+                print(
+                    "Diagnostico: a propria CORRESPONDENCIA esta' ruim "
+                    f"({homografia_nova:.1f} px entre os mesmos cantos): "
+                    "tabuleiro borrado/pequeno/reflexivo, ou ele mudou entre as "
+                    "duas capturas (elas nao sao sincronizadas)")
+    correspondencia_ok = (homografia_nova is not None
+                          and homografia_nova <= LIMITE_PX_CORRESPONDENCIA)
+    differences = projected - board_kinect.reshape(-1, 2)
+    dx = float(np.nanmean(differences[:, 0]))
+    dy = float(np.nanmean(differences[:, 1]))
+    # Centro x bordas pela GEOMETRIA do tabuleiro (ver _gt.grupos_centro_borda):
+    # antes eram os indices da placa antiga (errors[24],
+    # errors[:8]/errors[-8:]) e a tecla T estourava IndexError com a placa atual.
+    indice_centro, bordas, raios = _gt.grupos_centro_borda(board_kinect)
+    erro_centro = float(errors[indice_centro])
+    erro_bordas = float("nan")
+    if bordas.any():
+        erro_bordas = float(np.nanmean(errors[bordas]))
+    slope = None
+    if finite_err.size >= 2:
+        r_median = max(1e-9, float(np.median(raios[finite])))
+        slope = float(np.polyfit(raios[finite] / r_median, finite_err, 1)[0])
+    print(
+        f"Diagnostico tabuleiro: {np.nanmean(errors):.1f} px media | "
+        f"mediana {float(np.nanmedian(errors)):.0f} | "
+        f"max {np.nanmax(errors):.0f} | centro {erro_centro:.0f} | "
+        f"bordas ({int(bordas.sum())} de {len(errors)}) {erro_bordas:.0f} | "
+        f"dx {dx:.0f} dy {dy:.0f} | "
+        f"slope {slope if slope is not None else '--'}"
+    )
+    if float(np.nanmedian(errors)) > LIMITE_PX_CALIBRACAO_SUSPEITA:
+        if correspondencia_ok:
+            # O tabuleiro e' o teste ponta-a-ponta da calibracao: erro nesta
+            # ordem (dezenas/centenas de px) com a correspondencia BOA nao e'
+            # ruido de deteccao, e' calibracao de OUTRA montagem -- medido em
+            # 28/09/2026: a gravada no repositorio (feita na maquina antiga)
+            # deu 491 px aqui, e 214 px nesta bancada, enquanto uma homografia
+            # NOVA do MESMO par fechou em 0,3 px.
+            gravado = nome_gravado_no_npz(alignment, aux_index)
+            print(
+                "Diagnostico: ATENCAO -- erro muito acima do esperado para esta "
+                "montagem (o RMS do arquivo so' mede a coerencia INTERNA dele, "
+                "nao se ele e' deste lugar). RECALIBRE nesta maquina: "
+                "python stereo_calibration.py (e confira o esqueleto vermelho "
+                "sobre a mao com as teclas K/L/H)"
+                + (f" [este npz diz ter sido gravado para '{gravado}']"
+                   if gravado else "")
+            )
+            print("Diagnostico: causas comuns, na ordem em que vale conferir:")
+            print("   1. a webcam auxiliar saiu do lugar/zoom ou trocou de "
+                  "porta USB (o INDICE muda: confira "
+                  "python tools\\diagnostico_cameras.py);")
+            print("   2. o npz e' de outra maquina/bancada;")
+            print("   3. placa/quadrado diferente do atual (o npz grava os dois).")
+        else:
+            # Correspondencia ruim: recaribrar agora seria trabalho perdido --
+            # o mesmo erro grande apareceria no arquivo novo.
+            print(
+                "Diagnostico: ATENCAO -- antes de recalibrar, melhore a "
+                "CAPTURA: o tabuleiro nao fecha nem com uma homografia ajustada "
+                "agora (luz difusa apontada para o tabuleiro, tabuleiro apoiado "
+                "e PARADO nas duas capturas, sem reflexo, e maior no quadro)."
+            )
+    return {
+        "cantos": len(errors),
+        "media_px": float(np.nanmean(errors)),
+        "mediana_px": float(np.nanmedian(errors)),
+        "max_px": float(np.nanmax(errors)),
+        "centro_px": erro_centro,
+        "bordas_px": erro_bordas,
+        "bordas_cantos": int(bordas.sum()),
+        "dx_px": dx,
+        "dy_px": dy,
+        "slope": slope,
+        "homografia_nova_px": homografia_nova,
+        "correspondencia_ok": correspondencia_ok,
+        "cantos_com_profundidade": int(valid.sum()),
+        "pareamento_cantos": pareamento,
+        "pareamento_px": alternativas_px,
+    }
+
+
 def main():
     args = parse_cli()
     # O indice escolhido vale para a camera aberta E para o arquivo de
     # calibracao (stereo_calibration_aux{N}.npz) -- os dois andam juntos.
+    # Sem `--aux-index`, a camera ATIVA vem do NOME do Windows
+    # (`indice_auxiliar_automatico`): a constante 2 do modulo era o default
+    # antigo e abortava o programa nesta maquina, onde so' existem 0 e 1.
     global AUX_CAMERA_INDEX
-    AUX_CAMERA_INDEX = int(args.aux_index)
+    if args.aux_index is None:
+        AUX_CAMERA_INDEX = indice_auxiliar_automatico()
+        print(f"Webcam auxiliar ATIVA: indice {AUX_CAMERA_INDEX} escolhido "
+              f"AUTOMATICAMENTE ({nome_auxiliar(AUX_CAMERA_INDEX)}); use "
+              "--aux-index N para forcar outra")
+    else:
+        AUX_CAMERA_INDEX = int(args.aux_index)
+        externas = indices_auxiliares_automaticos()
+        if externas and AUX_CAMERA_INDEX not in externas:
+            print(f"AVISO: o indice {AUX_CAMERA_INDEX} nao esta' entre as "
+                  f"cameras EXTERNAS desta maquina ({externas}): pode ser a "
+                  "webcam do laptop ou um indice que nao existe. Confira com "
+                  "tools\\diagnostico_cameras.py --salvar")
     # --- BIMANUAL: um receptor de IMU POR mao -------------------------------
     # Direita -> porta 4210, esquerda -> 4211 (convencao do projeto, imu.py),
     # ajustavel por `--imu-portas` quando o firmware das luvas estiver invertido.
@@ -474,12 +930,21 @@ def main():
     # lista: o tracker cria UM detector MediaPipe por camera (o VideoMode nao
     # admite intercalar fluxos) e o alignment carrega a calibracao de cada uma
     # (as vistas por indice sao o que permite desenhar as DUAS no mesmo frame).
+    # --- LATERALIDADE: o forcado/limpo na linha de comando vale ANTES de criar o
+    # tracker (o detector le' a inversao no momento de cada deteccao).
+    aplica_flip_lateralidade(args.aux_flip_lateralidade)
     aux_indices = _indices_auxiliares(args)
     tracker = KinectHandTracker(aux_indices=tuple(aux_indices))
     # Carrega SO a calibracao do indice escolhido: os npz sao POR INDICE
     # (stereo_calibration_aux{N}.npz) e usar o arquivo de outra camera projeta o
     # esqueleto do Kinect em qualquer lugar da imagem.
     alignment = CameraAlignment(aux_indices=aux_indices)
+    # Arbitro de lateralidade: decide o lado das maos auxiliares pela GEOMETRIA
+    # (punho 3D do Kinect + homografia da mao de cada camera) e aprende/grava a
+    # inversao de rotulo por camera. Sem ele, uma auxiliar com o rotulo trocado
+    # casa as maos erradas -- e o casamento por lado e' o que liga cada mao ao
+    # seu IMU, ao seu overlay e a sua triangulacao.
+    arbitro = ArbitroDeLateralidade()
     # Nome REAL do Windows (nao o apelido estatico): e' o que diz se o indice
     # escolhido e' a webcam do laptop -- o erro que faz a janela mostrar o rosto
     # de quem esta' no laptop no lugar da bancada.
@@ -496,6 +961,13 @@ def main():
     print("Mapa de cameras desta maquina (nome = verdade, indice muda):")
     for linha in mapa_de_cameras_resumo():
         print("  " + linha)
+    # Inversao de lateralidade vigente: foi um BUG MUDO (as maos trocadas numa
+    # camera sem nada avisar), entao ela tem de aparecer ao abrir o programa.
+    for indice in aux_indices:
+        if aux_handedness_flip(indice):
+            print(f"Lateralidade da camera auxiliar {indice}: rotulo do MediaPipe "
+                  "INVERTIDO (aprendido ou forcado -- gravado em "
+                  f"{AUX_HANDEDNESS_FLIP_FILE.name})")
     # --- webcams auxiliares: a ATIVA (--aux-index) + as OUTRAS (--aux-cameras) --
     # Todas sao abertas e DESENHADAS no video do Kinect: o objetivo e' ver, no
     # MESMO quadro, o esqueleto do Kinect (verde) e o de CADA auxiliar (na cor
@@ -516,10 +988,19 @@ def main():
               f"solicitado {requested_size[0]}x{requested_size[1]}, obtido "
               f"{obtido[0]}x{obtido[1]}")
     if int(AUX_CAMERA_INDEX) not in auxiliares:
+        if auxiliares:
+            abriram = sorted(auxiliares)
+            raise RuntimeError(
+                f"A webcam auxiliar ATIVA (indice {AUX_CAMERA_INDEX}) nao "
+                f"abriu -- abriram: {abriram}. Rode com --aux-index "
+                f"{abriram[0]} (ou --aux-cameras \"{','.join(str(i) for i in reversed(abriram))}\" "
+                "para trocar qual e' a ativa) e confira o NOME de cada indice "
+                "com tools\\diagnostico_cameras.py --salvar: a calibracao e' "
+                "POR INDICE (stereo_calibration_aux{N}.npz).")
         raise RuntimeError(
-            f"A webcam auxiliar ATIVA (indice {AUX_CAMERA_INDEX}) nao abriu. "
-            "Rode tools\\diagnostico_cameras.py --salvar para ver o NOME de cada "
-            "indice e escolha uma camera EXTERNA com --aux-index.")
+            f"Nenhuma webcam auxiliar abriu (indices pedidos: {aux_indices}). "
+            "Confira o cabo/hub USB e rode tools\\diagnostico_cameras.py "
+            "--salvar -- o indice MUDA quando uma camera entra ou sai do USB.")
     # Nome do Windows por camera (UMA vez: a enumeracao COM custa caro e o nome
     # nao muda durante a sessao). Entra no titulo de cada janela de video.
     nomes_aux = {int(indice): nome_auxiliar(indice) for indice in auxiliares}
@@ -599,13 +1080,40 @@ def main():
     # Medicao do trim fixo (tecla K): coleta ~3 s com a mao parada.
     trim_measure_until = 0.0
     trim_measure_samples = []
-    overlay_prev_palm = None
-    overlay_prev_time = 0.0
+    #: Velocidade da palma POR MAO (o log agora grava as DUAS maos por frame --
+    #: um `overlay_prev_palm` unico misturaria os lados no calculo de vel).
+    overlay_prev_palm = {"right": None, "left": None}
+    overlay_prev_time = {"right": 0.0, "left": 0.0}
+    # --log-overlay: liga o log de desvio DESDE O INICIO (sem apertar L). Mesma
+    # abertura da tecla L, so' que no setup. `overlay_log_file` ja' e' fechado no
+    # `finally` entao a saida limpa funciona igual. -- 08/10/2026.
+    if getattr(args, "log_overlay", False):
+        overlay_logging = True
+        overlay_log_file = open(OVERLAY_LOG_PATH, "w", newline="", encoding="utf-8")
+        overlay_log_file.write(",".join(cabecalho_overlay_log()) + "\n")
+        print(f"Log overlay LIGADO (--log-overlay) -> {OVERLAY_LOG_PATH.name} "
+              "(1 linha/mao por frame)")
     # --- BIMANUAL: EMA de profundidade POR lado ------------------------------
     # O alignment guarda UMA EMA (legado unimanual); o tool mantem a versao
     # por lado e publica no alignment a EMA do lado ANTES de cada desenho.
     ema_por_lado = {"right": None, "left": None}
     ema_trust_por_lado = {"right": 0, "left": 0}
+    #: Gates da triangulacao (ver `avalia_triangulacao`): referencia do ultimo
+    #: aceite POR LADO (palm, t), o ultimo esqueleto 3D ACEITO (para MANTER no
+    #: lugar do pico -- ver bloco da triangulacao), contadores e anti-spam.
+    tri_ref = {"right": None, "left": None}
+    tri_ultima = {"right": None, "left": None}
+    tri_gate_cont = {"aceitas": 0, "reproj": 0, "vel": 0, "mantidas": 0,
+                     "cruas": 0}
+    tri_gate_pend = False
+    tri_gate_log_em = 0.0
+    #: Estado do veredito de lateralidade ja' IMPRESSO (o tool imprime so' quando
+    #: MUDA -- ver `estado_lateralidade`) e o que ficou PENDENTE de sair (uma
+    #: mudanca dentro do intervalo anti-spam sai no proximo instante permitido:
+    #: e' lembrada, nunca perdida).
+    lateralidade_anterior = {}
+    lateralidade_pendente = None
+    lateralidade_impressa_em = 0.0
     csv_file = open(CSV_PATH, "w", newline="", encoding="utf-8")
     writer = csv.writer(csv_file)
     writer.writerow(["pc_time_s", "hand_side", "imu_timestamp_us", "kinect_x_m", "kinect_y_m", "kinect_z_m", "fused_x_m", "fused_y_m", "fused_z_m", "roll_deg", "pitch_deg", "yaw_deg", "elbow_angle_deg", "hand_source", "aux_pair_x_m", "aux_pair_y_m", "aux_pair_z_m", "palm_err_deg"])
@@ -634,6 +1142,40 @@ def main():
             alignment.set_active_aux(int(AUX_CAMERA_INDEX))
             auxiliary_frame = aux_frames.get(int(AUX_CAMERA_INDEX))
             auxiliary_ok = auxiliary_frame is not None
+            auxiliary_for_calibration = (None if not auxiliary_ok
+                                         else auxiliary_frame.copy())
+            color_for_calibration = None if color is None else color.copy()
+            display, kinect_hands = tracker.detect_hands_all(color, depth)
+            # --- LATERALIDADE: a GEOMETRIA manda, o rotulo e' palpite ----------
+            # Roda DEPOIS do Kinect (a verdade geometrica -- punho em 3D -- vem
+            # dele) e ANTES de tudo que casa as maos por lado. Motivo: o rotulo
+            # do MediaPipe pode sair TROCADO numa auxiliar (o driver dela pode
+            # ja' entregar o fluxo espelhado; com dois MODELOS de webcam isso
+            # acontece numa so'), e o casamento por lado e' o que liga cada mao
+            # ao IMU certo, ao overlay certo e a triangulacao certa. O arbitro
+            # tambem APRENDE e GRAVA a inversao daquela camera
+            # (aux_handedness_flip.json) para o protocolo/sand/demo, que so'
+            # tem o rotulo.
+            aux_por_camera, relatorio_lateralidade = arbitro.arbitrar(
+                alignment, kinect_hands, aux_por_camera,
+                (int(tracker.color_width), int(tracker.color_height)))
+            # Imprime quando o veredito de alguma camera MUDA (ela passou a ser
+            # medida pela geometria? o rotulo dela estava invertido?): e' assim que
+            # o experimentador ve no terminal o que o arbitro esta' fazendo, sem
+            # inundar a saida a cada frame. Duas protecoes: o estado NAO carrega os
+            # numeros do motivo (a projecao em px muda sempre -- ver
+            # `_sem_numeros`) e ha' um intervalo minimo entre impressoes.
+            agora_lateralidade = estado_lateralidade(relatorio_lateralidade)
+            if agora_lateralidade != lateralidade_anterior:
+                lateralidade_pendente = agora_lateralidade
+            if (lateralidade_pendente is not None
+                    and time.monotonic() - lateralidade_impressa_em
+                    >= INTERVALO_LOG_LATERALIDADE_S):
+                for linha in arbitro.resumo(nomes_aux):
+                    print("[lateralidade] " + linha, flush=True)
+                lateralidade_anterior = lateralidade_pendente
+                lateralidade_pendente = None
+                lateralidade_impressa_em = time.monotonic()
             aux_entries = aux_por_camera.get(int(AUX_CAMERA_INDEX), [])
             auxiliary_hands = [entrada["landmarks"] for entrada in aux_entries]
             # Por lado e POR CAMERA: e' o que permite (a) casar cada mao com o
@@ -643,10 +1185,6 @@ def main():
                          for entrada in entradas}
                 for indice, entradas in aux_por_camera.items()
             }
-            auxiliary_for_calibration = (None if not auxiliary_ok
-                                         else auxiliary_frame.copy())
-            color_for_calibration = None if color is None else color.copy()
-            display, kinect_hands = tracker.detect_hands_all(color, depth)
             # A mao auxiliar saiu do frame? Reseta o EMA de profundidade
             # estimada (modelo 3D). Sem isso, o EMA rejeitaria o primeiro
             # estimate pos-retorno como "salto >30 cm" e a mao vermelha
@@ -774,6 +1312,12 @@ def main():
                 # metros e MEDIDO pela interseccao de raios (calibracao
                 # stereo). A profundidade deixa de ser estimada por escala
                 # aparente e o overlay fica imune a inclinacao da mao.
+                #: True quando a Prioridade 1 RODOU mas foi REJEITADA pelos gates
+                #: (reprojecao/velocidade): nesse caso NAO se cai no par de
+                #: auxiliares (tambem dessincronizado) -- o overlay cai no depth
+                #: do Kinect. Quando a Prioridade 1 nem roda (Kinect cego), o par
+                #: segue como antes (e' a funcao dele).
+                tri_descartada = False
                 if (
                     alignment.stereo_usable
                     and landmarks_lado is not None
@@ -790,13 +1334,79 @@ def main():
                     ]
                     tri3d, tri_err = alignment.triangulate_hand_points(aux_px, kin_px)
                     if tri3d is not None and np.isfinite(tri3d).any():
-                        mao["triangulated_3d"] = tri3d
+                        ref = tri_ref.get(lado)
+                        dt_tri = ((now - ref[1])
+                                  if (ref is not None and ref[1] is not None)
+                                  else None)
+                        aceita, categoria, motivo_gate, palm = avalia_triangulacao(
+                            tri3d, tri_err, ref, dt_tri)
+                        if aceita:
+                            mao["triangulated_3d"] = tri3d
+                            tri_ultima[lado] = tri3d
+                            tri_ref[lado] = (palm, now)
+                            tri_gate_cont["aceitas"] += 1
+                            mao["tri_gate"] = "aceita"
+                        else:
+                            #: ESCOLHA POR MENOR ERRO PROJETADO (mesma metrica px):
+                            #: `tri_err` ja' mede o erro da BRUTA; do HOLD projeta-
+                            #: se agora (`project_camera_points`) e mede contra
+                            #: `kin_px`. Vence quem projetar MAIS PERTO da mao do
+                            #: Kinect. Idade do hold deixou de decidir (bancada
+                            #: 09/10: hold "fresco" 0,25 s deu med 30 px e a bruta
+                            #: rejeitada 10 px; no pico catastrofico ~200 px a
+                            #: bruta e' pior que o hold -- a comparacao resolve OS
+                            #: DOIS sem limiar achado a mao). Depth do Kinect
+                            #: continua fora (medido 87-105 px, dx -218).
+                            hold = tri_ultima.get(lado)
+                            err_crua = float("inf")
+                            if tri_err is not None:
+                                e_c = np.asarray(tri_err, np.float64).ravel()
+                                e_c = e_c[np.isfinite(e_c)]
+                                if e_c.size:
+                                    err_crua = float(np.median(e_c))
+                            err_hold = float("inf")
+                            if hold is not None:
+                                try:
+                                    px_hold = alignment.project_camera_points(hold)
+                                    dh = np.linalg.norm(
+                                        np.asarray(px_hold, np.float64)
+                                        - np.asarray(kin_px, np.float64), axis=1)
+                                    dh = dh[np.isfinite(dh)]
+                                    if dh.size:
+                                        err_hold = float(np.median(dh))
+                                except Exception:
+                                    err_hold = float("inf")
+                            tri_descartada = True
+                            tri_gate_cont[categoria] += 1
+                            tri_gate_pend = True
+                            if hold is not None and err_hold <= err_crua:
+                                #: hold projeta mais perto -> mantem
+                                mao["triangulated_3d"] = hold
+                                mao["tri_gate"] = categoria
+                                tri_gate_cont["mantidas"] += 1
+                            else:
+                                #: bruta projeta mais perto -> usa a bruta mesmo
+                                #: rejeitada pelo gate (`-crua` no note)
+                                mao["triangulated_3d"] = tri3d
+                                mao["tri_gate"] = f"{categoria}-crua"
+                                tri_gate_cont["cruas"] += 1
+                        if (tri_gate_pend and now - tri_gate_log_em
+                                >= INTERVALO_LOG_LATERALIDADE_S):
+                            print(f"[gate-tri] recusadas "
+                                  f"reproj={tri_gate_cont['reproj']} "
+                                  f"vel={tri_gate_cont['vel']} | mantidas "
+                                  f"{tri_gate_cont['mantidas']} / cruas "
+                                  f"{tri_gate_cont['cruas']} (aceitas "
+                                  f"{tri_gate_cont['aceitas']})",
+                                  flush=True)
+                            tri_gate_log_em = now
+                            tri_gate_pend = False
                 # --- Prioridade 2: o PAR DE AUXILIARES (Kinect cego) -----------
                 # Quando o Kinect perde a mao (ou nao triangula com ele), as DUAS
                 # auxiliares, sozinhas, medem a mao nos 3 eixos pela calibracao de
                 # cada uma com o Kinect -- e' o objetivo do projeto: o par
                 # SUBSTITUI o Kinect, nao so' o apoia.
-                if mao["triangulated_3d"] is None:
+                if mao["triangulated_3d"] is None and not tri_descartada:
                     deteccoes = {
                         indice: pares.get(lado)
                         for indice, pares in aux_lado_por_camera.items()
@@ -980,7 +1590,12 @@ def main():
                         )
                     mao["overlay_red"] = overlay_red
                     mao["overlay_green"] = overlay_green
-                mao["depth_note"] = depth_note
+                #: O estado do gate (aceita/reproj/vel) entra no `note` para o
+                #: overlay_deviation_log.csv DISTINGUIR aceita de mantida (hold)
+                #: -- foi o que faltou para diagnosticar a mao esquerda (item 51).
+                tri_gate = mao.get("tri_gate")
+                mao["depth_note"] = (f"{depth_note}:{tri_gate}"
+                                     if tri_gate else depth_note)
                 mao["z_m"] = (
                     float(np.nanmedian(np.asarray(kinect_depth_m, np.float32)))
                     if kinect_depth_m is not None else float("nan")
@@ -1000,12 +1615,16 @@ def main():
             # aux 2. E' a verificacao visual da calibracao das duas.
             if display is not None and len(auxiliares) > 1:
                 outras = {}
+                lados_outras = {}
                 for indice, entradas in aux_por_camera.items():
                     if int(indice) == int(AUX_CAMERA_INDEX):
                         continue
-                    maos = [e["landmarks"] for e in entradas if e.get("landmarks")]
-                    if maos:
-                        outras[int(indice)] = maos
+                    visiveis = [e for e in entradas if e.get("landmarks")]
+                    if visiveis:
+                        outras[int(indice)] = [e["landmarks"]
+                                               for e in visiveis]
+                        lados_outras[int(indice)] = [e.get("side")
+                                                     for e in visiveis]
                 if outras:
                     # Paleta da BIBLIOTECA (CORES_AUXILIARES e' atributo de
                     # KinectHandTracker, nao nome do modulo): a cor 0 (vermelha)
@@ -1016,16 +1635,26 @@ def main():
                             (posicao + 1) % len(KinectHandTracker.CORES_AUXILIARES)]
                         for posicao, indice in enumerate(sorted(outras))
                     }
-                    z_primario = None
-                    tri_primario = None
-                    if prim_mao is not None:
-                        tri_primario = prim_mao["triangulated_3d"]
-                        if np.isfinite(prim_mao.get("z_used", np.nan)):
-                            z_primario = [float(prim_mao["z_used"])]
+                    #: REFERENCIA POR MAO, nao so' a PRIMARIA: antes todas as
+                    #: maos das outras cameras recebiam o 3D/z da PRIMARIA e,
+                    #: com as DUAS maos na tela, a mao NAO primaria (a esquerda,
+                    #: tipicamente) era desenhada na profundidade/3D da outra --
+                    #: e' o "esqueleto roxo offset na mao esquerda" da bancada
+                    #: de 09/10. Agora cada mao leva o triangulated_3d/z_used do
+                    #: SEU lado (resultados_por_lado), como o vermelho ja' fazia
+                    #: no loop por lado.
+                    tri_por_mao, z_por_mao = {}, {}
+                    for indice, lados in lados_outras.items():
+                        tri_por_mao[indice] = [
+                            (resultados_por_lado.get(lado) or {})
+                            .get("triangulated_3d") for lado in lados]
+                        z_por_mao[indice] = [
+                            (resultados_por_lado.get(lado) or {})
+                            .get("z_used") for lado in lados]
                     tracker.draw_auxiliary_cameras_on_color(
                         display, outras, alignment,
-                        depths={i: z_primario for i in outras},
-                        triangulados={i: tri_primario for i in outras},
+                        depths=z_por_mao,
+                        triangulados=tri_por_mao,
                         cores=cores,
                     )
             overlay_red = overlay_green = None
@@ -1093,89 +1722,105 @@ def main():
                     f"Z {prim_mao['z_m']:.2f} m ({prim_mao['depth_note']}{mark})"
                 )
                 # --- Log de diagnostico do overlay (tecla L liga/desliga) --------
-                # Grava 1 linha/frame em overlay_deviation_log.csv com o desvio
-                # vermelho-verde por no + contexto (profundidade, posicao na
-                # imagem, velocidade da mao). Serve para classificar o erro:
-                # estatico (bias) x movimento (sincronia) x bordas (distorcao).
-                # Frames SEM mao verde sao gravados com as colunas de desvio
-                # vazias (so a trajetoria vermelha + contexto).
-                # (BIMANUAL: loga a mao PRIMARIA; coluna 'lado' identifica.)
-                if overlay_logging and prim_mao["overlay_red"] is not None:
-                    try:
-                        red = np.asarray(
-                            prim_mao["overlay_red"], np.float64
-                        ).reshape(-1, 2)
-                        grn = (
-                            np.asarray(
-                                prim_mao["overlay_green"], np.float64
+                # Grava UMA LINHA POR MAO por frame em overlay_deviation_log.csv
+                # com o desvio vermelho-verde por no + contexto (profundidade,
+                # posicao na imagem, velocidade da mao). Serve para classificar o
+                # erro: estatico (bias) x movimento (sincronia) x bordas
+                # (distorcao). Frames SEM mao verde sao gravados com as colunas
+                # de desvio vazias (so a trajetoria vermelha + contexto).
+                # (ANTES: so a mao PRIMARIA -- o veredito das DUAS maos ao mesmo
+                #  tempo ficava com metade dos dados; agora a coluna `lado`
+                #  identifica e as duas entram, com velocidade POR MAO.)
+                if overlay_logging:
+                    for lado_log in ("right", "left"):
+                        mao_log = resultados_por_lado.get(lado_log)
+                        if (mao_log is None
+                                or mao_log.get("overlay_red") is None):
+                            continue
+                        try:
+                            red = np.asarray(
+                                mao_log["overlay_red"], np.float64
                             ).reshape(-1, 2)
-                            if prim_mao["overlay_green"] is not None
-                            else None
-                        )
-                        n_nodes = 21 if grn is None else min(21, red.shape[0], grn.shape[0])
-                        palm_ref = red if grn is None else grn
-                        palm = palm_ref[9] if n_nodes > 9 else palm_ref[0]
-                        cx = float(palm[0]) if np.isfinite(palm).all() else float("nan")
-                        cy = float(palm[1]) if np.isfinite(palm).all() else float("nan")
-                        edge = float("nan")
-                        if np.isfinite([cx, cy]).all():
-                            edge = float(
-                                max(
-                                    cx / tracker.color_width,
-                                    (tracker.color_width - cx) / tracker.color_width,
-                                    cy / tracker.color_height,
-                                    (tracker.color_height - cy) / tracker.color_height,
-                                )
+                            grn = (
+                                np.asarray(
+                                    mao_log["overlay_green"], np.float64
+                                ).reshape(-1, 2)
+                                if mao_log["overlay_green"] is not None
+                                else None
                             )
-                        z_used = float(prim_mao["z_used"])
-                        z_raw = float(prim_mao["z_m"])
-                        palm_now = np.array([cx, cy], np.float64)
-                        speed = float("nan")
-                        if np.isfinite(palm_now).all() and overlay_prev_palm is not None:
-                            dt = now - overlay_prev_time if overlay_prev_time else float("nan")
-                            if dt and dt > 1e-3:
-                                speed = float(np.linalg.norm(palm_now - overlay_prev_palm) / dt)
-                        overlay_prev_palm = palm_now if np.isfinite(palm_now).all() else None
-                        overlay_prev_time = now
-                        row = [f"{now:.3f}", lado_primario or "",
-                               f"{z_used:.3f}", f"{z_raw:.3f}",
-                               f"{cx:.1f}", f"{cy:.1f}", f"{edge:.3f}",
-                               f"{speed:.1f}" if np.isfinite(speed) else "",
-                               prim_mao["depth_note"]]
-                        for n in range(n_nodes):
-                            if (
-                                grn is not None
-                                and np.isfinite(red[n]).all()
-                                and np.isfinite(grn[n]).all()
-                            ):
-                                d = grn[n] - red[n]
-                                row.append(f"{np.hypot(*d):.1f}")
-                                row.append(f"{d[0]:+.1f}")
-                                row.append(f"{d[1]:+.1f}")
+                            n_nodes = (21 if grn is None else
+                                       min(21, red.shape[0], grn.shape[0]))
+                            palm_ref = red if grn is None else grn
+                            palm = palm_ref[9] if n_nodes > 9 else palm_ref[0]
+                            cx = float(palm[0]) if np.isfinite(palm).all() else float("nan")
+                            cy = float(palm[1]) if np.isfinite(palm).all() else float("nan")
+                            edge = float("nan")
+                            if np.isfinite([cx, cy]).all():
+                                edge = float(
+                                    max(
+                                        cx / tracker.color_width,
+                                        (tracker.color_width - cx) / tracker.color_width,
+                                        cy / tracker.color_height,
+                                        (tracker.color_height - cy) / tracker.color_height,
+                                    )
+                                )
+                            z_used = float(mao_log["z_used"])
+                            z_raw = float(mao_log["z_m"])
+                            palm_now = np.array([cx, cy], np.float64)
+                            speed = float("nan")
+                            prev_palm = overlay_prev_palm.get(lado_log)
+                            prev_time = overlay_prev_time.get(lado_log, 0.0)
+                            if (np.isfinite(palm_now).all()
+                                    and prev_palm is not None):
+                                dt = (now - prev_time
+                                      if prev_time else float("nan"))
+                                if dt and dt > 1e-3:
+                                    speed = float(
+                                        np.linalg.norm(palm_now - prev_palm)
+                                        / dt)
+                            overlay_prev_palm[lado_log] = (
+                                palm_now if np.isfinite(palm_now).all()
+                                else None)
+                            overlay_prev_time[lado_log] = now
+                            row = [f"{now:.3f}", lado_log,
+                                   f"{z_used:.3f}", f"{z_raw:.3f}",
+                                   f"{cx:.1f}", f"{cy:.1f}", f"{edge:.3f}",
+                                   f"{speed:.1f}" if np.isfinite(speed) else "",
+                                   mao_log["depth_note"]]
+                            for n in range(n_nodes):
+                                if (
+                                    grn is not None
+                                    and np.isfinite(red[n]).all()
+                                    and np.isfinite(grn[n]).all()
+                                ):
+                                    d = grn[n] - red[n]
+                                    row.append(f"{np.hypot(*d):.1f}")
+                                    row.append(f"{d[0]:+.1f}")
+                                    row.append(f"{d[1]:+.1f}")
+                                else:
+                                    row += ["", "", ""]
+                            # VETOR DA PALMA desta mao: normal do Kinect,
+                            # direcao prevista pelo IMU da luva e o erro entre
+                            # as duas. O numero que diz se o alinhamento daquela
+                            # luva esta' bom (sem alinhamento cresce ao girar).
+                            normal_palma = mao_log.get("palm_normal_kinect")
+                            direcao_palma = mao_log.get("palm_direction")
+                            if normal_palma is not None:
+                                row += [f"{valor:+.4f}" for valor in
+                                        np.asarray(normal_palma, np.float64)]
                             else:
                                 row += ["", "", ""]
-                        # VETOR DA PALMA do lado primario: normal do Kinect,
-                        # direcao prevista pelo IMU da luva e o erro entre as
-                        # duas. E' o numero que diz se o alinhamento daquela luva
-                        # esta' bom (sem alinhamento ele cresce ao girar a mao).
-                        normal_palma = prim_mao.get("palm_normal_kinect")
-                        direcao_palma = prim_mao.get("palm_direction")
-                        if normal_palma is not None:
-                            row += [f"{valor:+.4f}" for valor in
-                                    np.asarray(normal_palma, np.float64)]
-                        else:
-                            row += ["", "", ""]
-                        if direcao_palma is not None:
-                            row += [f"{valor:+.4f}" for valor in
-                                    np.asarray(direcao_palma, np.float64)]
-                        else:
-                            row += ["", "", ""]
-                        erro_palma = prim_mao.get("palm_error_deg")
-                        row.append("" if erro_palma is None
-                                   else f"{erro_palma:.2f}")
-                        overlay_log_file.write(",".join(row) + "\n")
-                    except (ValueError, IndexError, TypeError):
-                        pass
+                            if direcao_palma is not None:
+                                row += [f"{valor:+.4f}" for valor in
+                                        np.asarray(direcao_palma, np.float64)]
+                            else:
+                                row += ["", "", ""]
+                            erro_palma = mao_log.get("palm_error_deg")
+                            row.append("" if erro_palma is None
+                                       else f"{erro_palma:.2f}")
+                            overlay_log_file.write(",".join(row) + "\n")
+                        except (ValueError, IndexError, TypeError, KeyError):
+                            pass
             # --- UMA JANELA DE VIDEO POR WEBCAM AUXILIAR ----------------------
             # Antes SO' a camera ATIVA tinha janela: o video das outras nao
             # existia em lugar nenhum (elas apareciam apenas como esqueleto
@@ -1486,6 +2131,11 @@ def main():
             lines = [
                 imu_text,
                 camera_text,
+                # Lateralidade por camera: diz se o lado de cada mao auxiliar foi
+                # MEDIDO pela geometria (com o erro em px) ou se o programa esta'
+                # apenas acreditando no rotulo do MediaPipe -- e avisa quando o
+                # rotulo de uma camera estava invertido.
+                *arbitro.resumo(nomes_aux),
                 *(
                     f"Fusao {lado[0].upper()} XYZ {mao['fused'][0]:.3f} "
                     f"{mao['fused'][1]:.3f} {mao['fused'][2]:.3f} m"
@@ -1616,17 +2266,11 @@ def main():
                 overlay_logging = not overlay_logging
                 if overlay_logging:
                     overlay_log_file = open(OVERLAY_LOG_PATH, "w", newline="", encoding="utf-8")
-                    header = ["t_s", "lado", "z_usado_m", "z_bruto_m", "cx_px",
-                              "cy_px", "borda_0c_1b", "vel_px_s", "note",
-                              "palm_kin_x", "palm_kin_y", "palm_kin_z",
-                              "palm_imu_x", "palm_imu_y", "palm_imu_z",
-                              "palm_err_deg"]
-                    for n in range(21):
-                        header += [f"n{n}_dev_px", f"n{n}_dx", f"n{n}_dy"]
-                    overlay_log_file.write(",".join(header) + "\n")
-                    overlay_prev_palm = None
-                    overlay_prev_time = now
-                    print(f"Log overlay LIGADO -> {OVERLAY_LOG_PATH.name} (1 linha/frame)")
+                    overlay_log_file.write(",".join(cabecalho_overlay_log()) + "\n")
+                    overlay_prev_palm = {"right": None, "left": None}
+                    overlay_prev_time = {"right": now, "left": now}
+                    print(f"Log overlay LIGADO -> {OVERLAY_LOG_PATH.name} "
+                          "(1 linha/mao por frame)")
                 else:
                     if overlay_log_file is not None:
                         overlay_log_file.close()
@@ -1640,103 +2284,9 @@ def main():
                 hand_calib_count = 0
                 print("Captura de esqueleto resetada.")
             elif key == ord("t"):
-                # Saude do fluxo de profundidade (o ground truth depende dele)
-                stats = tracker.depth_stats()
-                if stats is None:
-                    print("Diagnostico depth: NENHUM frame de profundidade recebido")
-                else:
-                    count, dmin, dmax, frac = stats
-                    print(
-                        f"Diagnostico depth: {count}/{tracker.last_depth.size} px "
-                        f"validos ({frac:.0%}) | min {dmin:.0f} max {dmax:.0f} mm | "
-                        f"frames recebidos ate agora: {tracker.depth_frame_index}"
-                    )
-                # Diagnostico: erro ponta-a-ponta da sobreposicao no tabuleiro
-                # (superficie rigida com correspondencia exata; separa erro de
-                # projecao/calibracao de efeitos especificos da mao).
-                if color is None or not auxiliary_ok:
-                    print("Diagnostico: sem frame simultaneo das duas cameras")
-                elif not alignment.stereo_usable:
-                    print("Diagnostico: calibracao stereo nao carregada")
-                else:
-                    clean_color = (
-                        color_for_calibration
-                        if color_for_calibration is not None
-                        else cv2.cvtColor(color, cv2.COLOR_BGRA2BGR)
-                    )
-                    if clean_color.ndim == 3 and clean_color.shape[2] == 4:
-                        clean_color = cv2.cvtColor(clean_color, cv2.COLOR_BGRA2BGR)
-                    board_kinect = alignment.find_board(clean_color)
-                    board_aux = alignment.find_board(auxiliary_frame)
-                    if board_kinect is None or board_aux is None:
-                        print("Diagnostico: tabuleiro nao visto nas duas cameras")
-                    else:
-                        print("Diagnostico: processando tabuleiro...")
-                        depths = np.full(len(board_kinect), np.nan, np.float32)
-                        for index, (corner_x, corner_y) in enumerate(
-                            board_kinect.reshape(-1, 2)
-                        ):
-                            depth_pixel = tracker._color_to_depth_pixel(
-                                int(corner_x), int(corner_y)
-                            )
-                            if depth_pixel is None:
-                                continue
-                            depth_mm = tracker._median_depth(
-                                *depth_pixel, radius=DEPTH_PATCH_RADIUS * 3
-                            )
-                            if depth_mm is not None:
-                                depths[index] = depth_mm / 1000.0
-                        valid = int(np.isfinite(depths).sum())
-                        total = len(depths)
-                        print(
-                            f"Diagnostico: {valid}/{total} cantos com profundidade "
-                            "valida do Kinect"
-                        )
-                        if depths is not None:
-                            valid = np.isfinite(depths)
-                            if valid.sum() < 5:
-                                print(
-                                    "Diagnostico: tabuleiro fora do alcance do "
-                                    "depth do Kinect; afaste o tabuleiro para "
-                                    ">= 0.8 m e mantenha-o dentro do FOV do "
-                                    "depth (evite as bordas extremas do video)"
-                                )
-                            else:
-                                depths = np.where(
-                                    valid, depths, float(np.nanmedian(depths))
-                                )
-                                projected = np.asarray(
-                                    alignment.auxiliary_to_kinect_stereo(
-                                        board_aux, depths
-                                    ),
-                                    np.float64,
-                                ).reshape(-1, 2)
-                                differences = projected - board_kinect.reshape(-1, 2)
-                                errors = np.linalg.norm(differences, axis=1)
-                                finite_err = errors[np.isfinite(errors)]
-                                dx = float(np.nanmean(differences[:, 0]))
-                                dy = float(np.nanmean(differences[:, 1]))
-                                centro = np.mean(board_kinect.reshape(-1, 2), axis=0)
-                                radius = np.linalg.norm(
-                                    board_kinect.reshape(-1, 2) - centro, axis=1
-                                )
-                                slope = None
-                                if finite_err.size >= 2:
-                                    r_median = max(1e-9, float(np.median(radius)))
-                                    slope = float(
-                                        np.polyfit(
-                                            radius / r_median,
-                                            finite_err,
-                                            1,
-                                        )[0]
-                                    )
-                                print(
-                                    f"Diagnostico tabuleiro: {np.nanmean(errors):.1f} px media | "
-                                    f"mediana {float(np.nanmedian(errors)):.0f} | max {np.nanmax(errors):.0f} | "
-                                    f"centro {errors[24]:.0f} | bordas "
-                                    f"{np.nanmean(np.concatenate((errors[:8], errors[-8:]))):.0f} | "
-                                    f"dx {dx:.0f} dy {dy:.0f} | slope {slope if slope is not None else '--'}"
-                                )
+                diagnostico_tabuleiro(
+                    color, color_for_calibration, auxiliary_frame, tracker,
+                    alignment, aux_ok=auxiliary_ok, aux_index=AUX_CAMERA_INDEX)
             elif key == 27:
                 break
     finally:

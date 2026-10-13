@@ -2,7 +2,7 @@
  HISTORICO DE ITERACOES DO PROJETO
  Ground truth 3D da mao (Kinect + MediaPipe + IMU) acoplado a EEG (g.Nautilus)
 ================================================================================
-Ultima atualizacao: 2026-09-17
+Ultima atualizacao: 2026-09-30
 Registro cronologico de problemas, diagnosticos (com evidencias) e solucoes,
 para uso na escrita da dissertacao/artigo e na manutencao do codigo.
 Formato de cada item:  PROBLEMA -> EVIDENCIA -> CAUSA RAIZ -> SOLUCAO
@@ -1277,6 +1277,2642 @@ PENDENTE (por depender da bancada)
 
 
 
-================================================================================
+28. SESSAO 2026-09-28 (cont.) - O PARADIGMA RODANDO PONTA A PONTA (5 bloqueadores) E O
+    CANCELAMENTO DE TRIAL PROVADO NA BANCADA
+  Objetivo da sessao: `eeg_motor_paradigm.py` rodando de verdade (EEG + cameras
+  + Kinect) COM o cancelamento de trial/abortar da sessao de 25/09, provado pela
+  suite. Resultado: 28 suites / 0 falhas e 2 sessoes REAIS de bancada (cancelar
+  com C e abortar com ESC) gravadas ponta a ponta.
+
+  BLOQUEADOR 1 - faltava `pyqtgraph` (o programa morria ANTES de gravar nada)
+    `ModuleNotFoundError: No module named 'pyqtgraph'` em `gp.TimeSeriesScope`.
+    O proprio g.Pype 4.0.0 importa pyqtgraph no escopo de series temporais, mas
+    NAO o declara em `Requires` (gtec_attest, gtec_licensing, gtec_oscar,
+    ioiocore, numpy, psutil, scipy, sympy, websockets). Corrigido instalando
+    `pyqtgraph 0.14.0` e registrando no `requirements.txt` (com comentario).
+  BLOQUEADOR 2 - `--source generator` morria sempre (o modo de BANCADA)
+    "RecordingMuxer exige frame_size=1 na fonte (use --frame-size 1)": o
+    `build_source` nao repassava `frame_size` ao `gp.Generator`, entao nem o
+    `--frame-size 1` digitado no terminal chegava ao no'. Era o bloqueador que
+    impedia testar o cancelamento SEM o amplificador -- exatamente o caminho
+    documentado no proprio modulo como "Teste rapido sem hardware". Agora
+    `frame_size=args.frame_size` e' passado no ramo do generator.
+  BLOQUEADOR 3 - JSON/metadados apontavam para arquivos INEXISTENTES
+    O `FileWriter` do g.Pype insere timestamp (+ sufixo `_N` em colisao) no nome
+    do CSV: pedido `..._20260928_121041.csv`, em disco
+    `..._20260928_121041_20260928_121043_779.csv`. O `_align_event_json` e os
+    DOIS resumos (fim da sessao e sessao cancelada) liam
+    `getattr(writer, "_file_path", None)`, mas `writer` e' uma CHAIN do
+    ioiocore: o `_file_path` vive no NO' INTERNO (`_CsvWriterCore`, subclasse de
+    `FileWriter`), criado em `create_internal_nodes()`. O getattr voltava SEMPRE
+    None -> o resumo anunciou o nome PEDIDO e o `meta.arquivos.eeg_csv` do JSON
+    apontou para um arquivo que nao existe (medido na 1a rodada: `Test-Path`
+    False nos tres caminhos). Correcao: `_caminho_real_csv(writer)` (le a chain
+    e depois os nos internos), `_align_event_json` devolve o caminho renomeado e
+    reescreve `meta.arquivos.eeg_csv`/`eventos_json`, e os dois resumos usam o
+    caminho REAL. Regressao: grupo 10 de `test_paradigm_protocol.py`.
+  BLOQUEADOR 4 - as threads de bancada nao paravam: `self._stop` sombreava o
+    `Thread._stop()` (`MotionRecorder`, `LinkWatchdog`, `ImpedanceMonitor`)
+    Criar o `threading.Event` com o nome `_stop` no `__init__` sobrescreve o
+    metodo interno do `Thread` (que o `join()` chama), e a parada morria com
+    "TypeError: 'Event' object is not callable" -- justamente no caminho de
+    CANCELAR/ABORTAR, que e' quando se para tudo. Renomeado para `_stop_event`
+    nas tres classes; regressao em `test_parada_threads.py`.
+  BLOQUEADOR 5 - pykinect2 0.1.0 e' 32-bit (Kinect morto no Python 64-bit)
+    O pacote do PyPI nao tem wheel 64-bit (issues upstream #37/#115):
+    `tagSTATSTG` com 72 bytes, `_check_version('')` quebrado, `time.clock`
+    (removido no Python 3.8) e `numpy.object` (removido no numpy 1.24). Nao ha'
+    fork instalavel, entao o conserto vive no REPO: `kinect_compat.py` e' um
+    import hook que aplica os patchs no pacote JA instalado (sem tocar no
+    site-packages), ligado em `kinect_imu_groundtruth.py`,
+    `stereo_calibration.py` e nos 3 `tools/diagnostico*`/`probe_tabuleiro.py`.
+    Sobrevive a `pip install --force-reinstall` e a recriar o `.venv`.
+
+  VERIFICACAO (bancada, 28/09/2026)
+    - `tools/roda_testes.py`: 28 suites, 0 falhas (a suite nova entra sozinha no
+      glob `test_*.py`); `test_paradigm_protocol.py` foi a 11/11 blocos e
+      `test_parada_threads.py` a 5/5.
+    - SESSAO REAL 1 (`--source generator --blocos 1 --trials-por-bloco 4`): o `C`
+      injetado no meio do trial 3 deu "trial 3/4 CANCELADO pelo experimentador"
+      + marcador 796 na amostra 15707 + trial 4 seguinte, e a sessao terminou
+      gravando CSV de EEG (20298 linhas, 34 colunas), movimento (1216 linhas a
+      30 Hz) e 4 clipes de priming (5.3 MB).
+    - SESSAO REAL 2 (1 bloco x 6 trials): `ESC` no meio do trial 2/6 ->
+      "[paradigma] hotkey global: abortar" -> "sessao ABORTADA pelo
+      experimentador" -> "CANCELANDO a sessao ... salvando e saindo" -> JSON com
+      13 eventos -> o processo SAIU em menos de 7 s (sem traceback e sem thread
+      presa) e o resumo listou os arquivos REAIS.
+    - Kinect + cameras de verdade na MESMA rodada:
+      `KT=(+0.288,-0.186,+0.937) [triangulado_externa-ampla] valid=1` e o
+      marcador 795 (onset detectado pelo Kinect) no CSV/JSON -- a cadeia
+      Kinect -> triangulacao -> onset esta viva dentro do paradigma (na rodada
+      sem ninguem na frente da camera o KT vem NaN, como esperado).
+    - Metadados conferidos NO DISCO: `meta.arquivos.{eeg_csv, eventos_json,
+      movimento_csv}` com `Test-Path` True nos tres, e o JSON de eventos
+      renomeado para o MESMO prefixo do CSV que o g.Pype criou.
+    - Ferramenta de bancada nova: `tools/tecla_global.py` (`keybd_event` do
+      user32) injeta ESPACO/C/ESC como tecla GLOBAL -- foi assim que as duas
+      sessoes acima foram canceladas sem tocar no teclado. A injecao foi provada
+      com a tecla F24 (sem acao nenhuma no Windows): 1 borda vista pelo
+      `GlobalHotkeyWatcher`, sem repeticao, e o mapa de teclas vem do
+      `hotkeys.py` (nada de numero magico duplicado).
+  PENDENTE
+    - EEG REAL (g.Nautilus): medido nesta bancada, com o .venv (gtec_gds 1.7.1),
+      que o GDS NAO existe nesta maquina: "GDS library not found; tried
+      GDSServer.dll, GDSClientAPI.dll". O pacote Python esta' instalado; o que
+      falta e' o RUNTIME do g.tec (a Suite/GDS) -- o usuario vai instalar a
+      Suite, o que fecha este ramo (o resto do encadeamento e' o mesmo do
+      generator, ja' exercitado). A pre-checagem passou a separar as DUAS
+      causas: antes ela respondia "rode com o .venv do projeto" justamente
+      quando se estava usando o .venv. Regressao: bloco 11 de
+      `test_paradigm_protocol.py`.
+    - O CSV de EEG em disco mantem o nome escolhido pelo g.Pype (timestamp +
+      sufixo). Renomear o ARQUIVO para casar com o JSON foi descartado de
+      proposito: mexer no nome de dado gravado e' pior que apontar para ele.
+
+29. SESSAO 2026-09-28 (cont.) - A REDE NOVA DAS LUVAS (hotspot "EDUARDO-PC
+    9049"): AS TRES CAUSAS SILENCIOSAS DE O ESP32 NAO APARECER
+  Objetivo: esta maquina e' outra (hostname `Eduardo-PC`, hotspot "EDUARDO-PC
+  9049", senha 0011223344) e as luvas (ESP32 + MPU6050) tem de conectar NELA
+  para o dado chegar nas portas 4210/4211. O firmware NAO esta' neste
+  repositorio (vive no ESP32), mas as TRES coisas que fazem o datagrama chegar
+  sao deste lado -- e as tres falhavam em SILENCIO.
+
+  MEDIDO (28/09/2026, nesta maquina, com .venv\Scripts\python.exe)
+    (a) HOTSPOT DESLIGADO: nenhum adaptador com 192.168.137.x (so' APIPA
+        169.254.x, Ethernet e 200.135.92.58 do Wi-Fi de casa); `icssvc` e
+        `SharedAccess` estao Running, mas nada servindo. O `ScopeAddress` do
+        ICS no registro E' 192.168.137.1 (o destino FIXO que o firmware usa).
+        O perfil de AP com o nome novo ainda nao existe em
+        C:\ProgramData\Microsoft\WlanSvc\Profiles -> o hotspot nunca foi ligado
+        com esse nome.
+    (b) FIREWALL: a politica de entrada e' `BlockInbound` nos TRES perfis
+        (`netsh advfirewall show allprofiles`) e a UNICA regra UDP de entrada
+        (nome "Python", perfil Publico, Active=TRUE) e' de PROGRAMA:
+        App=...\WindowsApps\pythonsoftwarefoundation.python.3.11_...\python3.11.exe
+        -- o python DA LOJA, nao o `.venv\Scripts\python.exe` que recebe os
+        datagramas. Regra de programa vale SO' para aquele executavel, entao o
+        datagrama do ESP32 era descartado sem erro em lugar nenhum (nem no
+        ESP32, nem no PC). A primeira versao do teste dizia "sem regra" e
+        depois "tem regra" errado porque `Get-NetFirewallRule` e
+        `Get-NetFirewallPortFilter` respondem "Acesso negado" sem elevacao.
+    (c) O SSID do Windows e' DERIVADO do nome do computador (<PC> <4 digitos>):
+        renomear o PC MUDA o SSID -- e nada no PC avisa que o firmware ficou
+        apontando para a rede antiga ("DUDU_LAPTOP 2897", de outro notebook).
+
+  ENTREGUE
+    - tools/diagnostico_hotspot.py (NOVO): confere de uma vez hostname, o
+      SSID/senha documentados, o `ScopeAddress` do ICS (registro, sem admin),
+      as interfaces com o IP do hotspot, as REGRAS do firewall lidas do
+      REGISTRO (...\FirewallPolicy\FirewallRules, tambem sem admin) com filtro
+      de protocolo/porta/PROGRAMA, a politica de entrada pelo `netsh`, as
+      portas livres -- e imprime o SNIPPET para colar no sketch do ESP32.
+      `--escutar N` mostra quem mandou (ip:porta, Hz, idade), que e' a prova de
+      que a luva chegou; `--criar-regra-firewall` cria a regra de entrada UDP
+      (so' isso precisa de admin) e `--remover-regra-firewall` desfaz.
+    - test_diagnostico_hotspot.py (NOVO, 8/8, sem hardware): parser das regras
+      do registro (porta em lista, intervalo, campo vazio e palavra LOCALIZADA
+      = qualquer porta), filtro de programa (regra do python da Loja x o
+      .venv), cobertura x o caso "quase", veredito (hotspot/ICS/SSID/firewall/
+      porta ocupada), snippet, escuta ao vivo com emissor falso em porta de
+      teste e DOCUMENTO x FERRAMENTA EM SINCRONIA (se o SSID/senha/IP mudar em
+      um lado so', a suite falha).
+    - docs/IMU_DUPLO_ESP32_DESENHO.md secao 2.0 (a rede da bancada: tabela,
+      snippet e as duas armadilhas do hotspot) e tools/teste_imu_dois_esp32.py
+      (docstring apontando para a ferramenta nova; SSID antigo removido).
+    - README: secao "A rede das luvas (hotspot do PC)" + linha na tabela de
+      suites.
+
+  PROVA (bancada, sem hardware)
+    - `tools\diagnostico_hotspot.py` -> 2 FALTAS: hotspot desligado e firewall,
+      com a mensagem dizendo que a regra UDP existente e' de OUTRO python.
+    - `--escutar 6` com os emissores falsos (`emissores_imu_falsos.py --hz 50`):
+      300 datagramas na 4210 e 301 na 4211, 50 Hz por lado, atribuidos por
+      remetente (127.0.0.1) -- a escuta e o encaminhamento por porta estao OK.
+    - ARMADILHA DE RADIO: o ESP32 e' 2,4 GHz. Com o hotspot em 5 GHz ele NAO VE
+      a rede. Deixar a faixa em 2,4 GHz (Configuracoes > Rede e Internet >
+      Ponto de acesso movel) e desligar a economia de energia do ponto de
+      acesso.
+
+  FIRMWARE DAS LUVAS RECEBIDO (commit 0434839, firmware/esp32_luvas)
+    O firmware dos dois ESP32 entrou no repositorio (PlatformIO, dois envs) e o
+    CONTRATO DAS PORTAS foi conferido contra o lado do PC:
+      luva_direita  -> GLOVE_SIDE = 1 -> UDP 4210
+      luva_esquerda -> GLOVE_SIDE = 0 -> UDP 4211
+    ou seja, casa com `imu.IMU_PORTAS_PADRAO = {1: 4210, 2: 4211}` (1 =
+    direita): os blocos IMU_L_*/IMU_R_* saem no lado certo. O pacote tem 10
+    campos (`t_us,roll,pitch,yaw,ax,ay,az,gx,gy,gz`), SEM o lado dentro -- o
+    lado vem da PORTA, que e' o que o `ImuBank` assume. Destino: unicast para
+    `UDP_DESTINO` = 192.168.137.1 (o IP do ICS), com `UDP_USAR_UNICAST 1`.
+    - `test_firmware_luvas.py` (NOVO, 5/5): le' os arquivos do firmware e trava
+      o contrato -- env do PlatformIO x formula da porta no main.cpp x
+      IMU_PORTAS_PADRAO, os 10 campos sem ID de lado (x `receber_luvas.py`, do
+      proprio firmware), o unicast para o IP do ICS, o `credenciais.h` REAL (se
+      existir) apontando para o hotspot atual E fora do git, e a nota
+      `unicast`/README em sincronia. TESTE NEGATIVO feito: trocar o
+      `GLOVE_SIDE` do env da esquerda para 1 derruba a suite (era o cenario de
+      lados trocados no CSV, sem nenhum erro visivel).
+    - `src/credenciais.h` criado NESTA maquina (nao versionado: tem senha) com o
+      hotspot novo -- PSK "EDUARDO-PC 9049"/"0011223344" e a eduroam DESLIGADA
+      (`WIFI_ENTERPRISE 0`): com ela ligada o boot gasta 25 s por senha
+      (WIFI_TIMEOUT_MS) ANTES de cair no hotspot, atrasando cada ligacao.
+    - PONTO FINO (o firmware NAO foi alterado): a luva esquerda usa
+      `GLOVE_SIDE = 0` enquanto a convencao do projeto e' `2 = esquerda`. Hoje e'
+      inofensivo (a PORTA define o lado), mas se o pacote ganhar o ID do lado
+      (formato de 11 campos) o 0 seria RECUSADO por `parse_portas_imu`/
+      `ImuBank` (aceitam 1 e 2). Trocar o env da esquerda para
+      `-D GLOVE_SIDE=2` mantem a porta 4211 (a formula testa `== 1`) e elimina
+      a armadilha; a suite aceita os dois.
+    - PlatformIO NAO esta' instalado nesta maquina, entao nao deu para compilar
+      o firmware aqui (`pio run` fica para quem for gravar).
+
+  FIRMWARE COMPILADO E FIREWALL REVISADO (28/09/2026, segunda metade)
+    - PlatformIO: a extensao do VS Code estava instalada
+      (platformio.platformio-ide-3.3.4) mas SEM o Core provisionado
+      (`%USERPROFILE%\.platformio` nao existia e nao havia `pio` no PATH), entao
+      `pio run` nao rodava. Instalado o Core NO VENV do projeto
+      (`pip install platformio` -> platformio 6.2.0) e `pio run` em
+      `firmware/esp32_luvas` compilou OS DOIS envs: `luva_direita` e
+      `luva_esquerda` SUCCESS, RAM 13,9 % / Flash 57,7 % -- exatamente os
+      numeros do commit na maquina antiga, o que valida o `credenciais.h`
+      criado aqui. Os `.bat` ganharam `%~dp0..\..\.venv\Scripts\pio.exe` como
+      2a opcao de `pio` (antes: extensao e PATH), entao gravam nesta maquina;
+      o README do firmware registra a opcao do venv.
+    - FIREWALL: as excecoes criadas a mao foram DUAS regras "ESP32" -- uma de
+      ENTRADA UDP liberando SO' a porta 4211 (esquerda) e outra de SAIDA (que
+      nao influi na recepcao). Consequencia: a luva DIREITA (4210) continuava
+      bloqueada, e o veredito nao sabia dizer isso (so' "nenhuma regra libera
+      as duas portas"). `tools/diagnostico_hotspot.py` ganhou
+      `regras_parciais()`, que agora aponta: "a regra 'ESP32' libera UDP de
+      entrada para 4211 mas FALTA 4210 (e' uma porta por luva: as duas tem de
+      estar na MESMA regra)". Regressao nos blocos 3b/3c de
+      `test_diagnostico_hotspot.py` (as DUAS direcoes: faltando 4210 e 4211).
+    - `gravar_direita.bat` / `gravar_esquerda.bat` tambem citavam o hotspot
+      ANTIGO (DUDU_LAPTOP 2897) no `echo` -- corrigidos para EDUARDO-PC 9049. O
+      teste de deriva passou a conferir os DOIS .bat (SSID, IP do ICS, porta do
+      env e o fallback do pio do .venv).
+    - PENDENTE: incluir a porta 4210 na regra "ESP32" (ou rodar
+      `--criar-regra-firewall` num terminal de administrador) e LIGAR o ponto
+      de acesso movel em 2,4 GHz -- sem isso o `--escutar` continua mudo.
+
+  INDICE DE CAMERA FIXO (2) ABORTAVA A FERRAMENTA DO KINECT (3o bug da serie)
+    - PROBLEMA: `tools/kinect_groundtruth_tool.py` (e o `stereo_calibration.py`)
+      usavam a CONSTANTE AUX_CAMERA_INDEX = 2 como default de `--aux-index`.
+      Nesta maquina so' existem 0 = SIGMA-W780M e 1 = Trust USB Camera (as DUAS
+      externas ABREM: "backend DSHOW OK (1280x720)"), e a ferramenta MORRIA com
+      "A webcam auxiliar ATIVA (indice 2) nao abriu" -- mesmo com as duas
+      cameras funcionando. A constante estava certa na maquina de 23/09/2026.
+    - SOLUCAO: `kinect_imu_groundtruth.indice_auxiliar_automatico()` (NOVO) --
+      o default passa a sair do NOME (`indices_auxiliares_automaticos`: todas as
+      cameras menos a do laptop, as COM calibracao primeiro) e a constante fica
+      so' como ULTIMO recurso. A ferramenta imprime o que escolheu ("indice 0
+      escolhido AUTOMATICAMENTE (SIGMA-W780M)"), avisa quando o usuario FIXA um
+      indice que nao esta' entre as externas, e a falha de abertura agora diz
+      QUAIS indices abriram + o comando pronto. O `stereo_calibration.py`
+      ganhou `indices_padrao_auxiliares()` com a MESMA regra (fonte unica:
+      importa a lista do modulo principal), entao `stereo_calibration.py` sem
+      argumento calibra as externas desta maquina ([0, 1]).
+    - Bug de encadeamento corrigido junto: `_indices_auxiliares()` lia
+      `args.aux_index` (que virou None) em vez do global ja' resolvido --
+      `TypeError: int() argument must be ... not 'NoneType'`.
+    - VERIFICADO com hardware (28/09/2026): a ferramenta sobe, escolhe o indice
+      0 sozinha, abre as DUAS auxiliares em 1280x720, recebe o primeiro frame de
+      profundidade do Kinect ("Primeiro frame de profundidade recebido" -- o
+      "ERRO no fluxo de profundidade (AcquireFrame)" que aparece no boot e'
+      transitorio) e aceita o stereo carregado (RMS 1,05 px) com 4 janelas em
+      grade. Regressao: bloco 6b de `test_cameras_multi.py` (lista injetada,
+      sem hardware).
+    - NOTA DE BANCADA: o par Kinect x auxiliar foi calibrado na maquina ANTIGA
+      (indices 2/0); aqui o indice mudou, entao a calibracao carregada pode nao
+      corresponder a camera fisica -- conferir o esqueleto sobreposto e, se
+      estiver deslocado, recalibrar (`python stereo_calibration.py`, que agora
+      ja' pega as externas certas).
+
+  TECLA T: "TABULEIRO NAO VISTO" COM O TABULEIRO NA MESA (mesma sessao)
+    - PROBLEMA: com o tabuleiro na mesa e as TRES cameras abertas, a tecla `T`
+      respondia "Diagnostico: tabuleiro nao visto nas duas cameras".
+    - MEDIDO AO VIVO (28/09/2026, uma foto de cada camera, caminho NOVO x ANTIGO):
+        Kinect RGB 1920x1080 -> novo=OK | antigo=--   (cantos em x 824..1032)
+        aux 0 SIGMA-W780M    -> novo=OK | antigo=OK
+        aux 1 Trust USB      -> novo=OK | antigo=--
+      Nao era o tabuleiro: era o DETECTOR do diagnostico.
+      `CameraAlignment.find_board` rodava SO' na resolucao cheia (1080p), sem
+      CLAHE e com CALIB_CB_ACCURACY, enquanto a CALIBRACAO usa cascata de
+      larguras + CLAHE desde 23/09 (`stereo_calibration.DETECTION_WIDTHS`, que ja'
+      documentava o SB "na fronteira": a mesma configuracao acerta numa rodada e
+      falha na outra). Nesta bancada o tabuleiro ocupa ~10% da largura do Kinect
+      (x 824..1032 de 1920) -- exatamente o caso em que escala e CLAHE decidem.
+    - SOLUCAO: `find_board` passou a usar CLAHE + cascata
+      `BOARD_DETECTION_WIDTHS = (960, 640, 0)` com SB EXHAUSTIVE, o detector
+      CLASSICO como fallback na mesma escala e refinamento na resolucao CHEIA
+      (cornerSubPix). De quebra o custo caiu: o caminho antigo pagava 108 ms em
+      1080p; a 427/640/960 px o mesmo detector custa 13-70 ms.
+    - A MENSAGEM tambem era enganosa: "nao visto nas duas cameras" aparecia
+      quando UMA camera falhava (a condicao e' um OR). Agora ela diz
+      "Kinect=OK | auxiliar (indice 0)=nao" e lembra de conferir o enquadramento
+      de cada camera -- e' o caso comum (a auxiliar e' mais fechada que o
+      Kinect).
+    - O TABULEIRO NAO MUDOU: `CHECKERBOARD_SIZE` continua (5,3) e o npz carregado
+      (stereo_calibration.npz) tem `checkerboard_size [5 3]` e
+      `square_size_m 0.057`. (O `stereo_calibration_aux1.npz` e' que foi feito
+      com a placa anterior, de 52 mm -- por isso ele e' o proximo a refazer, se
+      for usar o indice 1 como ativa.)
+
+    (cont.) TECLA T: "TABULEIRO NAO VISTO" (mesma sessao) E A CALIBRACAO DE OUTRA
+    MONTAGEM -- a segunda metade do problema
+      - Depois do conserto do detector, a tecla T acertou o tabuleiro (15/15
+        cantos com profundidade valida) e MORREU com
+        `IndexError: index 24 is out of bounds for axis 0 with size 15`: o resumo
+        indexava `errors[24]` (o "centro" da placa ANTIGA, de 11x7 = 77 cantos) e
+        `errors[:8]/errors[-8:]` para "bordas". Agora os dois saem da GEOMETRIA
+        (`procedimento.grupos_centro_borda`, novo): o canto de menor raio e' o
+        centro e as bordas sao os cantos a >= 75% do raio maximo (6 dos 15 numa
+        5x3). O resumo tambem imprime QUANTOS cantos entraram em cada grupo.
+      - ORDEM DOS CANTOS: o tabuleiro e' simetrico e cada camera escolhe a origem
+        da ordem de deteccao (o cv2 nao fixa). Projetar as duas listas CRUAS
+        compara cantos que NAO se correspondem. MEDIDO com o par real: 'id'
+        491 px, 'rot180' 494 px, a ordem canonica da calibracao 494 px -- e uma
+        homografia NOVA do MESMO par fechou em 0,3 px. Ou seja, o pareamento nao
+        explicava o erro grande; o diagnostico agora testa as 4 simetrias da
+        grade e fica com a de MENOR erro (o que o solver faz em
+        `solve_with_repair`), imprimindo o que as outras dariam:
+        "pareamento dos cantos vflip (497 px) | as outras dariam: id 506,
+        rot180 519, hflip 519".
+      - CAUSA RAIZ DO ERRO GRANDE: a CALIBRACAO GRAVADA E' DE OUTRA MONTAGEM (a
+        maquina/sala antiga). O RMS 1,05 px do arquivo so' mede a coerencia
+        INTERNA dele -- passa a aceitacao e projeta centenas de px fora daqui. O
+        diagnostico agora diz isso em voz alta quando a mediana passa de
+        `LIMITE_PX_CALIBRACAO_SUSPEITA` (25 px): "ATENCAO -- erro muito acima do
+        esperado para esta montagem ... RECALIBRE nesta maquina: python
+        stereo_calibration.py".
+      - DECISAO: `CameraAlignment.find_board` e o `add_sample` legado passaram a
+        ordenar os cantos com `ordem_canonica_do_tabuleiro` (NOVA, espelha
+        `stereo_calibration.canonical_order`; a duplicacao e' travada por teste
+        em tabuleiros ALEATORIOS com perspectiva e simetria sorteadas, porque a
+        biblioteca nao pode importar `stereo_calibration` -- e' o contrario).
+        Achado no caminho: `canonical_order` NAO e' "desfaz a simetria
+        aplicada" -- para um tabuleiro deitado a penalidade prefere 'hflip'; por
+        isso o pareamento do diagnostico nao usa essa regra, usa o MENOR ERRO
+        (4 simetrias) e o teste 13 (add_sample) compara com a ordem canonica, nao
+        com a ordem crua.
+      - REGRESSOES: `test_deteccao_cascata.py` 22/22 (eram 10) com 3 classes
+        falsas (tracker/calibracao) que rodam o diagnostico INTEIRO sem
+        hardware: 11 = centro/bordas pela geometria; 12/12b = ordem canonica
+        identica a da calibracao (4 simetrias + 40 tabuleiros aleatorios);
+        13 = add_sample canonico; 14 = pareamento pelo menor erro (com a
+        auxiliar devolvendo a meia volta); 15 = sem alarme quando o erro e' bom;
+        15b = deslocamento de 485 px vira "RECALIBRE ... stereo_calibration.py";
+        16 = a mensagem diz QUAL camera nao viu.
+      - FERRAMENTA: o diagnostico da tecla T virou funcao de modulo
+        (`diagnostico_tabuleiro(...)`) -- antes vivia dentro do loop de teclas e
+        so' podia ser exercitado com hardware; agora devolve os numeros num
+        dict (cantos, media/mediana/max, centro, bordas, dx/dy, slope,
+        pareamento) e o loop so' chama.
+
+    (cont.) SEGUNDA MEDICAO (29/09/2026, bancada SEM ninguem: o usuario esta' a
+    distancia) E AS DUAS DEFESAS QUE FALTAVAM
+      - A tecla T, rodada de longe pelo usuario, deu: 15/15 cantos com
+        profundidade, pareamento hflip 214 px (vflip 214, rot180 215, id 237),
+        resumo 232.6 px media | mediana 214 | max 370 | centro 214 | bordas 243 |
+        dx 26 dy -211 | slope 24.9 -- e o aviso de RECALIBRAR. As QUATRO simetrias
+        na casa dos 214-237 px confirmam que NAO e' bug de rotulagem (nesse caso
+        uma delas ficaria perto de zero): e' geometria de outra montagem. O
+        deslocamento quase todo em Y (~211 px ~ 14 cm na altura de 1,5 m) aponta
+        para o par Kinect x auxiliar ter mudado de posicao relativa -- coerente
+        com bancada nova.
+      - CAUSA x CONSERTO separados no diagnostico: entrou a HOMOGRAFIA NOVA
+        (ajustada na hora entre os cantos DETECTADOS dos dois quadros,
+        `homografia_nova_px`) -- ela mede a deteccao/correspondencia e nao usa o
+        stereo carregado. Com correspondencia boa (<= 5 px,
+        `LIMITE_PX_CORRESPONDENCIA`) e erro grande o conserto e' RECALIBRAR (e o
+        texto agora lista as 3 causas na ordem: auxiliar fora do lugar/zoom ou de
+        porta USB, npz de outra maquina, placa/quadrado diferente); sem
+        correspondencia o conserto e' MELHORAR A CAPTURA (mandar recalibrar ali
+        seria trabalho perdido -- o erro reapareceria no arquivo novo).
+      - DE QUAL CAMERA E' O NPZ: o `stereo_calibration.py` passa a gravar
+        `camera_name` (nome do Windows, campo OPCIONAL na leitura) e o
+        carregador compara com o nome daquele indice hoje
+        (`nome_de_camera_confere`; caixa/espaco nao contam). Nomes diferentes =
+        `stereo_status` "rejeitada" com os dois nomes, `stereo_ready` falso e
+        `CameraAlignment.camera_name_conflict()` dizendo qual e';
+        `tools/diagnostico_cameras.py` ganhou a linha `camera : gravado=... |
+        agora=...`. npz antigo (sem o campo) e indice fora da enumeracao seguem
+        aceitos: nome e' prova, nunca pre-requisito. E' a defesa contra o indice
+        do OpenCV trocar de camera (posicao no USB) e o programa injetar a
+        geometria de outro par sem sintoma -- exatamente a dor desta semana.
+      - REGRESSOES: `test_deteccao_cascata.py` 24/24 (17 = deteccao ruim do
+        MESMO tabuleiro -> "melhore a captura", nao recalibre; 18 = npz de outra
+        camera denunciado antes dos numeros) e `test_cameras_multi.py` 11/11
+        (5d = npz antigo sem o campo segue aceito; 5e = npz de OUTRA camera
+        recusado com os dois nomes; 5f = mesmo nome com caixa/espaco diferentes
+        nao inventa conflito).
+
+  PENDENTE (usuario)
+    1. ligar o Ponto de acesso movel com o nome "EDUARDO-PC 9049" e faixa
+       2,4 GHz; conferir `Get-NetIPAddress` com 192.168.137.1 (o toggle sozinho
+       nao garante que o ICS subiu);
+    2. rodar `.venv\Scripts\python.exe tools\diagnostico_hotspot.py
+       --criar-regra-firewall` num terminal de ADMINISTRADOR -- sem isso o UDP
+       de entrada continua bloqueado NESTE python (a regra do python da Loja
+       nao serve);
+    3. gravar SSID/senha/IP no sketch do ESP32 (snippet na saida da ferramenta)
+       e conferir com `--escutar 20`: tem de aparecer remetente 192.168.137.x a
+       ~100 Hz por lado.
+
+--------------------------------------------------------------------------------
+ 30. SESSAO 2026-09-29 - g.tec SUITE INSTALADO: O RAMO DO g.Nautilus PASSOU A
+     RODAR (e as armadilhas de PATH que a instalacao deixou)
+--------------------------------------------------------------------------------
+PROBLEMA
+  - O usuario instalou o g.tec Suite (2024) nesta maquina. O ramo
+    `--source gnautilus` era o ULTIMO nao verificado do paradigma e continuava
+    falhando com a mensagem do Suite AUSENTE -- mandando instalar o que ja'
+    estava instalado. Fecha o pendente de 28/09/2026 (secao 28).
+EVIDENCIA (medida nesta bancada, 29/09/2026)
+  - Servicos rodando: `Get-Service` -> GDS (g.tec Device Service) e "g.Estim
+    Device Detection Service", ambos RUNNING; processo GDSServerService.
+  - O runtime existe: `C:\Program Files\gtec\gNEEDaccess` tem GDSClientAPI.dll,
+    GDSServer.dll, gAPI.dll, GDSServerService.exe e config/ (h5 do GDS). A
+    pasta ESTA no PATH de MAQUINA (o instalador a poe la).
+  - Mesmo assim, com o .venv (gtec_gds 1.7.1), `_check_gtec_environment` dava
+    "GDS library not found; tried GDSClientAPI.dll, GDSServer.dll" -- a MESMA
+    mensagem do Suite ausente. Causa: o PATH da SESSAO. Terminal/IDE aberto
+    ANTES da instalacao carrega o PATH antigo, e o gtec_gds procura a DLL PELO
+    NOME (nenhum caminho embutido no pacote). Com PATH novo (ou GDS_LIBRARY
+    apontando a DLL) o mesmo .venv inicializa e `ConnectedDevices()` devolve [].
+  - `_gtec_order.py` (temporario, removido) mediu ONDE esta' o cache do wrapper
+    compilado: (A) import -> define GDS_LIBRARY/PATH -> FUNCIONA; (B) define
+    antes do import -> funciona; (C) chama (falha) -> define -> chama de novo ->
+    FALHA IGUAL (`_initialize_failed`). Consequencia de projeto: o reparo tem
+    de ser PREEMPTIVO (antes da primeira chamada); "reparar no except" nao
+    conserta nada.
+  - `GNEEDACCESS_DIR` (a mensagem ANTIGA mandava definir) piora: o wrapper passa
+    a exigir headers C e falha com "GDS header not found: ...\GDSClientAPI.h.
+    This build carries the GDS declarations itself - unset GNEEDACCESS_DIR"
+    (medido apontando-a para a pasta do Suite, que nao tem .h).
+  - `shutil.which("GDSClientAPI.dll")` devolve None COM a DLL no PATH: no
+    Windows o which so' casa nomes por PATHEXT (.COM;.EXE;.BAT;..., SEM .DLL).
+    A pergunta "o PATH desta sessao resolve a DLL?" virou varredura de PATH.
+  - O gpype usa o MESMO pacote (backend/sources/g_nautilus.py importa gtec_gds),
+    entao apontar a DLL no processo vale tambem para o node g.Nautilus.
+CAUSA RAIZ -> SOLUCAO (implementada em `eeg_motor_paradigm.py`)
+  - TRES causas, tres consertos: (1) Python sem o pacote/1.4.0 com headers;
+    (2) Suite ausente -> instalar; (3) Suite instalado e invisivel para a SESSAO
+    -> apontar em memoria. A mensagem (`_mensagem_gds`) agora diz qual e'. O
+    "disco responde" quem e' quem: `_gds_dll_instalada` procura em GDS_LIBRARY,
+    GNEEDACCESS_DIR e nas pastas padrao do Suite.
+  - Reparo preemptivo: `_gds_apontar_para` define `GDS_LIBRARY` com o CAMINHO
+    COMPLETO da DLL e prepende a pasta no PATH (idempotente), e o console
+    imprime a nota ("o runtime do GDS esta' em ... e nao no PATH desta sessao").
+  - `_gds_no_path` decide se ha' reparo a fazer (varredura de PATH, nunca
+    shutil.which) -- assim quem ja' tem o PATH certo nao ve' nota nenhuma.
+  - `GNEEDACCESS_DIR` sem os headers C e' REMOVIDA da sessao, com aviso (desfaz
+    a dica ruim da mensagem antiga); com os .h presentes ela e' respeitada.
+  - `build_source`: "No g.Nautilus devices found" -- que estourava quatro
+    camadas dentro do ioiocore/gpype sem dizer o que fazer -- virou mensagem
+    acionavel (aparelho ligado, bateria, dongle/pareamento Wi-Fi, configuracao
+    no g.Recorder/g.HIsys, alternativa `--source generator`).
+VERIFICACAO
+  - Live, PATH velho de proposito (`_gtec_check.py`/`_gtec_only.py`,
+    temporarios): nota do reparo + "gtec_gds 1.7.1 OK, mas nenhum dispositivo
+    conectado"; com PATH novo: sem nota (nao repara o que ja' esta' certo).
+  - O PARADIGMA rodando de verdade: `eeg_motor_paradigm.py --source gnautilus`
+    passou a pre-checagem, montou a pipeline ("g.Nautilus: 32 canais,
+    frame_size=1") e parou em `Exception: No g.Nautilus devices found.` dentro
+    do gtec_gds -- ou seja, o GDS/Python estao OK e o que falta e' o APARELHO
+    fisico (fecha o ramo).
+  - `test_gtec_runtime.py` (NOVO, 9/9): busca no disco (prioridade de
+    GDS_LIBRARY, GNEEDACCESS_DIR/pastas padrao, "nada no disco"), idempotencia do
+    reparo, `_gds_no_path`, os tres ramos da mensagem (PATH velho reparado com
+    aviso; Suite ausente -> "instale o g.tec Suite" e NADA de GNEEDACCESS_DIR;
+    GNEEDACCESS_DIR sem headers -> retirada da sessao com aviso), caminho feliz
+    com dispositivo e o `build_source` (mensagem acionavel + erro alheio
+    passando intacto). Nada de hardware e o GDS real nao e' tocado (duble no
+    wrapper).
+  - `test_paradigm_protocol.py` bloco 11 continua verde: o erro injetado cai no
+    ramo novo e a mensagem mantem os tokens exigidos (g.tec Suite, GDS_LIBRARY,
+    "trocar de Python NAO resolve", `sys.executable`) e NAO manda usar o .venv.
+  - Suites: 31/31 passando (`tools/roda_testes.py`).
+PENDENTE (usuario)
+  - Ligar/expor o g.Nautilus (bateria, dongle Wi-Fi, configuracao no g.Recorder)
+    e repetir `--source gnautilus`: a pipeline sobe e a gravacao com EEG real
+    fecha o ultimo ramo de bancada.
+
+--------------------------------------------------------------------------------
+ 31. SESSAO 2026-09-30 - O OVERLAY NASCIA "CALIBRADO" (RMS 0,5 px) E 30-50 px
+     FORA: MODELO DO KINECT CONGELADO + AUDITORIA OFFLINE
+--------------------------------------------------------------------------------
+PROBLEMA
+  - Com o RMS stereo entre 0,44 e 0,80 px (limite do projeto: 2 px) o esqueleto
+    da auxiliar aparecia dezenas de px fora da mao no RGB do Kinect. O RMS -- a
+    metrica que o usuario usa para decidir "esta' calibrado" -- nao acusava
+    nada, e cada recalibracao piorava num lugar e melhorava em outro.
+EVIDENCIA (medida nesta bancada)
+  - Tres sessoes de calibracao da MESMA bancada, todas com RMS <= 0,80 px,
+    projetando a MESMA grade 3D: mediana de 24 a 50 px de desacordo entre os
+    modelos do Kinect (ate' 176 px na borda do quadro). O RMS de cada arquivo
+    era baixo porque ele mede a coerencia INTERNA do par -- nao qual modelo e' o
+    certo.
+  - O desvio entre dois modelos do Kinect da mesma bancada e' praticamente um
+    DESLOCAMENTO CONSTANTE do principal point ((+32,+26) px, medido pela tecla
+    L): erro SISTEMATICO no overlay, nunca ruido.
+  - A dispersao de px entre os modelos cresce com a profundidade -- o mesmo
+    padrao do "esqueleto escorregando" que o usuario via no video.
+CAUSA RAIZ
+  - O modelo do Kinect (fx/fy/cx/cy + distorcao) era re-estimado em CADA sessao
+    de calibracao, com o tabuleiro PEQUENO no quadro do Kinect: o Kinect e' a
+    camera fixa, entao quem varia de pose e' a auxiliar e a cobertura do quadro
+    do Kinect fica pobre. Pouca cobertura = parametros instaveis: fx/cx mudam
+    alguns % de uma sessao para a outra, e o overlay herda erro sistematico.
+    Nada disso aparece no RMS do par.
+SOLUCAO (implementada)
+  - `stereo_calibration.py --salvar-intrinsecas-kinect`: calibra SO' o Kinect
+    com o tabuleiro GRANDE (checa a cobertura do quadro via `span` da diagonal e
+    recusa congelar com tabuleiro pequeno) e grava `kinect_intrinsics.npz`
+    (version, matriz, distorcao, tamanho, rms, poses, span, tabuleiro,
+    frozen_at).
+  - A rotina (`stereo_calibration.py`, sem a flag) passou a REUSAR o modelo
+    congelado quando ele existe e a resolver so' R/T. O modelo que a sessao
+    estimaria e' calculado apenas para MEDIR a divergencia
+    (`kinect_deviation_px`, mediana em px), que vai para o npz do par junto com
+    `kinect_intrinsics_source="congelado"`; acima de 10 px a sessao imprime o
+    diagnostico (tabuleiro sem cobertura do quadro) e NAO troca o modelo.
+  - `tools/diagnostico_calibracao.py` (NOVO): auditoria OFFLINE -- sem hardware
+    e sem acreditar no RMS -- de TODOS os npz da pasta: o modelo do Kinect de
+    cada arquivo (com o nome da camera gravada), a divergencia entre pares
+    (mediana/p90/max por profundidade, contra o limite de 25 px da tecla T), a
+    divergencia de cada arquivo contra o modelo congelado, o CUSTO DE 1 CM DE Z
+    em px (o numero que explica o desvio que sobra no video), o estado do par
+    (rotacao/translacao), o RMS e os eixos opticos. Exit code 1 quando ha'
+    alerta, com "COMO CONSERTAR" (inclusive qual flag rodar).
+  - O npz do modelo congelado tem SO' o Kinect (uma camera, sem rotacao nem
+    translacao): a auditoria o le e COMPARA os outros arquivos com ele. A versao
+    anterior exigia o par inteiro nessa comparacao, e o check 3 do relatorio
+    ficava mudo justamente no modo congelado -- o bug que o teste novo trava.
+
+
+VERIFICACAO
+  - `test_intrinsecas_kinect.py` (NOVO, 8 blocos): formato do npz congelado,
+    reuso pelo calibrador, medicao/gravacao do desvio, caso "tabuleiro pequeno"
+    (recusa de congelar) e o comportamento da rotina com e sem o congelado.
+  - `test_diagnostico_calibracao.py` (NOVO, 5 blocos, sem hardware): a grade
+    espelhada ponto a ponto contra o cv2 (bias de 41,23 px = hypot(32,26)
+    reproduzido nos TRES caminhos: `compara_modelos_kinect`, `espalhamento_px` e
+    cv2 puro), a projecao pela profundidade IDENTICA ao `to_kinect_stereo` (o
+    codigo que desenha o overlay; erro maximo 4,85e-05 px em 15 pixels x 3
+    profundidades) com delta_z=0 voltando ao proprio ponto (6,04e-05 px), 1 cm
+    de Z custando 16,9 px/cm a 0,6 m (16,9 tambem no oraculo) e 3,2 px/cm a
+    1,3 m, os alertas COM o numero na mensagem (divergencia entre arquivos,
+    "fora do CONGELADO", npz velho, RMS 3,00 px) e a ordem/nomes dos arquivos
+    (o npz do modelo congelado NAO entra na lista de pares).
+  - Teste de mutacao: trocar `pronto_kinect` por `pronto` em `espalhamento_px`
+    derruba a suite (blocos 1 e 4) -- a regressao pega o bug, nao so' o caminho
+    feliz.
+  - Suites: 33/33 passando (`tools/roda_testes.py`).
+PENDENTE (usuario, bancada)
+  - Rodar `python stereo_calibration.py --salvar-intrinsecas-kinect` UMA vez com
+    o tabuleiro GRANDE (>=35% da diagonal do quadro do Kinect, 12+ poses) e
+    depois a rotina, uma sessao por auxiliar. Antes de gravar, rodar
+    `python tools\diagnostico_calibracao.py`: a divergencia entre os npz tem de
+    ficar abaixo dos 25 px.
+  - No dia a dia, repetir a tecla T: com o modelo congelado o erro que sobra e'
+    de R/T (pose), e e' a tecla T que acusa.
+
+
+--------------------------------------------------------------------------------
+ 32. SESSAO 2026-09-30 (cont.) - FUMO EM TELA CHEIA COM EEG REAL E O VIDEO DE
+     PRIMING QUE "PARAVA" (dois bugs de UI do playback)
+--------------------------------------------------------------------------------
+O QUE RODOU (bancada Eduardo-PC)
+  - `eeg_motor_paradigm.py --source gnautilus --tela-cheia --blocos 1
+    --trials-por-bloco 6` com o g.Nautilus real (NR-2018.10.53), Kinect e as
+    duas auxiliares (auto):
+      * EEG: 44938 amostras x 34 colunas a 500,0 Hz; 32 canais com sd 3,4 a
+        16,8 uV (mediana 5,3), 0 canais mortos, tudo finito;
+      * marcadores TODOS em Ch33 (retencao de 0,5 s = 250 amostras), 19
+        codigos: 32766, 276/277 (baseline), 500/501 (origem), 768-781
+        (trial/mao/ME/MI), 794 (pausa), 795 (onset) e 812-816 (condicoes);
+      * triangulacao `triangulado_externa-ampla` valida nas linhas de [rec],
+        6 clipes de priming gravados, JSON com 47 eventos; abort ESC na
+        trial 6 (gravacao fecha limpa, com os 3 caminhos).
+  - Janelas medidas por EnumWindows na rodada em tela cheia: `Paradigma
+    ME/MI - sessao de gravacao` 1920x1080 @0,0 (participante),
+    `Gravacao ME/MI - ...` 716x439 (escopo do g.Pype) e `Tracking (overlay
+    Kinect) - MI` 976x579 -- SEM o painel do experimentador (o --tela-cheia
+    nao o cria).
+PROBLEMA (reportado pelo usuario depois da sessao)
+  - "o video em camera lenta esta meio travado: ele passa na tela e logo
+    para de funcionar" e "o PowerShell depois da sessao nao fecha sozinho".
+CAUSA RAIZ (dois bugs de UI, medidos)
+  1. `_start_mi` so' fazia `set_phase(PHASE_MI)`: o canvas ficava em
+     `mode="video"` e a MI INTEIRA (resto da pausa + 2 s ~= 3,6 s) mostrava
+     o ULTIMO QUADRO CONGELADO -- e o protocolo pede o cue (seta + objeto)
+     na MI, sem feedback.
+  2. `_video_tick` consumia 1 quadro por tick de 33 ms (`take_video_frame`
+     passava a devolver None) de um clipe com so' 3-7 QUADROS REAIS: o buffer
+     do Kinect recebe 1 quadro por iteracao do laço do tracking, que faz 3x
+     MediaPipe por iteracao (Kinect + 2 auxiliares) e anda a 5-7 fps (MEDIDO
+     nesta bancada: "4 quadros reais em 0,61 s (4,9 fps de captura)" e
+     "7 quadros reais em 0,86 s (7,0 fps)"). Resultado: clipe de 0,2-0,5 s
+     e depois a tela congelada ate' a deadline da pausa.
+  - O "PowerShell nao fecha" era o LANCAMENTO (janela aberta com -NoExit /
+    terminal do VS Code, que e' um terminal e nao fecha sozinho); o processo
+    em si sempre sai (abort -> hard_exit = os._exit; fim normal comprovado
+    nas rodadas com `tools\rodar_sessao.bat`).
+SOLUCAO (implementada)
+  - `_start_mi` chama `show_condition(objeto, mao)`: a MI volta a mostrar o
+    cue e o quadro congelado nao sobrevive a pausa.
+  - Playback CRONOMETRADO: `SharedState.publish_video(frames, duracao_real)`
+    guarda a duracao REAL do trecho, `video_snapshot()` devolve quadros +
+    duracao SEM consumir, e `_video_tick` tira o indice do RELOGIO com
+    passo = restante/n: os quadros sao ESPACADOS para terminar EXATAMENTE na
+    deadline -- nunca antes (nao congela e a pose final aparece) e nunca
+    depois (a MI comeca com o cue). Clipe cheio (1 s de movimento na pausa de
+    2 s) da' ~0,5x; clipe curto e' espacado em vez de acabar cedo.
+  - `_publish_slowmo` imprime a taxa de CAPTURA (`N quadros em X s (Y fps de
+    captura)`) e, quando o clipe nao couber no tempo restante, AVISA que o
+    playback fica mais rapido que 0,5x.
+  - `tools/rodar_sessao.bat` (NOVO): roda o paradigma e FECHA a janela sozinha
+    (5 s no fim, 20 s em erro, argumentos do paradigma passados adiante).
+  - `_demo_trial.py` passa `duracao_real` junto com o clipe (demo de webcam).
+VERIFICACAO
+  - `test_video_priming.py` (NOVO, 6 blocos; relogio fake + janela falsa,
+    nenhum Qt em execucao, nenhum Kinect): clipe saudavel tocando INTEIRO ate'
+    a deadline com a pose final visivel, clipe CURTO (4 quadros/0,3 s)
+    espacado ate' o fim da pausa, clipe ATRASADO encaixando no tempo restante
+    + AVISO, clipe que NUNCA chega (a MI segue com o cue), `video_snapshot`
+    nao consumindo (API legada intacta) e `_publish_slowmo` medindo span/fps
+    (5,0 fps no caso sintetico).
+  - `tools/roda_testes.py`: 34/34 passando.
+  - Rodada ao vivo com Kinect + 2 auxiliares (`--source generator`, 2 trials):
+    as linhas de fps acima, `sessao concluida` e -- prova do fechamento --
+    o PowerShell do launcher SEM -NoExit desaparecendo sozinho apos o bat.
+PENDENTE (usuario)
+  - Observar o `[video] clipe ... (Y fps de captura)` nas proximas sessoes:
+    com 5-7 fps o CONTEUDO continua "travado" (imagens espacadas de ~0,15-0,2
+    s) mesmo sem congelar. Duas saidas a decidir:
+      (a) interpolar os quadros do clipe (fluxo optico do cv2, so' na TELA --
+          o AVI continua sendo a verdade visual da ME); ou
+      (b) ganhar desempenho no laço do tracking (o gargalo sao os 3x
+          MediaPipe por iteracao; reduzir a deteccao das auxiliares muda a
+          qualidade do KT e exige validacao antes).
+  - Reflash das duas luvas (o firmware antigo ainda conecta em
+    'DUDU_LAPTOP 2897'), a 2a porta COM do adaptador PL2303 que nao enumera
+    e `tools\diagnostico_hotspot.py --escutar 20` depois de refazer a regra
+    UDP 4210.
+
+
+--------------------------------------------------------------------------------
+ 33. CONGELAMENTO PALIATIVO DO KINECT E O ARRANJO SEM AUXILIAR (e tres achados
+     que explicam por que o congelamento nao saia na bancada)
+--------------------------------------------------------------------------------
+PROBLEMA
+  - `--salvar-intrinsecas-kinect` exige span MEDIANO >= 35% da diagonal do
+    quadro do Kinect (KINECT_INTRINSICS_MIN_SPAN). O tabuleiro de 57 mm so'
+    chega a 35% a ~0.35 m do Kinect -- e nessa distancia a webcam auxiliar
+    (FOV horizontal 68 graus contra 84 do Kinect) perde o tabuleiro. Cada
+    tentativa de "salvar o par" recuando derruba o span para 10-13%. Relacao
+    medida na bancada: span% ~ 12.4 / distancia(m) (0.35 m -> 35%, 0.30 m ->
+    41%, 1.10 m -> 11%).
+  - Consequencia medida hoje, sem hardware (`tools/diagnostico_calibracao.py`):
+    os 4 modelos do Kinect em disco divergem de 23 a 58 px na janela de
+    trabalho; o npz em uso era o OUTLIER (45.6 a 57.5 px dos outros tres) e os
+    k2/k3 sao degenerados (-0.24 a -4.93) porque com 11-13% de span o tabuleiro
+    cobre so' r ~ 0.15 da imagem: a distorcao na REGIAO DE TRABALHO (r ~ 0.5) e'
+    extrapolacao. O RMS individual de cada modelo e' 0.17-0.20 px -- ou seja,
+    RMS baixo NAO denuncia modelo ruim, era exatamente o que o congelamento
+    existe para resolver.
+DESVIO 1 - a guarda de variedade torna 15 poses impossivel perto da camera
+  - `MIN_POSE_SEPARATION = 0.30` (stereo_calibration.py:1606) exige que o CENTRO
+    do tabuleiro fique a >= 30% do span de TODOS os centros ja' coletados. A
+    35% de span (771 px) o passo minimo e' 231 px (~7.6 cm de deslocamento
+    fisico) e so' cabe uma grade 5x3 dentro do quadro, com ZERO folga; a 42%
+    (span 925 px, passo 278 px) cabem no maximo 12 poses. Coletar 15 poses
+    perto da camera e' impossivel por aritmetica, nao por erro do operador --
+    foi a queixa do usuario, confirmada com numero.
+DESVIO 2 - `board_tilt_ratio` nao mede inclinacao
+  - Ele e' a razao entre as DIAGONAIS do quadrilatero externo, e num trapezio
+    isosceles (tabuleiro centrado, girado em torno de um eixo) as diagonais sao
+    iguais. Medido com tabuleiro sintetico projetado com fx=1071 a 0.33 m:
+    giro 0/10/20/30/40 graus -> 1.000/1.000/1.000/1.000/1.000, enquanto a
+    CONVERGENCIA das bordas opostas (topo/base e esquerda/direita) da'
+    1.000/1.136/1.309/1.528/1.799. O relatorio de diversidade do projeto usa a
+    metrica que nao mede inclinacao; a convergencia de bordas e' a medida que
+    aproveita a informacao que restringe a focal. Ganho de brinde: inclinar
+    AUMENTA o span medido (827 -> 947 px de 0 a 40 graus a 0.33 m), o que ajuda
+    o proprio gate de span.
+DESVIO 3 - um tabuleiro na borda do quadro derruba a sessao inteira
+  - `refina_cantos` (stereo_calibration.py:388-408) chama `cv2.cornerSubPix`
+    sem verificar se o canto esta' dentro da imagem. No OpenCV 5 (este venv) a
+    chamada LEVANTA excecao ("initial corner is outside the image") e a excecao
+    nao tratada encerra a sessao, sem mensagem final -- reproduzido ao vivo com
+    o tabuleiro colado na camera (span 53-77%) e em teste isolado: canto em
+    x=700 numa imagem de 640 px e canto a 2 px da borda levantam cv2.error;
+    canto dentro nao levanta. Correcao sugerida (nao aplicada): exigir margem
+    de meia janela (5 px no 11x11) antes de refinar, ou tratar a excecao no
+    chamador como "frame ruim".
+SOLUCAO PALIATIVA NESTA SESSAO (o definitivo fica para a proxima bancada)
+  - Arranjo que captura SO' o Kinect, FORA do repositorio:
+    `freeze_kinect_direto.py` (copia preservada em
+    `.cline\data\workspaces\chat\freeze_kinect_20260930\`, junto dos scripts de
+    verificacao). Ele aplica os gates de span/RMS do projeto, usa
+    `abre_kinect`/`find_corners`/`canonical_order`/`board_span` do projeto e
+    grava o MESMO `kinect_intrinsics.npz` pela funcao do projeto -- nenhum
+    arquivo do repositorio foi alterado para isso.
+  - Diferencas do arranjo, todas com motivo medido: variedade de pose por TRES
+    caminhos (convergencia de bordas em 2 eixos, escada de ~10 graus;
+    deslocamento do centro >= 30% do span; ou escala >= 12%); janela de span
+    por pose de 35% a 50% (assim o gate de mediana passa sozinho e uma captura
+    longe nao envenena a sessao); teto de 50% porque 77% da diagonal e' o
+    tabuleiro a ~0.16 m, FORA do foco do RGB e capaz de dominar o ajuste de fx;
+    dica em CENTIMETROS (1 cm ~ 1% de span nessa faixa); mapa das poses na tela;
+    guarda `except cv2.error` em `find_corners` (tabuleiro na borda deixa de
+    derrubar a sessao); e PARCIAL gravado a cada pose aceita, com retomada
+    automatica (`--limpar` zera, parcial de placa diferente e' descartado).
+  - `kinect_intrinsics.npz` PALIATIVO gravado hoje: MEDOIDE dos 4 modelos em
+    disco (`aux2 28/09`: fx 1053.89, fy 1048.14, cx 957.81, cy 571.18, dist
+    [-0.0811 +0.8153 -0.0016 +0.0048 -1.7873], kinect_rms 0.195), com a
+    proveniencia em `frozen_at` ("PALIATIVO: medoide de 4 modelos 'sessao'...").
+    Os campos `poses` e `span` ficaram AUSENTES de proposito: nenhum npz de
+    sessao guarda o span da sessao, e nao se inventa metadado de qualidade.
+    Medoide em vez de mediana coeficiente a coeficiente porque k2 e k3 sao
+    fortemente correlacionados: a mediana de cada um isolado produz uma
+    COMBINACAO que nenhuma sessao mediu. A mediana foi gravada ao lado como
+    alternativa NAO usada (`kinect_intrinsics_ALTERNATIVO_mediana.npz`, fx
+    1067.73, cx 949.05, cy 570.95).
+  - Limite honesto do paliativo: vies desconhecido de ate' ~46 px na janela de
+    trabalho. Ele nao substitui o congelamento com span >= 35% -- existe para
+    dar ESTABILIDADE entre sessoes enquanto o definitivo nao sai.
+VERIFICACAO
+  - `carrega_intrinsecas_kinect()` le o paliativo: OK (matriz valida, rms lido,
+    `poses`/`span` = None, `congelado_em` com a nota) -- o projeto aceita o
+    arquivo como modelo congelado.
+  - `tools/diagnostico_calibracao.py` (offline) agora mede cada npz contra o
+    congelado: `stereo_calibration.npz` 45.6 px (mediana, Z=0.6 m) e
+    `stereo_calibration_aux1.npz` 26.6 px >> fora do limite de 25 px;
+    `stereo_calibration_aux2.npz` 0.0 px (e' o proprio medoide). Esperado: os
+    arquivos antigos trazem o modelo de sessao deles; as sessoes NOVAS reusam o
+    congelado. Exit code 1.
+  - Arranjo: 3 testes do parcial (retomar, placa trocada -> descarta e apaga,
+    `--limpar`) e 3 casos da guarda do `cornerSubPix` (dentro, fora, 2 px da
+    borda), todos com stderr vazio. No caminho apareceu e foi corrigido um bug
+    proprio: `np.load` mantem o handle aberto e `unlink()` no Windows falha com
+    WinError 32 -- um parcial velho derrubaria o arranjo no inicio da sessao.
+  - Convergencia de bordas conferida contra projecao sintetica do tabuleiro
+    (fx=1071, 0.33 m): 20 graus -> 1.309 nas duas implementacoes (arranjo e
+    teste independente).
+  - Sessao AO VIVO na bancada (30/09, 4 poses antes do crash do cornerSubPix):
+    spans 48/45/43/37%, aceitas por "posicao 324 px", "posicao 282 px" e
+    "distancia 14%"; o teto de span recusou uma pose de 53% com a mensagem
+    certa. Foi essa rodada que revelou o DESVIO 3.
+PENDENTE (usuario, bancada)
+  - Congelamento DEFINITIVO, caminho A (melhor condicionamento): rodar o
+    arranjo na bancada -- 12 poses, ~10 min, tabuleiro a 0.28-0.34 m subindo a
+    escada de giro. O parcial faz uma interrupcao nao custar trabalho.
+  - Congelamento DEFINITIVO, caminho B (resolve a raiz, sem tocar em codigo):
+    imprimir tabuleiro A3 com 5x3 cantos e quadrados de 90 mm (360x180 mm,
+    sobra margem). Da' 36-39% de span a 0.50-0.55 m -- distancia em que a
+    auxiliar (68 graus) tambem enxerga o tabuleiro. Ai' o congelamento sai na
+    sessao NORMAL: `python stereo_calibration.py --aux-index 0 --quadrado 90
+    --salvar-intrinsecas-kinect` (o override propaga por `global SQUARE_SIZE_M`
+    nas linhas 1667-1693, entao object points e npz congelado usam 90 mm). Custo
+    do caminho B: recalibrar as duas auxiliares com o tabuleiro novo (os npz de
+    57 mm sao recusados por `--quadrado` diferente, que e' o comportamento
+    desejado).
+  - Recalibrar CADA auxiliar contra o congelado (`python stereo_calibration.py`)
+    para zerar os 45.6/26.6 px que a auditoria aponta.
+  - A 0.6 m o erro de 1 cm no Z custa 1080 px/cm (SIGMA) contra 18 px/cm a
+    0.8 m: se a bancada for nessa distancia, o que domina o overlay e' a
+    PROFUNDIDADE, nao a calibracao -- usar triangulacao em vez do depth do
+    Kinect (item 4 do README).
+  - Decidir se o arranjo vira ferramenta do repositorio (`tools\`): hoje ele
+    vive fora, e o caminho A depende dele existir na proxima ida a bancada.
+
+
+--------------------------------------------------------------------------------
+ 34. A SETA DO CUE NAO INVADE MAIS O ICONE E A BOLA DE TENIS GANHOU COSTURA
+     (Twemoji) -- os dois achados com numero, na bancada do Eduardo-PC
+--------------------------------------------------------------------------------
+PROBLEMA (relatado pelo usuario na bancada, 30/09/2026)
+  - "a seta sobreposta no icone da garrafa/caneta/bola": em tela quase quadrada
+    a CAUDA da seta encostava/invadia o icone. Medido com `geometria_cue`:
+    900x900 -> -9 px e 700x900 -> -7 px (negativo = invasao); em 1920x1050
+    havia 372 px de folga -- por isso o defeito so' aparecia na janela normal do
+    laptop e nao na tela da sala (a queixa veio junto com o fumo em tela cheia).
+  - a bola era "so' um circulo" e parecia uma LAMPADA: o `moveTo`+`arcTo` antigo
+    deixava uma RETA atravessada e dois arcos 10% MAIORES que o proprio circulo
+    (para FORA). O icone lia como "circulo com um risco", nao como bola.
+SOLUCAO 1 - geometria pura, testavel sem Qt
+  - `geometria_cue(width, height, mao)` passa a ser a UNICA fonte da aritmetica
+    do cue: caixa quadrada do objeto centrada na largura, lado = 30% do menor
+    lado (`CAIXA_OBJETO_FRAC`), centro a 40% da altura; a seta vive na margem de
+    5% do menor lado (`MARGEM_SETA_FRAC`) e e' ENCURTADA ate' sobrar a MESMA
+    folga (`folga`) para o objeto -- garantia aritmetica em qualquer proporcao,
+    inclusive nas quase quadradas. `_paint_arrow` so' consome isso (a ponta
+    continua encostada na borda da tela).
+SOLUCAO 2 - bola = circulo + DUAS costuras (SVG do Twemoji, U+1F3BE)
+  - `_BOLA_COSTURAS` guarda as duas costuras no viewBox 36x36 (circulo em
+    (18,18), r=18): cada uma sai da BORDA do circulo a ~46 graus (pe), mergulha
+    ate' 0,39 R na linha do centro e volta para a borda; a segunda e' o espelho
+    em x (36 - x), o que da' a simetria de graca. `_bola_px`/`costura_bola`
+    (14 pontos) sao a fonte unica e `_draw_ball` desenha um `QPainterPath` com
+    uma `moveTo` + duas `cubicTo` por costura.
+  - Caminhos descartados, com motivo: (a) a cubica do OpenMoji (viewBox 72x72,
+    tentada primeiro) fechava quase no pe e a bola parecia uma LAMPADA;
+    (b) a primeira transcricao de `_BOLA_COSTURAS` em forma compacta perdeu um
+    `)` -- `SyntaxError` na importacao, pego pela propria suite no primeiro run
+    (e' por isso que o bloco ficou no formato expandido).
+VERIFICACAO
+  - `test_cue_estimulos.py` (NOVO; aritmetica pura -- importa o paradigma mas
+    nao abre Qt nem Kinect): 9 telas x 2 maos com a folga medida >= 5% do menor
+    lado, ponta na borda certa, seta dentro do canvas e comprimento > 0; o
+    objeto centrado com o lado certo; a regressao exata da queixa (>= 45 px em
+    900x900 e >= 35 px em 700x900); a bola: 14 pontos (2 costuras x 1 + 2
+    cubicas), os QUATRO pes sobre o circulo (tolerancia 1%), NENHUM ponto fora
+    do circulo, mergulho limitado entre 0,30 R e 0,45 R (nem "circulo com um
+    risco" nem "X" no centro), uma costura por metade e espelho ponto a ponto.
+  - `_render_cue.py` (arranjo de inspecao, scratch fora do versionado) regerou
+    as 9 telas; `_cue_bola_direita_900x900.png` conferido a olho: circulo com as
+    duas costuras espelhadas e a bola terminando antes da seta.
+  - Suite completa: 35/35 (era 34/34 antes desta suite entrar).
+PENDENTE (usuario, bancada)
+  - Conferir a olho o cue a 700x900 (a pior folga medida, 35 px) na janela real
+    do paradigma; se a seta ainda parecer colada, o numero a mexer e'
+    `MARGEM_SETA_FRAC` -- a geometria e a suite acompanham sozinhas.
+
+
+--------------------------------------------------------------------------------
+ 35. A PLACA NOVA (7x5 @ 45 mm) TROCOU O TABULEIRO DE TODO MUNDO -- E DUAS
+     CONSTANTES DUPLICADAS CALARAM AS CALIBRACOES NOVAS
+--------------------------------------------------------------------------------
+PROBLEMA (medido na bancada, 01/10/2026, logo depois da recalibracao do usuario)
+  - O usuario trocou o tabuleiro: 8x6 QUADRADOS de 45 mm = 7x5 CANTOS internos
+    (aresta de cantos 270x180 mm, diagonal 324,5 mm = 1,27x a placa de 57 mm de
+    23/09) e recalibrou as duas auxiliares com ele (`stereo_calibration.npz`
+    13:04, RMS do par 1,39 px, SIGMA-W780M; `_aux1.npz` 13:05, RMS 1,01 px, Trust
+    USB Camera -- os dois com `camera_name` e `checkerboard_size [7 5]`/45 mm).
+  - O `stereo_calibration.py` foi atualizado para a placa nova, mas o
+    `kinect_imu_groundtruth.py` (a biblioteca que a SESSAO usa para validar o
+    npz) continuou validando 5x3 @ 57 mm. Sintoma medido (NAO era "RMS alto"):
+      CameraAlignment.stereo_status(0) -> ('rejeitada', 'tabuleiro gravado 7x5
+      != 5x3 cantos da placa atual -> RECALIBRE')      [idem para o indice 1]
+    ou seja: as duas calibracoes novinhas ficariam FORA do ar (sem overlay e sem
+    triangulacao) e a mensagem mandaria "RECALIBRE" o que acabou de ser
+    calibrado.
+  - E o modelo congelado do Kinect caiu junto: `carrega_intrinsecas_kinect()`
+    recusou o `kinect_intrinsics.npz` (gravado 30/09 com 5x3 @ 57 mm) com
+    "modelo do Kinect gravado com tabuleiro 5x3 != 7x5 da placa atual". E' o que
+    explica os DOIS npz de hoje trazerem `kinect_intrinsics_source: 'sessao'`:
+    cada sessao voltou a ESTIMAR o Kinect -- exatamente o bug que o congelamento
+    existe para matar. Spread entre os dois modelos de hoje (mesma bancada, mesma
+    placa): fx 1062,5 x 1101,0 | cx 1022,2 x 1002,4 | cy 621,8 x 560,8 = dezenas
+    de px na janela de trabalho.
+SOLUCAO
+  - `kinect_imu_groundtruth.CHECKERBOARD_SIZE/SQUARE_SIZE_M` -> (7, 5)/0,045,
+    com o historico das placas (4x3/52 -> 5x3/52 -> 5x3/57 -> 7x5/45), a
+    geometria da placa nova e o sintoma medido no comentario. As duas copias das
+    constantes continuam (importar `stereo_calibration` na biblioteca traria
+    pykinect2 para quem so' quer o Kinect), mas agora existe TRAVA:
+  - `test_intrinsecas_kinect.py`: guarda de MIGRACAO -- a placa REAL declarada
+    nos dois modulos tem de casar (cantos e quadrado) e a declaracao interna da
+    cena (COLS/ROWS x CHECKERBOARD_SIZE) tem de ser coerente.
+  - `test_cameras_multi.py`: caso 5b2 novo -- npz com OUTRA GEOMETRIA de cantos
+    (11x7) tem de ser recusado apontando o TABULEIRO, sem falar de RMS. O caso
+    5b (quadrado antigo) passou a usar a geometria de HOJE de proposito: assim
+    cada caso mede um lado da recusa (QUADRADO x CANTOS). 12/12.
+  - Backup do modelo paliativo ANTES de qualquer sobrescrita:
+    `_cleanup\kinect_intrinsics_20260930_paliativo_5x3_57mm.npz` (o paliativo tem
+    os k2/k3 degenerados que a auditoria ja' apontava; e' com ele que se
+    quantifica o ganho do modelo novo).
+ACHADO 2 - a cena do `test_intrinsecas_kinect.py` tinha de virar FIXTURE
+  - Ao trocar a placa o teste passou a FALHAR (e ja' falhava antes destas
+    mudancas): primeiro "o modelo do Kinect da sessao deveria divergir do
+    verdadeiro: 2,8-5,0 px", depois "overlay congelado 2,7 px vs antigo 3,5 px" --
+    a armadilha que o teste demonstra tinha desaparecido.
+  - Por que: o que condiciona o modelo do Kinect NAO e' so' o span. MEDIDO com a
+    placa de hoje na MESMA fracao de quadro (11-12%, o span da medicao):
+      cena 7x5 @ 45 mm -> modelo da sessao 1,5 px fora do verdadeiro | overlay
+                          9,6 px (antigo) contra 2,7 px (congelado)
+      cena 5x3 @ 57 mm -> modelo da sessao 14,4 px fora      | overlay 11,8 px
+                          contra 3,9 px (os numeros registrados em 30/09)
+    Sao 35 cantos contra 15 (70 equacoes contra 30) com o mesmo ruido de 0,5 px
+    por canto. Afastar o VOLUME para compensar o span tambem nao reproduz (da'
+    5,0 px de divergencia): o Kinect e' insensivel a escala, mas a auxiliar fica
+    no mesmo ponto e ve outra imagem.
+  - Solucao: a cena virou FIXTURE da medicao de 30/09 (`CHECKERBOARD_CENA =
+    (5, 3) @ 57 mm`) e as globais do modulo sao ajustadas para ela enquanto o
+    teste roda (`canonical_order`/`symmetry_indices`/`board_object_points` leem
+    exatamente essas globais), com a placa REAL guardada em `PLACA_REAL` para a
+    guarda de migracao e RESTAURADA no fim. O print do teste diz as duas placas.
+VERIFICACAO
+  - `test_intrinsecas_kinect.py` OK com os numeros de 30/09 (overlay 3,9 x 11,8
+    px; modelo da sessao 14,4 px fora do verdadeiro) e a guarda conferindo a
+    placa real; `test_cameras_multi.py` 12/12; `test_diagnostico_calibracao.py`
+    6/6.
+  - `CameraAlignment.stereo_status` nas DUAS auxiliares: 'aceita' (RMS 1,39 e
+    1,01 px, limite 2 px) -- era 'rejeitada' por placa antes da correcao.
+  - Suite completa: 35/35 (`tools\roda_testes.py`).
+PENDENTE (usuario, bancada) - CALIBRAR O KINECT SOZINHO COM A PLACA NOVA
+  - `python stereo_calibration.py --salvar-intrinsecas-kinect` (o programa avisa
+    "Modelo do Kinect: SEM modelo congelado (... != ...)" e recomenda exatamente
+    isso; uma sessao por auxiliar, ESC passa para a proxima).
+  - Geometria: com a placa nova o Kinect chega ao span minimo de 35% a ~0,44 m do
+    tabuleiro (40% a ~0,39 m; 30% a 0,53 m) -- e a auxiliar enxerga o tabuleiro a
+    0,39-0,45 m com folga (>=30% da diagonal DELA, contra o minimo de 8%). Passo
+    minimo entre poses = 30% do span (~256 px a 0,40 m = ~10 cm de deslocamento).
+  - Poses: junte 15-20 (o minimo para GRAVAR e' 12, e a limpeza de outliers
+    descarta as piores), variando posicao (~10 cm), distancia (0,39-0,45 m) e
+    inclinacao (+-20 graus); o programa recusa pose repetida dizendo a separacao
+    medida em px.
+  - Portoes ao gravar (cada um nega com o numero): >= 12 poses, span MEDIANO
+    >= 35% da diagonal e RMS individual do Kinect <= 0,6 px.
+  - Depois: `python tools\diagnostico_calibracao.py` (auditoria offline contra o
+    backup paliativo, com a divergencia em px na janela de trabalho) e
+    `python stereo_calibration.py` (rotina: as duas auxiliares reusam o congelado
+    e gravam `kinect_intrinsics_source: 'congelado'`, com `kinect_deviation_px`).
+  - ATENCAO (comportamento atual, nao mexido nesta sessao): com mais de uma
+    auxiliar na mesma rodada, `--salvar-intrinsecas-kinect` grava o modelo a CADA
+    sessao que passa nos portoes -- o arquivo fica com o da ULTIMA. Para
+    determinismo, rode `--aux-index 0` (uma sessao) ou compare os dois modelos
+    com a auditoria.
+
+ 36. O CONGELAMENTO ESTAVA MORTO POR ARQUITETURA: A PLACA NOVA DERRUBOU O
+     MODELO CONGELADO, O DIAGNOSTICO NAO DIZIA ISSO, E O ARRANJO KINECT-ONLY
+     ENTROU NO REPOSITORIO
+--------------------------------------------------------------------------------
+PROBLEMA (tudo MEDIDO com a auditoria offline, sem hardware)
+  - A auditoria dos DOIS npz gravados em 01/10 (13:04 SIGMA-W780M e 13:05 Trust)
+    mostrou que CADA UM re-estimou o Kinect: fx 1062,5 x 1101,0 -> 68,8 px
+    (mediana) de divergencia entre dois arquivos da MESMA bancada, com RMS de
+    1,39 e 1,01 px. O congelamento existe exatamente para matar isso.
+  - Por que ele nao entrou: `carrega_intrinsecas_kinect()` RECUSAVA o
+    `kinect_intrinsics.npz` (paliativo de 30/09, gravado com 5x3 @ 57 mm) POR
+    PLACA, porque a placa de hoje e' 7x5 @ 45 mm. Ou seja: o sistema de
+    congelamento se DESARMAVA ao trocar de placa -- e trocar a placa era o
+    trabalho daquele dia.
+  - E o `tools\diagnostico_calibracao.py` anunciava "modelo congelado do Kinect:
+    SIM (kinect_intrinsics.npz) | RMS 0.19 px | ...": ele conferia se o ARQUIVO
+    existia, nunca se a calibracao iria USA-LO. O operador lia SIM; por dentro,
+    cada sessao re-estimava o Kinect, calada.
+  - Terceiro defeito, medido em 30/09 e aberto desde entao: `refina_cantos`
+    chamava `cv2.cornerSubPix` sem conferir a borda. No OpenCV 5 deste venv um
+    canto a menos de meia janela da borda LEVANTA ("initial corner is outside the
+    image") e a excecao encerrava a SESSAO DE CAPTURA INTEIRA, sem mensagem
+    final. E' precisamente o quadro que o arranjo Kinect-only pede ao operador
+    (tabuleiro nas BORDAS e nos CANTOS do quadro: e' o que ensina a distorcao).
+SOLUCAO 1 - UM portao so', usado ao GRAVAR e ao LER
+  - `stereo_calibration.portoes_do_modelo_kinect(poses, span, rms=None)` (funcao
+    PURA) e `aceita_modelo_kinect(poses, span, rms)` (campos obrigatorios +
+    portoes). `talvez_salvar_intrinsecas_kinect`, `carrega_intrinsecas_kinect` e
+    o arranjo novo passam pelas MESMAS regras: se divergissem, existiria o
+    arquivo que o programa escreve e depois recusa -- e o Kinect voltaria a ser
+    re-estimado por sessao, calado.
+  - A PLACA deixou de decidir: virou `info["aviso_placa"]` na leitura (as
+    intrinsecas sao propriedade da CAMERA; trocar o tabuleiro impresso nao muda
+    fx/fy/cx/cy de ninguem). Quem decide e' poses + span + RMS -- e' o SPAN, nao
+    a placa, que diz se um modelo do Kinect presta. O paliativo continua
+    recusado, mas pelo motivo CERTO: nao registra `poses` nem `span` (nasceu de
+    um caminho que nao media cobertura nenhuma).
+  - `salva_intrinsecas_kinect(..., caminho=None)`: o destino e' parametro, para o
+    arranjo novo poder ensaiar num arquivo de teste sem tocar no modelo bom.
+  - `resolve_modelo_kinect(obj, kin, size)` e `span_do_tabuleiro(...)`: como o
+    modelo e' calculado/medido, num lugar so'.
+
+
+=  37. AS MAOS TROCADAS NUMA AUXILIAR: O ROTULO DO MEDIAPIPE NAO E' A VERDADE -- A
+      GEOMETRIA E'; O ARBITRO QUE DECIDE E APRENDE, E O PROBE QUE PROVA
+--------------------------------------------------------------------------------
+PROBLEMA (relato da bancada, 05/10/2026)
+  - Com as DUAS maos no quadro, o rotulo de lateralidade do MediaPipe concordava
+    com o Kinect numa auxiliar e vinha INVERTIDO na outra. Nao era estetica: o
+    groundtruth casa as maos PELO LADO (right -> IMU 4210, left -> 4211, e o mesmo
+    lado define overlay e triangulacao), entao a camera invertida desenhava o
+    esqueleto vermelho na mao errada, triangulava com os pixels da OUTRA mao e
+    alimentava o lado errado com o IMU da luva errada -- sem nada avisar.
+CAUSA (medida, nao suposta)
+  - O rotulo do MediaPipe e' uma classificacao da APARENCIA que assume imagem
+    ESPELHADA (convencao "selfie"). O pipeline espelha TODAS as auxiliares com UM
+    unico `AUXILIARY_MIRROR_HORIZONTAL=True` (a mesma convencao com que o stereo
+    e' gravado) e o Kinect leva `MEDIAPIPE_KINECT_HANDEDNESS_FLIP=True` porque o
+    RGB dele NAO e' espelhado. Com webcams de MODELOS DIFERENTES (nesta bancada:
+    0 = SIGMA-W780M e 1 = Trust USB Camera) o driver de uma delas pode JA'
+    entregar o fluxo espelhado: o nosso flip entao DESespelha, a premissa do
+    MediaPipe cai e SO' aquela camera sai trocada.
+  - O codigo antigo nao tinha como perceber: `detect_auxiliary_hands*` passava
+    `flip=False` FIXO, com um comentario afirmando que "o rotulo ja' corresponde a
+    mao fisica". Uma premissa certa virou bug mudo quando o hardware mudou.
+  - MEDIDO ao vivo em 05/10/2026 (3 rodadas de `tools\probe_lateralidade.py`, com
+    o Kinect vendo as maos): na camera 0 (SIGMA-W780M) os 43 frames em que a
+    geometria decidiu apontaram o rotulo ao contrario -- e ZERO concordaram. Nas
+    rodadas de 2 maos a projecao da mao ficou a ~185 px (limite 120 px), o arbitro
+    recusou decidir e DISSE o motivo; nas de 1 mao (a mesma mao nas duas cameras)
+    o par casou a <1 px e a inversao apareceu em 100% dos vereditos.
+SOLUCAO 1 - O LADO PASSOU A SER MEDIDO: `ArbitroDeLateralidade`
+  - Decide o lado pela GEOMETRIA, nao pela aparencia: projeta a PALMA (no' 9, o
+    mesmo ponto que o resto do modulo usa como "a mao esta' aqui") de cada
+    deteccao auxiliar no RGB do Kinect com a homografia no-a-no da mao DAQUELA
+    camera (`projeta_mao_aux_no_kinect`) e pergunta qual mao do Kinect -- que tem
+    o punho em 3D -- esta' ali.
+  - Com duas maos nas duas cameras testa as DUAS atribuicoes e exige MARGEM
+    (`ARBITRO_MIN_MARGEM_PX=40`); projecao acima de `ARBITRO_MAX_DIST_PX=120` nao
+    e' casamento. Sem decisao o rotulo e' mantido e o relatorio diz POR QUE
+    (`detalhe`: margem/projecao/lado repetido) -- "INDECISO" sozinho nao diria se o
+    operador precisa separar as maos ou recalibrar a mao daquela camera.
+  - UM LADO NAO PODE APARECER DUAS VEZES na mesma camera (defeito REAL pego no
+    teste ao vivo: auxiliar com 2 maos e Kinect com 1, a correcao deixava as duas
+    no mesmo lado e o dicionario por lado descartaria uma em silencio) -> nesse
+    caso a atribuicao INTEIRA e' descartada e o frame nao vota.
+  - Kinect cego (o caso em que o PAR de auxiliares substitui o Kinect) nao tem
+    verdade para comparar: cai no rotulo ja' corrigido pelo que foi aprendido e o
+    relatorio DECLARA que a fonte foi o rotulo.
+SOLUCAO 2 - A INVERSAO E' POR CAMERA, APRENDIDA E GRAVADA
+  - `aux_handedness_flip.json` + `aux_handedness_flip` / `set_aux_handedness_flip`
+    / `limpa_aux_handedness_flip` (kinect_imu_groundtruth.py): a inversao vale por
+    INDICE OpenCV, persiste e e' lida por TODOS os programas -- inclusive
+    protocolo/sand/demo, que so' tem o rotulo.
+  - Aprendizado com consenso: voto por FRAME (>= 20 vereditos e >= 90% pedindo a
+    mesma correcao), motivo escrito no arquivo, e CURA automatica (uma inversao
+    gravada que deixe de se confirmar -- webcam em outra porta USB, driver
+    reinstalado -- e' DESFEITA sozinha). Confirmar NAO reescreve o arquivo.
+  - Arranque barulhento onde tinha de ser: o tool imprime a inversao vigente ao
+    abrir e mostra a linha "Lateralidade aux N" no video (medido x acreditado).
+  - Ordem CANONICA da lista por camera (`ordena_maos_por_lado`: right, left, sem
+    rotulo, ordenacao estavel): "mao 1" e "mao 2" passam a significar a MESMA
+    coisa em todas as cameras (antes era a ordem de ESCORE do MediaPipe, que muda
+    por camera e por frame -- o que tornava a conferencia visual impossivel).
+SOLUCAO 3 - FERRAMENTAS
+  - `tools\probe_lateralidade.py` (NOVO; ao vivo, sem janelas): diz por camera
+    CERTO/INVERTIDO/INDECISO + o MOTIVO; avisa quando falta a homografia da mao
+    daquela camera; `--gravar` fixa a correcao (sem ele NAO escreve nada).
+  - `--aux-flip-lateralidade N` no `tools\kinect_groundtruth_tool.py`: forca a
+    inversao de uma camera (ou 'limpar' para esquecer tudo), gravando o motivo.
+VERIFICACAO
+  - `test_lateralidade_maos.py` (NOVO, 10 casos): o BUG com numero (o casamento
+    por rotulo erra 672 px na camera invertida), o conserto pela geometria, o
+    aprendizado (grava/confirma/cura), Kinect cego, maos ambiguas (nao decide),
+    lado repetido (descarta e nao vota) e degradacoes (sem homografia, sem
+    Kinect, entrada vazia, sem rotulo) sem excecao e sem troca por conta propria.
+  - `--aux-flip-lateralidade` exercitado fora do hardware: forcar ('2', 'aux1; 0'),
+    recusar ('abc', '2x', ','), limpar (memoria + arquivo) e nao tocar no json
+    real quando nao ha' pedido.
+  - Suite completa: 37/37 menos `test_freeze_kinect_direto.py`, que FALHA por
+    motivo alheio a esta mudanca (portao de separacao de poses do arranjo
+    Kinect-only; ja' falhava antes desta sessao).
+  - Gravado na bancada: `aux_handedness_flip.json` = {"0": true} (SIGMA-W780M),
+    com a contagem de 43/43 no campo "motivo" e o comando de desfazer.
+PENDENTE (usuario, bancada)
+  - Reconferir com as duas maos BEM separadas (~40 cm):
+    `python tools\probe_lateralidade.py --segundos 40` (com `--gravar` se algo
+    mudar). Se aparecer "projecao a ~185 px", a homografia da mao daquela camera
+    esta' velha -> tecla H no tool com ela ATIVA.
+  - A camera 1 (Trust USB Camera) esta' SEM homografia da mao
+    (`hand_landmark_calibration_aux1.npz` ausente): nela a lateralidade fica no
+    rotulo. Se ela for usada como auxiliar, calibre (tecla H).
+  - Guardar `aux_handedness_flip.json` no repositorio: ele e' a prova de QUAL
+    camera desta bancada precisou de inversao (e o modelo do driver).
+
+
+===============================================================================
  FIM DO DOCUMENTO (atualizar ao final de cada sessao de desenvolvimento)
 ================================================================================
+SOLUCAO 2 - o arranjo Kinect-only entrou no repositorio (`freeze_kinect_direto.py`)
+  - Era o arquivo de FORA do repositorio do item 33 (preservado em `.cline\...`);
+    agora e' ferramenta do projeto, com a mesma maquinaria
+    (`abre_kinect`/`find_corners`/`canonical_order`/`board_span`) e SEM copia de
+    constante: tudo vem de `stereo_calibration`, inclusive os overrides
+    `--checkerboard/--quadrado`, que passaram a sair de `aplica_tabuleiro` (que o
+    `stereo_calibration.main` tambem usa agora -- era analise de texto duplicada).
+  - Uma camera so', 12+ poses a 0,30-0,45 m, portoes iguais aos da gravacao.
+    Extras: `--sem-janela` (SSH/CI, com teto de tempo), `--saida` (ensaiar sem
+    tocar no modelo bom), `--max-poses` e gravacao PARCIAL -- o modelo e' gravado
+    assim que os portoes passam e cada melhora de RMS regrava, entao ESC (ou uma
+    queda) nao perde o trabalho.
+  - Portao de CAPTURA novo, puro e provado sem hardware
+    (`aceita_pose_kinect`): span minimo 8%, span MAXIMO 60% (acima disso o
+    tabuleiro esta' a <0,28 m, o RGB fica fora de foco e ele domina o ajuste de
+    fx: MEDIDO 77% = ~0,16 m) e separacao >= 30% do span de TODAS as poses ja'
+    coletadas.
+  - `deslocamento_entre(cantos, anteriores)`: sem o `pair_planar_error` do par,
+    NADA impedia entrar amostra borrada. Agora o movimento medio dos cantos
+    (> 3 px entre duas deteccoes seguidas, contra ~0,7 px de ruido de deteccao
+    medido) zera o cronometro de 2 s -- o tabuleiro na mao deixa de ser amostra.
+  - A janela mostra o span AO VIVO (com a meta), o RMS corrente e QUAL portao
+    falta, com o numero medido; a orientacao diz 0,30-0,45 m, bordas/cantos,
+    inclinacao 20-45 graus e luz difusa.
+SOLUCAO 3 - a guarda de borda do `refina_cantos`
+  - Os cantos COM folga (>= meia janela 11x11 + 1 px) seguem sendo refinados; os
+    que estao colados na borda ficam com o valor do detector (que ja' entrega
+    sub-pixel); `except cv2.error` como rede final. O pior caso deixou de ser "a
+    sessao morreu" e passou a ser "esta amostra entrou com um canto mais
+    ruidoso", que a limpeza de outliers do solver trata.
+SOLUCAO 4 - o diagnostico diz o que IMPORTA
+  - `tools\diagnostico_calibracao.py.veredito_congelado` usa
+    `stereo_calibration.aceita_modelo_kinect` (import TARDIO, com a RAIZ no
+    sys.path): o relatorio passa a dizer "a CALIBRACAO ACEITA este arquivo" ou
+    "a CALIBRACAO RECUSA este arquivo: <motivo medido>", e a recusa entra na
+    lista de ALERTAS (o "COMO CONSERTAR" aparece). O passo 1 do conserto passou a
+    apontar `freeze_kinect_direto.py` e a dizer por que o caminho do par nao
+    fecha o span.
+  - Achado durante a execucao real (nao no teste): rodado como
+    `python tools\diagnostico_calibracao.py`, o import falhava porque o
+    `sys.path[0]` e' `tools\`. O teste NAO pegava (roda da raiz). Corrigido com
+    `RAIZ` no path -- e o comentario registra que e' um erro que so' aparece na
+    maquina de verdade.
+VERIFICACAO
+  - `test_freeze_kinect_direto.py` (NOVO, sem hardware): cena sintetica do
+    tabuleiro REAL (7x5 @ 45 mm) vista pelo Kinect com ruido de 0,4 px.
+      arranjo KINECT-ONLY (16 poses, 0,30-0,44 m, span mediano 36%): GRAVA,
+      RMS 0,549 px, e o modelo fica a 1,56 px (pior 1,76) do VERDADEIRO;
+      distancia que o PAR impoe (1,25-1,45 m, span mediano 12% -- os mesmos
+      11-13% medidos na bancada): o MESMO programa RECUSA citando o span,
+      NAO escreve arquivo nenhum, e o modelo que sairia dali (estimativa da
+      sessao) fica a 10,29 px = 6,6x o desvio do arranjo novo.
+    Provei tambem: as tres recusas do portao de captura com o motivo e o numero,
+    o chao de captura (8%) x portao do modelo (35%) serem coisas diferentes, a
+    medida de movimento e a AUSENCIA de copia de constante no modulo novo.
+  - `test_intrinsecas_kinect.py`: o round-trip passou a exigir ACEITACAO com
+    AVISO por placa (o arquivo de outra placa era recusado) e RECUSA por
+    cobertura, por poses de menos e por RMS alto.
+  - `test_diagnostico_calibracao.py`: o veredito do diagnostico tem de ser o da
+    calibracao -- RECUSADO (com motivo) para span 12% e para o paliativo sem
+    span; ACEITA para o arquivo bom.
+  - `test_deteccao_cascata.py` 25/24: a guarda de borda (o cv2 DESTE venv
+    levantando com canto fora do quadro, o canto sem folga voltando intacto e o
+    refino dos OUTROS identico ao de sem a borda).
+  - Auditoria REAL da pasta (o que o usuario rodou): o paliativo aparece agora
+    como "modelo congelado do Kinect: SIM (...) | ! a CALIBRACAO RECUSA este
+    arquivo: nao registra poses nem span: ...".
+  - Suite completa: 36/36 (`tools\roda_testes.py`).
+PENDENTE (usuario, bancada) - na ordem
+  - `python freeze_kinect_direto.py` no PC da bancada: tabuleiro a 0,30-0,45 m,
+    passando por BORDAS e CANTOS do quadro, variando inclinacao e distancia. O
+    programa diz o span ao vivo, o RMS e o que falta; ele grava sozinho assim que
+    os portoes passarem, e ESC encerra mantendo o que ja' foi gravado.
+  - `python stereo_calibration.py`: recalibrar as DUAS auxiliares contra o
+    congelado (agora ACEITO) -- os npz novos devem sair com
+    `kinect_intrinsics_source: 'congelado'` e `kinect_deviation_px` pequeno.
+  - `python tools\diagnostico_calibracao.py`: o alerta do congelado tem de sumir,
+    a divergencia entre os dois npz tem de cair das dezenas de px para a casa
+    de poucos px, e so' entao vale conferir o overlay com a tecla T.
+  - NAO apagar o paliativo de 30/09: e' a referencia contra a qual o ganho do
+    modelo novo se mede (a auditoria sabe compara-lo).
+
+
+--------------------------------------------------------------------------------
+ 37. O FREEZE DIZIA "MODELO GRAVADO" COM O PORTAO REPROVANDO: O `False` DA
+     RECUSA PASSAVA POR SUCESSO (BUG DA LINHA 319), E A JANELA NAO DIZIA A
+     DISTANCIA NEM ONDE AS POSES JA' ESTAVAM
+--------------------------------------------------------------------------------
+PROBLEMA (MEDIDO na bancada, 05/10/2026)
+  - `python freeze_kinect_direto.py` anunciou "PRONTO"/"MODELO GRAVADO" e o
+    arquivo de destino NUNCA existiu: o tabuleiro estava a ~1,2 m (span 13-14%
+    da diagonal, contra os 35% do portao) e a pose 1 foi recusada. Quem
+    descobriu isso foi a auditoria offline, nao o programa.
+  - Causa exata, linha 319: `if gravou_agora is not None:`. `tenta_gravar`
+    devolve False quando o portao RECUSA a gravacao -- e False tambem passa
+    nesse teste. O loop marcava gravou=True e, com `--sem-janela`, saia na
+    PRIMEIRA pose recusada dizendo que tinha gravado.
+  - A recusa ficava MUDA na tela: o motivo so' era impresso dentro do ramo
+    `if rms is not None`, e os portoes de span/separacao reprovam ANTES do
+    solve -- justamente a recusa por distancia errada nao aparecia no console.
+  - Terceiro defeito, do mesmo tipo: `melhor_rms` nascia None, entao uma
+    segunda execucao nao sabia que o disco ja' tinha modelo com RMS melhor (ela
+    reescrevia o arquivo com um modelo pior).
+SOLUCAO 1 - a gravacao passa a dizer a verdade (freeze_kinect_direto.py)
+  - `if gravou_agora is not False:` -- True grava (e guarda o melhor_rms),
+    None = "os portoes passam e o arquivo em disco ja' e' o melhor" (nao
+    reescreve), False = recusa: o loop SEGUE tentando as proximas poses.
+  - O motivo do portao entra na tela SEMPRE (tambem quando o solve nem rodou),
+    com a frase certa em cada caso -- "(modelo gravado agora)" x "(o modelo
+    JA' esta' gravado. Mais poses podem melhorar o RMS)" --, e o `main()` troca
+    "PRONTO" por "NADA GRAVADO: <motivo>" mais "o arquivo de destino NAO foi
+    tocado", com o item que faltou na linha de estado.
+  - `melhor_rms` (e o fx) passam a vir do DISCO: `modelo_em_disco(caminho)` le'
+    o rms/fx do congelado que ja' esta' gravado e devolve (None, None) quando o
+    arquivo e' recusado pelos MESMOS portoes ou nao existe -- o paliativo de
+    30/09 (sem poses nem span) nao pode travar um modelo novo.
+SOLUCAO 2 - a janela diz a distancia e onde as poses estao
+  - `distancia_aproximada_m(fracao, kinect_size, fx)`: pinhole
+    Z = fx x diagonal_da_placa / span_px. Com a placa 7x5 @ 45 mm a diagonal e'
+    0,3245 m, entao Z = 0,159 / fracao: aos 35% (portao do modelo) da' ~0,45 m
+    e aos 60% (teto do portao) ~0,27 m. O fx vem do modelo congelado quando ele
+    e' aceito e de FX_NOMINAL_PX (1081,37 px, medido em 30/09) quando nao ha'
+    modelo. Vira o campo "~0,44 m" da linha de estado e do print de cada pose
+    aceita: a bancada sabe a distancia sem fita metrica.
+  - `desenha_marcadores`: X verde no centro de CADA pose ja' aceita da sessao,
+    anel laranja de `raio = deslocamento_minimo x span` px (o proprio portao de
+    separacao DESENHADO: dentro do anel a pose seria "quase igual" e
+    reprovaria), circulo branco no centro do tabuleiro AGORA e a legenda. O npz
+    congelado nao guarda coordenadas por pose, entao o mapa e' da SESSAO -- e'
+    o que permite continuar de onde parou sem repetir pose.
+  - `linha_de_status` ganhou o campo da distancia; o tamanho da placa vem de
+    `placa_diagonal_m()` (que deriva de `stereo_calibration`): nenhuma copia de
+    constante, guarda que esta suite ja' travava e continua travando.
+SOLUCAO 3 - o loop INTEIRO da captura roda sem hardware
+  - `_KinectFalso`: fita roteirizada de cantos que o `find_corners` consome;
+    cada pose aparece 2x (a 1a deteccao zera o cronometro de estabilidade com
+    movimento > 3 px, a 2a e' aceita -- o ciclo de quem segura o tabuleiro).
+    `DETECTION_INTERVAL_S=0` e `STABLE_CAPTURE_SECONDS=0` (restaurados no
+    finally) tiram o relogio do caminho: testa-se o portao e a gravacao, nao o
+    cronometro. `_roda_coleta` chama `fk.coleta_poses` DE VERDADE, com os
+    mesmos argumentos que o `main()` usa.
+  - `_cena_grade` monta a cena deterministica em px (colunas 400/670/940/1210/
+    1480, linhas 270/540/810 num quadro 960x540, z = 0,43 m, giros de +-12
+    graus, passo 270 px >= anel maximo 262 px) com o tvec corrigido pela
+    projecao CENTRADA: a origem de `board_object_points` e' um CANTO da placa e
+    o tvec ingenuo joga o tabuleiro para o quadrante sudeste (silhueta fora do
+    quadro, portao reprovando metade da grade). A distorcao ainda desloca o
+    centro +-27 px, entao o tvec e' ITERADO ate' o centro cair a <0,5 px do
+    alvo. Resultado: 14 poses visiveis, span 33,9-39,7% (mediana 36,5%).
+  - Por que nao aleatorio: MEDIDO, a cena aleatoria na distancia certa fechava
+    no maximo 6-13 de 30 candidatas -- o anel de separacao (0,30 x span; 350 px
+    a 0,30 m) recusa o que se parece demais e o quadro do Kinect e' finito.
+  - Cenario do GRAVA (`_coleta_grava_de_verdade`), a linha da bancada: 12 poses,
+    span 36%, RMS 0,275 px, o arquivo e' lido de volta por
+    `carrega_intrinsecas_kinect` (12 poses, span 36%, aviso de placa vazio) e o
+    modelo sai a 0,64 px (mediana) do VERDADEIRO. A coleta encerra na 12a pose
+    por causa do `sair_ao_gravar`/`--sem-janela` -- exatamente o caminho em que
+    o bug mentia.
+  - Cenario da RECUSA (`_coleta_recusa_honestamente`), o da bancada: 19 poses a
+    12% de span -> gravou=False, rms=None e o arquivo NUNCA nasce. Reinstalando
+    o bug (`is not None`) a suite FALHA e o console mostra a mentira "(o modelo
+    JA' esta' gravado)" na pose 1 -- conferido rodando com o bug de volta.
+  - Overlay como FUNCAO PURA: 35% -> 0,46 m, 60% -> 0,27 m, fx trocado muda a
+    estimativa, NaN para span 0/None, anel 0,30 x 800 = 240 px, centros = media
+    dos cantos, e os pixels do X/anel/circulo-atual conferidos na imagem
+    960x540 (sem pose atual nao ha' anel).
+VERIFICACAO
+  - `test_freeze_kinect_direto.py`: OK -- e' a suite que FALHAVA no item 36
+    ("portao de separacao de poses do arranjo Kinect-only"); o que faltava era
+    justamente uma cena que empacota 12 poses de verdade.
+  - Suite completa (`tools\roda_testes.py`): 37 suites, 0 falhas.
+  - BANCADA, ao vivo e sem tocar no modelo (`--sem-janela --limite-s 6 --saida
+    _ensaio.npz`, tabuleiro a ~1,16 m): "Pose 1 aceita: span 14%, inclinacao
+    1.03, ~1.16 m" -> "1/12 poses" -> "NADA GRAVADO: teto de tempo da captura
+    atingido" + "O arquivo de destino NAO foi tocado", e `_ensaio.npz` nao
+    existe. Com o bug, a MESMA execucao dizia PRONTO.
+  - `kinect_intrinsics.npz` continua o PALIATIVO de 30/09 (5x3 @ 57 mm,
+    `frozen_at` = "PALIATIVO..."): nenhum npz de 05/10 o substituiu, e os dois
+    npz de 05/10 (10:43 e 10:46) sairam com `kinect_intrinsics_source: 'sessao'`
+    e divergem 29,5 px entre si -- a razao de a captura ter de ser refeita.
+PENDENTE (usuario, bancada) - nesta ordem
+  - `python freeze_kinect_direto.py` (COM janela): tabuleiro a 0,30-0,45 m -- a
+    linha de estado tem de marcar ~0,44 m e o anel laranja mostra o que se
+    pareceria com uma pose ja' aceita (a X verde). Gravar so' quando aparecer
+    MODELO GRAVADO, e conferir a data do npz.
+  - `python stereo_calibration.py` nas DUAS auxiliares: os npz novos tem de
+    sair com `kinect_intrinsics_source: 'congelado'`.
+  - `python tools\diagnostico_calibracao.py`: a divergencia entre os dois npz
+    tem de cair das dezenas de px para a casa de poucos px.
+  - `python tools\kinect_groundtruth_tool.py` (tecla T a 0,6/0,9/1,3 m):
+    conferir se a distancia lida acompanha a fita e se o overlay nao pula.
+
+
+--------------------------------------------------------------------------------
+ 38. A CAPTURA DE 05/10/2026 NAO GRAVOU POR 0,1%: O PORTAO OLHA O SPAN MEDIANO,
+     O CONSOLE NUNCA MOSTROU ESSE NUMERO, A ORIENTACAO MANDAVA IR A 0,5 m E O
+     MOTIVO FINAL IMPRESSO NEM ERA O MOTIVO
+--------------------------------------------------------------------------------
+PROBLEMA (MEDIDO na bancada, 05/10/2026, 2a tentativa -- 18 poses aceitas)
+  - O usuario coletou 18 poses (TODAS aceitas pelo portao de captura) e o
+    programa terminou com "NADA GRAVADO: tabuleiro nao visto no Kinect". Nada
+    foi gravado.
+  - Span por pose, na ordem em que entrou: 35,38,34,29,29,32,36,38,38,35,34,
+    34,36,42,20,19,18,18%. O portao do modelo olha o span MEDIANO (= 34%, logo
+    abaixo dos 35%), NAO a melhor pose: 12 poses boas nao salvam 6 poses de
+    0,55-0,89 m, que o portao de CAPTURA aceitou de proposito (uma pose
+    distante ainda ajuda na DISTORCAO -- ver `aceita_pose_kinect`).
+  - A mensagem da recusa imprimia "o tabuleiro ocupou 35% da diagonal (minimo
+    35%)": o `%.0f` do motivo arredonda 34,9% para "35%" e a bancada so' podia
+    concluir que o programa estava quebrado. O numero que DECIDE (o mediano)
+    nunca apareceu -- nem no console, nem na janela.
+  - A orientacao do proprio programa mandava "VARIE A DISTANCIA (0,3 A 0,5 m)".
+    A 0,50 m o span e' ~32% e a 0,45 m ele fica EXATAMENTE no portao (35,0%):
+    seguir a instrucao era o caminho para nao gravar.
+  - E o motivo final reportado era o ultimo estado do FRAME ("tabuleiro nao
+    visto no Kinect"), nao a recusa do portao: o operador perdeu a unica pista
+    que dizia o que consertar.
+SOLUCAO 1 - o console e a janela passam a mostrar o numero que DECIDE
+  - `spans_das_poses` (fracao da diagonal de CADA pose), `resumo_do_span`
+    (mediana + quantas cumprem a meta -- a mediana vem do MESMO
+    `sc.span_do_tabuleiro` que o portao usa) e `texto_do_span` ("span mediano
+    34.9% (meta 35.0%): 9/18 poses cumprem"), com UMA casa decimal de proposito.
+  - Cada pose aceita imprime "... | span mediano X,Y% (meta 35,0%): n/N poses
+    cumprem", e a recusa sai com esse mediano no colchete.
+  - `linha_de_status` (janela) ganhou a mesma contagem (n/N ok) e 1 casa decimal;
+    a segunda linha da janela avisa que UMA pose a 0,5-0,8 m derruba o mediano.
+SOLUCAO 2 - aviso NA HORA da pose fraca (`aviso_span_fraco`)
+  - Pose abaixo da meta entra com "ATENCAO: pose a 21.3% (abaixo da meta 35.0%):
+    o portao do modelo olha o MEDIANO das 12 poses (33.8%, 6 cumprem a meta) e
+    esta pose o PUXA PARA BAIXO -- volte para 0,30-0,45 m". Era essa falta de
+    aviso que deixava 6 poses frageis entrarem sem ninguem ver.
+SOLUCAO 3 - o motivo final e' o do PORTAO, nao o do frame (`motivo_do_modelo`)
+  - `coleta_poses` guarda a ultima recusa do portao do modelo e a devolve no
+    lugar do estado do frame; quando GRAVA, o motivo volta a ser o da gravacao
+    (ha' arquivo; o "gravado" do teste continua intacto). O fim da bancada vira
+    "NADA GRAVADO: o tabuleiro ocupou 34% ... [span mediano 34.9% (meta 35.0%):
+    9/18 poses cumprem]".
+SOLUCAO 4 - a orientacao parou de mandar para o lado errado
+  - "VARIE A DISTANCIA (0,30 a 0,42 m)" e "mire 0,35-0,40 m": a 0,45 m o span
+    fica exatamente no portao. O docstring, a janela e o texto de fim repetem
+    que quem decide e' o MEDIANO, nao a melhor pose.
+VERIFICACAO
+  - `test_freeze_kinect_direto.py` (dois casos novos, sem hardware):
+    * 6c `_resumo_do_span`: `spans_das_poses` == `sc.board_span`/diagonal por
+      pose, mediana == `sc.span_do_tabuleiro`, contagem ok/total, texto com 1
+      casa decimal, caso VAZIO (0 poses => sem texto e mediana 0 -- nada de
+      mediana mentirosa), `motivo_com_span` (motivo + mediano), o aviso da pose
+      fraca (e o silencio para pose boa, `None` e NaN) e a linha de estado.
+    * 9 `_coleta_derruba_a_mediana`: o fracasso da bancada com FakeKinect --
+      grade a 0,45 m ENTRELACADA com grade a 0,80 m (mesmo portao de separacao):
+      23 poses, mediano 34,1%, 6/23 cumprem a meta, gravou=False, arquivo NAO
+      criado, o console avisa a pose fraca e o motivo final traz o mediano (e
+      nao "tabuleiro nao visto").
+  - Suite completa (`tools\roda_testes.py`): 37 suites, 0 falhas.
+  - Bancada (--sem-janela, tabuleiro a ~1,2 m): a orientacao nova aparece e a
+    recusa sai com o mediano no colchete (o texto do item 37 e' o de antes).
+PENDENTE (usuario) - refazer a captura OLHANDO o numero
+  - `.venv\Scripts\python.exe freeze_kinect_direto.py`: tabuleiro a 0,35-0,40 m
+    em TODAS as poses. O alvo e' "n/N poses cumprem" com n == N (e o mediano
+    acima de 35,0%). Se aparecer "ATENCAO: pose a X% ...", aquela pose esta'
+    derrubando o conjunto: aproxime e refaca (o mediano precisa de MAIS DA
+    METADE das poses acima de 35% -- uma pose longe custa duas boas).
+  - Gravar so' quando aparecer MODELO GRAVADO (e a data do npz mudar); depois
+    `python stereo_calibration.py` nas duas auxiliares e
+    `python tools\diagnostico_calibracao.py`.
+
+
+--------------------------------------------------------------------------------
+ 40. O RMS DE 1,77 px NAO DIZIA QUAL POSE QUEBROU: O DETECTOR COMECAVA A 427 px
+     (ERRO DE CANTO 2,20 px CONTRA 0,67 px NA ESCALA CHEIA), NAO HAVIA LIMPEZA DE
+     OUTLIERS E O TRACEBACK DO PYKINECT2 PARECIA PARTE DO ERRO
+--------------------------------------------------------------------------------
+PROBLEMA (MEDIDO na bancada, 05/10/2026, 3a tentativa -- 16 poses, span OK)
+  - Com o span ja' passando (mediano 36,7%), quem reprovou foi o RMS: 1,557 px na
+    12a pose, 1,647 na 13a, 1,702 na 14a, 1,734 na 15a e 1,770 na 16a -- quase 3x
+    o portao de 0,6 px. Nada gravado, e o console nao dizia ONDE olhar:
+    `cv2.calibrateCamera` devolve UM numero para o conjunto.
+  - Causa (a), MEDIDA no proprio codigo: o detector do projeto
+    (`sc.DETECTION_WIDTHS` = (427, 960, 640)) e' tentado EM ORDEM, entao 427 px e'
+    o PRIMEIRO alvo -- e o `find_corners` documenta o preco: 0,67 px de erro de
+    canto na escala CHEIA, 1,27 px a 640 px e 2,20 px a 427 px. Com o tabuleiro
+    grande deste arranjo nao ha' motivo para detectar a 427 px, e o refinamento em
+    resolucao cheia so' recupera o canto que tem folga da borda (`refina_cantos`).
+  - Causa (b): `sc.calibrate_single` nao tem limpeza de outliers NENHUMA (o
+    comentario "a limpeza de outliers do solver ja' trata" vale para o caminho do
+    PAR). UMA pose borrada entre 15 boas leva o RMS do conjunto a ~1,5-2,0 px --
+    basta conferir sqrt((8^2 + 15*0,25^2)/16) = 2,02 px -- e a captura inteira e'
+    perdida.
+  - Terceiro incomodo do mesmo log: "Exception ignored in thread ...
+    AttributeError: 'NoneType' object has no attribute 'GetFrameArrivedEventData'"
+    impresso DEPOIS da recusa e antes do "NADA GRAVADO": e' o
+    `PyKinectRuntime.close()` derrubando os handles com a thread de frames ainda
+    acordada (wart do pykinect2 0.1.0). Parecia parte do erro do programa.
+SOLUCAO 1 - o detector DESTE arranjo comeca a 960 px (`LARGURAS_DETECCAO_DIRETO`)
+  - `--largura-deteccao` ganhou padrao (960, 0): 960 px primeiro (o tabuleiro
+    ocupa 35-60% da diagonal, cabe de sobra) e a escala cheia como rede. O projeto
+    NAO foi alterado (`sc.DETECTION_WIDTHS` segue igual para o caminho do par, que
+    tem o problema de fronteira que a cascata resolve): a escolha e' do ARRANJO e
+    o banner do programa diz o porque, com os dois numeros medidos.
+SOLUCAO 2 - o erro de CADA pose (`erros_por_pose`, `piores_poses`)
+  - Cada pose e' resolvida sozinha (`cv2.solvePnP`) com as intrinsecas do conjunto
+    e o erro de reprojecao dela e' medido: "RMS 1,770 px" vira "#8 5,30 px,
+    #13 2,90 px (mediana 0,30 px) -- refaca SO' essas".
+  - `descartes_sugeridos`: candidatos a descarte sao `erro > max(3 x mediana,
+    limite)` -- so' pose CLARAMENTE pior. Conjunto uniforme devolve VAZIO (ali a
+    acao e' consertar a captura, nao apagar pose boa).
+  - `veredito_do_rms`: separa POSE ISOLADA de CAPTURA INTEIRA com o MESMO corte.
+    Comparar a mediana com o limite NAO serve -- MEDIDO no teste: com 2 poses de
+    8 px de ruido a mediana das boas sobe para 0,59 px (o K/D tambem foi puxado),
+    e o veredito mandaria consertar o que esta' bom.
+SOLUCAO 3 - o solver pode DESCARTAR as piores (`--max-descartes`, padrao 4)
+  - `tenta_gravar` tira a pior pose sugerida UMA a uma e REAVALIA os tres portoes
+    (`avalia_conjunto`) a cada rodada: o corte nao e' "baixar o numero", e' "o
+    conjunto menor ainda cumpre o exigido" -- e ele pode parar de cumprir (se as
+    descartadas eram as poses de borda que sustentavam o span mediano).
+  - Ao gravar, o motivo diz: "gravado SEM as poses #3, #10 (8.02 px e 7.91 px;
+    mediana 0.20 px) -- as 12 restantes passam nos tres portoes (RMS 0.269 px)".
+    O `poses` do npz e' o numero REALMENTE usado, e `--max-descartes 0` desliga.
+SOLUCAO 4 - o wart do pykinect2 vira UMA linha (`gancho_do_pykinect2`)
+  - `threading.excepthook` filtra EXATAMENTE aquele AttributeError (o
+    `GetFrameArrivedEventData` do runtime ja' fechado) e imprime uma linha;
+    qualquer outra excecao de thread segue para o tratamento padrao -- travado no
+    teste.
+VERIFICACAO
+  - `test_freeze_kinect_direto.py` (sem hardware), dois casos novos:
+    * 6d `_erros_do_rms`: o erro por pose da cena limpa (13 poses, mediana 0,252
+      px, pior 0,311 px), `piores_poses` = argmax, `descartes_sugeridos` vazio
+      para conjunto homogeneo (15 x 1,5 px) e para as "quase" (0,8/0,9/1,0 px), o
+      corte de 3x a mediana (14 x 0,25 + 4,0 -> so' o 4,0), o veredito nos dois
+      casos e o gancho do pykinect2 (filtra o wart e NAO engole outro erro).
+    * 10 `_descarte_recupera`: grade boa + 2 poses com 8 px de ruido por canto:
+      14 poses -> RMS 4,449 px (reprovado, motivo citando #3 e #10) -> com os
+      descartes ligados GRAVA com RMS 0,269 px e 12 poses no npz -- e o mesmo pelo
+      LOOP inteiro (`coleta_poses`, 12 poses gravadas).
+  - Suite completa (`tools\roda_testes.py`): 37 suites, 0 falhas.
+  - Bancada (--sem-janela 5 s): o banner mostra "detector: larguras (960, 0)" com
+    o porque, a orientacao tem o item de FOCO/LUZ e a recusa aponta o caminho do
+    RMS -- nenhum arquivo tocado.
+PENDENTE (usuario) - refazer a captura com o detector novo
+  - `.venv\Scripts\python.exe freeze_kinect_direto.py`: para o operador nada mudou
+    (mire 0,35-0,40 m, TODAS as poses). Agora, se o RMS reprovar, a linha diz
+    QUAIS poses refazer -- ou que a captura inteira esta' borrada -- e o programa
+    ja' grava sem as piores (ate' 4), dizendo quais sairam.
+  - Se o RMS insistir em ~1,5 px com todas as poses parecidas: `--largura-deteccao
+    0` (deteccao na escala cheia), luz difusa e tabuleiro APOIADO (nao na mao).
+
+
+===============================================================================
+ 39. O ARBITRO MEDIA PELA PROJECAO ERRADA: A LATERALIDADE VOLTAVA AO ROTULO (E O
+     TERMINAL INUNDAVA) PORQUE A VIA DO OVERLAY NAO ERA A VIA DO ARBITRO
+===============================================================================
+SINTOMA (bancada de 05/10/2026, logo depois do item 37)
+  - Relato do usuario, com o log do tool: "as cameras auxiliares ainda estao se
+    confundindo em relacao o esqueleto da mao projetado". O log tinha CENTENAS de
+    linhas iguais, uma por frame e por camera:
+      [lateralidade] Lateralidade aux 0 (SIGMA-W780M): rotulo (geometria
+      indecisa) -- projecao a 300 px (limite 120 px) | com inversao aprendida
+      [lateralidade] Lateralidade aux 1 (Trust USB Camera): rotulo (sem
+      homografia da mao desta camera)
+    Ou seja: a lateralidade da aux 0 continuava sendo o ROTULO e a aux 1 nem era
+    tentada -- o item 37 tinha consertado o mecanismo e ele nao conseguia medir.
+CAUSA 1 (a que importa) - o arbitro projetava pela geometria que o overlay NUNCA usa
+  - O overlay projeta a mao auxiliar por STEREO 3D (triangulacao, ou
+    `AuxCameraView.to_kinect_stereo` com a profundidade do punho). A homografia 2D
+    do esqueleto (`hand_landmark_calibration*.npz`) esta' documentada no proprio
+    modulo (docstring de `draw_auxiliary_hands_on_color`) como "...usada apenas
+    para o diagnostico, nunca para o overlay: RMS ~400 px a torna inutil para
+    projecao (mao e' um objeto 3D visto de angulos diferentes)".
+  - O item 37 fez o arbitro projetar justamente com essa homografia 2D. O numero
+    medido (~300 px) nao tinha relacao com o esqueleto vermelho que o usuario via:
+    a margem de 120 px nunca era cumprida e a decisao geometrica NAO acontecia, em
+    TODOS os frames -- o log inteiro e' a prova.
+  - Efeito colateral do mesmo desenho: a aux 1 (Trust USB) nao tem
+    `hand_landmark_calibration_aux1.npz`, e o arbitro exigia a homografia para
+    tentar -- era despachada para o rotulo ANTES de olhar o stereo daquela camera,
+    que existe e esta' aceito (`stereo_calibration_aux1.npz`, RMS 1,1 px).
+CAUSA 2 - o motivo carregava o NUMERO na chave de estado
+  - `estado_lateralidade` montava a chave com o `detalhe` inteiro; como a projecao
+    varia a cada frame (297, 298, ... 302 px), o tool concluia que "tudo mudou" e
+    reimprimia as linhas de TODAS as cameras. Um valor que muda sempre nao pode
+    fazer parte da chave de "o que mudou".
+SOLUCAO 1 - o arbitro passa a medir pela MESMA via do overlay
+  - `_palma_por_stereo`: projeta a palma auxiliar com `view.pixels` +
+    `view.to_kinect_stereo(pixels, [z])` e aplica o MESMO `overlay_trim` -- assim a
+    medida e o desenho falam do mesmo ponto.
+  - O Z que entra e' o da PROPRIA mao CANDIDATA do Kinect (`mao["position"][2]`, a
+    palma em 3D do SDK -- exatamente o `target_z` que `to_kinect_stereo` espera).
+    Isso torna o casamento uma medida CONJUNTA (pixel + profundidade): uma
+    atribuicao errada acumula os DOIS erros, em vez de so' o do pixel.
+  - `_casa` passa a receber a MATRIZ de custos `custos[posicao][lado]` (o custo
+    depende do lado agora), com a MESMA regra de decisao (permutacao completa com
+    MARGEM minima; com um lado so', o par mais proximo). A homografia 2D fica como
+    RESERVA em `_custo_de_casamento`, usada so' quando o stereo daquela camera nao
+    esta' utilizavel.
+  - `VIA_STEREO`/`VIA_HOMOGRAFIA`: o relatorio carrega a `via`, o `resumo()` mostra
+    ("... erro 3 px, via stereo 3D") e o motivo da indecisao FECHA dizendo o que
+    fazer ("| via homografia 2D da mao: calibre o STEREO desta camera
+    (stereo_calibration.py) para a geometria medir") -- antes ele mandava "conferir
+    a calibracao da mao", ou seja, apertar H quando quem projeta o overlay e' o
+    stereo.
+  - `_vista_da_camera` aceita implementacoes minimas (sem `aux_view`) e stereo nao
+    utilizavel: cai na reserva sem excecao.
+SOLUCAO 2 - o log para de inundar
+  - `_sem_numeros` (tool): a chave de estado troca os digitos por '#' ("projecao a
+    ### px"), entao o MESMO motivo nao reimprime em nenhum frame.
+  - `INTERVALO_LOG_LATERALIDADE_S = 2,0` + estado PENDENTE: uma mudanca dentro do
+    intervalo e' lembrada e sai no proximo instante permitido (nunca perdida), mas
+    um motivo que apenas oscila nao vira metralhadora.
+SOLUCAO 3 - quem ENSINA tem de poder ser conferido INTEIRO (`_votar` com portao)
+  - A coleta AO VIVO de 05/10/2026 (headless, 4 s) mostrou votos sendo contados em
+    frames com UMA mao visivel por vez e com erro que o limite de 120 px aceita mas
+    nao prova nada: "Kinect: 1 mao(s) | aux 1: INVERTIDO [right]->[left]". O
+    contador chegou ao consenso e o arbitro passou a "saber" (so' em memoria, sem
+    `--gravar`) que a camera 1 tem o rotulo trocado -- possivelmente certo, mas por
+    evidencia que nao distinguia "rotulo trocado" de "as duas cameras viram maos
+    diferentes".
+  - Agora o frame so' vota no caso BIMANUAL: as DUAS maos vistas pelo Kinect E pela
+    auxiliar, TODAS atribuidas, e o erro dentro de `ARBITRO_MAX_DIST_VOTO_PX = 60 px`
+    (60 px ainda DECIDE o frame; nao serve de prova, porque a projecao boa erra 1-2
+    px). Duas razoes, as duas medidas ao vivo (15 s, com "Kinect: 2 mao(s)"):
+      * com a auxiliar vendo DUAS maos e o Kinect UMA, a correcao do frame pega o par
+        mais proximo e o que sobra no rotulo nao foi conferido por ninguem;
+      * com UMA mao de cada lado o frame NAO distingue "o ROTULO esta' trocado" de
+        "as duas cameras viram maos diferentes" -- nessa coleta o contador OSCILOU
+        (trocado -> confere) e o arbitro chegou a "desaprender" em memoria o que
+        tinha aprendido minutos antes. Sem o portao, `--gravar` teria fixado o valor
+        que a ultima rajada de frames ruidosos pedisse.
+    Fora disso o frame segue corrigido e mostrado -- so' nao alimenta o aprendizado
+    nem o arquivo.
+VERIFICACAO (sem hardware)
+  - `test_lateralidade_maos.py`, casos novos:
+    * 11a: com a homografia 2D ruim do log real (+300 px, `VistaFalsa(usable=False)`)
+      a geometria fica INDECISA a 300 px e o motivo NOMEIA a via e o stereo;
+    * 11b: com o stereo 3D daquela camera (a mesma homografia ruim no lugar) a
+      decisao sai com erro < 1 px e o relatorio diz `via stereo 3D`; o Z pedido ao
+      stereo e' conferido (0,90 m e 0,75 m vieram das maos candidatas do Kinect,
+      nunca do `NOMINAL_HAND_DEPTH_M`) e o rotulo trocado tambem e' corrigido;
+    * 12: camera SEM homografia da mao (o caso da Trust USB) passa a ser MEDIDA
+      pelo stereo; sem stereo E sem homografia o motivo diz o que calibrar;
+    * 13: `_sem_numeros`/`estado_lateralidade` -- o mesmo motivo com px diferentes
+      nao reimprime, motivo diferente reimprime, fonte/inverteu contam;
+    * 14: o portao do aprendizado -- aux 2 maos x Kinect 1 corrige o frame e NAO
+      vota; erro de 100 px (que ainda decide) NAO vota; erro de 30 px vota (1 voto
+      por FRAME, nao por mao). Como o `_votar` deixou de ser chamado em frames sem
+      decisao, os casos 7 e 10 passaram a conferir o contador com `.votos.get(...)`:
+      sem voto nao existe nem a entrada.
+  - Suite completa (`tools\roda_testes.py`): 37 suites, 0 falhas.
+  - Bancada, headless (`tools\probe_lateralidade.py --segundos 8` e `--segundos 4`):
+    o probe roda inteiro (abre Kinect + webcams, chama o arbitro com as maos de cada
+    camera, resume e limpa) e, sem ninguem na frente das cameras, termina com "SEM
+    MEDICAO: nenhuma camera teve um frame em que o Kinect e a auxiliar vissem mao no
+    MESMO instante ... nada foi aprendido e nada foi gravado" -- antes ele terminava
+    com "Nenhuma camera precisou de correcao: o rotulo do MediaPipe concorda com a
+    geometria do Kinect", uma conclusao que 0 frames decididos NAO sustentam.
+  - Bancada, COM maos no quadro (tres rodadas -- 4 s, 15 s e 20 s -- ja' com a via
+    nova e as duas cameras auxiliares abertas):
+    * a aux 0 (SIGMA-W780M) saiu CERTO 31 | INVERTIDO 0, depois CERTO 73 | INVERTIDO
+      12 e, com o portao bimanual, **CERTO 132 | INVERTIDO 0 | INDECISO 30**: a
+      inversao aprendida no item 37 (`{"flip": {"0": true}}`) esta' CONFIRMADA pela
+      geometria boa -- e a aux 0 nunca mais saiu "geometria indecisa a 300 px";
+    * a aux 1 (Trust USB Camera), que o item 37 deixava no rotulo por nao ter
+      homografia da mao, apareceu com o rotulo TROCADO nas tres rodadas (20 x 11,
+      depois 78 x 3 e, por fim, **INVERTIDO 46 x CERTO 0**): e' a MESMA doenca na
+      OUTRA camera, invisivel ate' agora. Com o portao bimanual ela NAO votou (a
+      aux 1 so' via as duas maos em poucos frames: 113 de 159 foram "sem mao"), e o
+      aprendizado NAO aconteceu -- que e' o comportamento correto, porque a
+      evidencia nao estava inteira. Sem o portao, a mesma coleta oscilava o contador
+      e o arbitro chegou a desaprender o que tinha aprendido;
+    * `aux_handedness_flip.json` nao foi tocado em nenhuma delas (data e conteudo
+      conferidos): o probe sem `--gravar` nao escreve no disco.
+PENDENTE (usuario) - agora a medicao tem de sair do papel
+  - `.venv\Scripts\python.exe tools\probe_lateralidade.py --segundos 40`, com as
+    DUAS maos visiveis e separadas (~40 cm). O esperado, por camera: "CERTO ...
+    (via stereo 3D)" ou "INVERTIDO (via stereo 3D)". Se ainda vier INDECISO, o
+    motivo diz a via: `via homografia 2D da mao` = falta calibrar o STEREO daquela
+    camera (`python stereo_calibration.py` com ela ativa) -- NAO o esqueleto.
+  - Se o veredito da aux 0 vier CERTO, o `aux_handedness_flip.json` vigente
+    (`{"flip": {"0": true}}`) esta' certo; se vier INVERTIDO, o arbitro grava a
+    correcao sozinho depois do consenso (>=20 frames e >=90%) -- inclusive para
+    DESFAZER o que o item 37 aprendeu com a geometria errada (auto-cura).
+  - A rodada ao vivo de hoje JA' aponta o proximo conserto: a aux 1 (Trust USB
+    Camera) apareceu com o rotulo TROCADO (INVERTIDO 20 x CERTO 11) -- ela nunca
+    tinha sido medida (sem `hand_landmark_calibration_aux1.npz`) e o rotulo errado
+    passava batido. Repita o probe com as DUAS maos visiveis e separadas e, se o
+    veredito dela se repetir, rode `--gravar` para fixar. Com o portao novo o
+    aprendizado exige evidencia conferivel INTEIRA (mesmo numero de maos nas duas
+    cameras e erro <= 60 px): se a coleta for com uma mao so' de cada vez, o
+    programa pode NAO gravar -- e isso e' o comportamento correto, nao um defeito.
+
+
+================================================================================
+ITEM 40 - 07/10/2026: O KINECT FICOU MUDO (e a calibracao era recusada por isso)
+================================================================================
+SINTOMA (relatado)
+  "quando vou fazer a Fase 1, ele rejeita a calibracao, nao fica boa e agora o
+  kinect parece nao funcionar". Duas coisas diferentes no mesmo relato.
+
+MEDIDO (nao deduzido)
+  * O KINECT NAO ENTREGA FRAME. Nao e' cabo fora: o sensor esta' enumerado
+    (`USB\VID_045E&PID_02C4`, + `MI_00` do sensor e `MI_02` de audio), o driver
+    esta' ligado (`KinectSensor.sys`, `ConfigFlags=0`, `EnumerationRetryCount=0`)
+    e o `KinectMonitor` esta' Running. Mas `PyKinectRuntime` ABRE em 0,0 s
+    reportando `color_frame_desc: 1920x1080` e NENHUM frame sai em 20 s -- em
+    color, depth, body e nos TRES juntos (5 aberturas). As DUAS webcams leem
+    frame normalmente (0 = SIGMA-W780M, 1 = Trust USB Camera; NAO existe indice
+    2 nesta maquina). O usuario confirma que usou o KINECT STUDIO.
+  * A CALIBRACAO E' RECUSADA PELA LEITURA, com o motivo por extenso:
+    `kinect_intrinsics.npz` (o PALIATIVO de 30/09/2026) NAO registra `poses` nem
+    `span`. O caminho de recusa e' `sc.aceita_modelo_kinect` (campos obrigatorios
+    antes dos tres portoes), e ele existe porque sem cobertura medida nao ha' como
+    saber se o modelo presta.
+  * O ESTRAGO, MEDIDO nos npz de par ainda em disco (os dois com
+    `kinect_intrinsics_source='sessao'` e `kinect_deviation_px=-1.0`): como o
+    congelado foi recusado, o Kinect voltou a ser RE-ESTIMADO por sessao -- o bug
+    que o congelamento existe para matar:
+        congelado 30/09 (recusado): fx=1053,9  cx=957,8  cy=571,2
+        05/10 SIGMA-W780M         : fx=1060,6  cx=951,2  cy=588,2
+        05/10 Trust USB           : fx=1073,0  cx=962,9  cy=564,7
+        ENTRE AS DUAS SESSOES: dfx=+12,5 px | dcx=+11,7 px | dcy=-23,5 px
+    E' erro SISTEMATICO e o RMS nao denuncia (ele mede a coerencia INTERNA de cada
+    arquivo, nao qual modelo e' o certo) -- e' por isso que a calibracao "parece
+    boa" e o esqueleto sai longe.
+
+CONSERTO (o que ficou no repositorio)
+  1. `sc.abre_kinect()` ganhou REABERTURA (`TENTATIVAS_KINECT = 3`): fechar e
+     reabrir o runtime recupera o sensor que ficou preso depois de outro programa
+     soltar a camera, e custa um segundo. Espera curta (<= 2 s) vale UMA
+     tentativa, de proposito: e' o caso dos testes, que nao podem virar espera de
+     minutos. A mensagem de "abriu mas nao entregou" agora SEPARA as tres causas
+     (outro programa com o sensor / link caiu para 2.0 / fonte propria), em vez de
+     mandar "confira o cabo" de forma generica (`motivo_do_sensor_mudo`).
+  2. `tools\checa_kinect.py` (NOVO): pre-checagem de SEGUNDOS e sem tabuleiro --
+     `kinect_compat` + import, o runtime abre?, cada stream responde (color/depth/
+     body testados sozinhos), o caminho OFICIAL do projeto entrega frame, o mapa
+     indice->NOME das webcams e o veredito do disco pelas MESMAS regras
+     (`sc.carrega_intrinsecas_kinect`/`sc.aceita_modelo_kinect`). Codigo de saida:
+     0 = o sensor entrega (pode ir para a bancada), 1 = nao entrega (NAO monte o
+     tabuleiro), 2 = falta SDK/pykinect2. O custo do bug nao foi o erro: foi o
+     MOMENTO -- montar 12+ poses a 0,35 m para ouvir "NADA GRAVADO" no fim.
+  3. `tools\conserta_intrinsecas_kinect.py` (NOVO): APOSENTA o paliativo
+     renomeando para `<nome>.arquivado` (o loader le' o nome EXATO, entao ele para
+     de ser carregado e nao e' apagado: continua servindo de referencia para a
+     auditoria comparar). DRY-RUN e' o padrao; `--sim` executa; `--forcar` guarda
+     o anterior com carimbo em vez de sobrescrever; `--restaurar` desfaz. Ele NAO
+     inventa `poses`/`span` para o arquivo passar no portao: forjar os campos que
+     decidem se o modelo presta cimentaria o vies de ~46 px que o proprio
+     `frozen_at` denuncia.
+  4. Suites novas: `test_checa_kinect.py` (11 casos) e
+     `test_conserta_intrinsecas.py` (10 casos). A segunda descobre um detalhe que
+     vale registrar: `np.savez("x.arquivado")` grava `x.arquivado.npz` (o numpy
+     acrescenta a extensao quando o nome nao termina nela) -- o teste do arquivado
+     perdia o arquivo por isso, e agora grava por handle.
+
+PENDENTE (usuario, bancada) - nesta ordem
+  - RELIGAR O KINECT e confirmar: feche tudo que possa ter ficado com o sensor
+    (Kinect Studio e o gravador dele), DESLIGUE e RELIGUE a fonte do Kinect e
+    depois o USB 3.0 (porta azul, sem hub/extensao). Confirme com
+    `.venv\Scripts\python.exe tools\checa_kinect.py` ate' ele sair com 0.
+  - So' ENTRE O FREEZE: `python freeze_kinect_direto.py` (Fase 1 do plano).
+  - Antes disso, se quiser, aposente o paliativo:
+    `.venv\Scripts\python.exe tools\conserta_intrinsecas_kinect.py --sim`.
+  - Fase 2 com os indices CERTOS desta maquina (`--aux-index 0` e `--aux-index 1`;
+    NAO existe indice 2). Criterio: os npz novos com
+    `kinect_intrinsics_source='congelado'`.
+  - Fases 3 e 4 do plano (auditoria offline e tecla `T`).
+
+================================================================================
+ITEM 41 - 07/10/2026: O KINECT ABRE, O STUDIO MOSTRA IMAGEM, E NADA ENTREGA
+================================================================================
+SINTOMA (relatado, depois de reconectar o sensor e rodar o checa_kinect)
+  "continua nao funcionando. ao abrir o Kinect Studio v2 ele funciona bem, mostra
+  os frames e tudo mais". Ou seja: o HARDWARE esta' bom e o programa do SDK nao.
+
+MEDIDO (o passo que o pykinect2 NAO checa)
+  O `PyKinectRuntime` guarda os retornos em `hres` e NUNCA compara (linhas 65-66
+  de `PyKinectRuntime.py`). Lendo os dois na mao, com o sensor conectado:
+
+      GetDefaultKinectSensor -> 0x00000000 (S_OK)
+      sensor.Open()          -> 0x00000000 (S_OK)
+      sensor.IsAvailable     -> FALSE          <-- a causa
+      ColorFrameSource.OpenReader() + SubscribeFrameArrived() -> handle valido
+      e NENHUM frame em 20 s (color, depth, body e os tres juntos)
+
+  `IsAvailable` e' a propriedade com que o SDK diz "o sensor esta' inicializado e
+  entregando quadros". FALSE com o Studio mostrando imagem = o estado e' do LINK,
+  nao do programa -- e e' por isso que `has_new_color_frame()` devolve False para
+  sempre: o evento nunca chega porque o SDK nunca habilita o stream.
+
+  O que DESCARTA as hipoteses faceis (medido nesta maquina):
+    * o sensor esta' enumerado: `USB\VID_045E&PID_02C4` + `MI_00` + `MI_02`;
+    * driver ligado: `KinectSensor.sys` 2.0.1410.18000, WDF KinectSensor
+      Interface 0, `ConfigFlags=0`, `EnumerationRetryCount=0`;
+    * `Kinect20.dll` UNICO e legitimo: `C:\WINDOWS\System32`, 2.0.1410.18000
+      (nao existe copia no `.venv` que possa ser carregada por engano);
+    * servico `KinectMonitor` RUNNING / AUTO_START (parar/iniciar exige elevacao:
+      `sc stop KinectMonitor` devolveu "Acesso negado" para o agente);
+    * as 3 assinaturas de evento devolvem handle valido (o mesmo 948 nas tres);
+    * Windows 10 Pro 22H2, build 19045.6466.
+
+CONSERTO (o que ficou no repositorio)
+  1. `tools\probe_kinect_runtime.py` (NOVO): le os HRESULTs e o `IsAvailable`
+     crus (o que o `PyKinectRuntime` nao expoe), mostra o estado do servico
+     `KinectMonitor` sem depender do IDIOMA (o `sc query` traduz os ROTULOS e
+     deixa os VALORES: procurar "STATE" devolvia None em portugues), reinicia o
+     servico (`--reiniciar-servico`, elevado) e OBSERVA o `IsAvailable` enquanto o
+     USB e' desligado/religado (`--observar N`) -- e' o teste que separa "estado
+     preso" de "link ruim": se ele nunca vira TRUE durante a religacao, o conserto
+     e' de link/driver. Codigos de saida: 0 disponivel+frame, 1 disponivel sem
+     frame, 2 indisponivel, 3 nem abriu.
+  2. `test_probe_kinect_runtime.py` (NOVO, 9 casos): HRESULT em hexa, o parser do
+     servico pelo VALOR (o caso que falhou na bancada em portugues), servico
+     inexistente sem excecao, o HISTORICO das transicoes do `IsAvailable`, sensor
+     ausente com motivo claro e a coerencia entre o codigo de saida e o estado.
+  3. README: o sintoma "abriu e nao entregou" agora manda ao probe, com a causa
+     conhecida e a correcao.
+
+CAUSA CONHECIDA (pesquisada, com correcao documentada)
+  Este sintoma -- Kinect Studio mostra imagem e todo programa do SDK fica mudo --
+  tem correcao publicada pela comunidade: as MELHORIAS DE AUDIO (audio
+  enhancements) do dispositivo de audio do Kinect. O Windows injeta efeitos DSP no
+  ponto de captura do dispositivo COMPOSTO e isso provoca resets de USB no v2; o
+  Studio continua funcionando porque fala com o sensor por outro caminho.
+  Correcao: Painel de Controle > Som > Gravacao > "Xbox NUI Sensor" >
+  Propriedades > Aprimoramentos > DESMARCAR todas (e o "permitir efeitos").
+  Fonte: https://learn.microsoft.com/en-ca/answers/questions/5609514/kinect-for-windows-11-has-broken-solve-found
+  (relato original e confirmacoes; ha' tambem um caso de "IsAvailable sempre
+  false com o Kinect Studio aberto": ele toma o sensor para si.)
+  Nesta maquina o endpoint de captura do Kinect existe e esta' ATIVO
+  (`{40933453-9068-4bdf-8a4d-0a064c71f3d3}` = "Grupo de microfones" / Xbox NUI
+  Sensor, `DeviceState=1`), e nao ha' FxProperties de APO nele -- ou seja, o
+  caminho esta' livre, mas a correcao e' de UI e continua PENDENTE de execucao.
+
+PENDENTE (usuario, na ordem -- o agente nao pode fazer nenhum destes)
+  1. Fechar o Kinect Studio de vez (ele TOMA o sensor: ha' relato de IsAvailable
+     sempre FALSE com ele aberto) e rodar:
+        .venv\Scripts\python.exe tools\probe_kinect_runtime.py --sem-frame
+     Esperado depois do conserto: `sensor.IsAvailable : TRUE`.
+  2. Desmarcar as MELHORIAS DE AUDIO do "Xbox NUI Sensor" (Painel de Controle >
+     Som > Gravacao > Propriedades > Aprimoramentos). Se nao houver a aba, use o
+     caminho do Windows 10/11: Configuracoes > Sistema > Som > Dispositivos de
+     entrada > Xbox NUI Sensor > Propriedades.
+  3. Reiniciar o Windows (recria o driver + os servicos de uma vez) OU, elevado:
+        sc stop KinectMonitor  e  sc start KinectMonitor
+  4. Se ainda vier FALSE: outra porta USB 3.0 (de preferencia outra CONTROLADORA
+     -- o v2 precisa de duas faixas; hub/extensao/painel frontal nao servem),
+     fonte propria ligada ANTES do USB, e por fim reparar/reinstalar o
+     "Kinect for Windows SDK 2.0" (o Studio continuar funcionando nao descarta
+     isto: o instalador recria o registro do driver do sensor).
+  5. Confirmar com `tools\checa_kinect.py` (tem de sair com 0) ANTES de montar o
+     tabuleiro, e so' entao a Fase 1 (`freeze_kinect_direto.py`).
+DESFECHO DA INVESTIGACAO (mesmo dia, 07/10/2026)
+  * MELHORIAS DE AUDIO: DESCARTADAS por medicao. O endpoint de captura do Kinect
+    NAO tem `FxProperties` (a aba "Aprimoramentos" nem existe nesta maquina, e o
+    usuario procurou e nao achou), e o usuario DESABILITOU o dispositivo de audio
+    inteiro (`DeviceState` passou de 1 para DESABILITADO) e REINICIOU: o
+    `sensor.IsAvailable` continua FALSE. O driver `usbaudio` (MI_02) ficou
+    intacto (`ConfigFlags=0`), entao a reabilitacao e' um clique.
+    Varredura do projeto: nenhum codigo usa audio (nem `sounddevice`, nem
+    `pyaudio`, nem `AudioBeam`, nem `.wav`/`ffmpeg`) -- desabilitar era seguro.
+  * O que sobrou, e o suspeito principal AGORA E' MEDIDO: a SUSPENSAO SELETIVA DE
+    USB esta' LIGADA no plano Equilibrado (`0x00000001` em CA e CC pelo
+    `powercfg /query`) e o proprio sensor esta' marcado
+    `DeviceSelectiveSuspended = 1` no registro (com o WDF em
+    `IdleInWorkingState = 1`). O v2 nao volta a transmitir de forma confiavel
+    depois de suspender.
+  * Outros numeros medidos da arvore USB: o sensor e' `Port_#0017.Hub_#0001`,
+    `Address 17`, `Capabilities 148`, `EnumerationRetryCount 0`. O EventLog
+    desta maquina NAO registra a enumeracao USB
+    (`Microsoft-Windows-Kernel-PnP/Configuration` teve 5 eventos no periodo,
+    nenhum de USB/045E), entao o registro e' a fonte confiavel aqui -- e e' por
+    isso que o `probe_kinect_runtime.py --observar` le o `IsAvailable` AO VIVO
+    durante a religacao, em vez de depender de log.
+
+  * SUSPENSAO SELETIVA: FEITA (parte do software) em 07/10/2026, pelo agente.
+    O `powercfg /setacvalueindex` / `/setdcvalueindex` / `/setactive` ACEITOU no
+    token NAO elevado -- o usuario esta' no grupo Administradores com o token
+    filtrado do UAC, e o `whoami /groups` mostra "Grupo usado apenas para negar",
+    que e' o sinal de que o processo NAO esta' elevado (o `sc stop KinectMonitor`,
+    esse sim, devolveu "Acesso negado 5"). Estado conferido depois:
+    CA=0x00000000 e CC=0x00000000 (DESLIGADA nos dois). Utilitario para voltar
+    atras: `tools\suspensao_usb_seletiva.bat ligar` (e `desligar` para refazer).
+    O que ainda FALTA e' fisico e e' do usuario: DESLIGAR e RELIGAR a fonte do
+    Kinect -- desligar a suspensao impede a proxima suspensao, mas nao tira o
+    sensor do estado suspenso em que ele ja' estava
+    (`DeviceSelectiveSuspended = 1` no registro).
+
+  * TESTE AO VIVO DO REPLUG (mesmo dia): a suspensao seletiva foi DESLIGADA
+    (CA=CC=0x0), o usuario DESLIGOU e RELIGOU a fonte do Kinect, e depois
+    desligou/religou o USB com `probe_kinect_runtime.py --observar 75` rodando.
+    Resultado: `sensor.IsAvailable` NAO virou TRUE em momento nenhum -- nem no
+    instante da religacao. O `DeviceSelectiveSuspended` continua 1.
+    E O MAIS INFORMATIVO: o Windows NAO VIU religacao nenhuma --
+      - 0 eventos de PnP/System citando 045E/NUI/Kinect nas ultimas 2 h (o log
+        PnP teve 5 eventos no periodo, nenhum de USB);
+      - a instancia do dispositivo e' a MESMA (`6&31c278cf&0&0000`).
+    Ou seja: religar o USB NAO derrubou o dispositivo da arvore USB. (Na MESMA
+    porta o Windows reaproveita a instancia, entao instancia igual sozinha nao
+    prova; o que prova e' a AUSENCIA de qualquer evento de remocao/chegada.)
+    Consequencia pratica: reiniciar o Windows de novo NAO e' o proximo passo --
+    o reinicio anterior (07/10) nao mudou nada, e o sintoma sobreviveu a ele.
+    O suspeito passa a ser o que impede o sensor de SAIR da arvore/ser
+    reconhecido: CABO (o v2 usa um cabo com fonte dedicada: se a fonte entrega
+    energia e o par de dados nao, o sensor fica enumerado e mudo), FONTE, ou a
+    propria porta/controladora.
+    Experimento que decide isso e' FISICO e o agente nao pode fazer: religar o
+    USB olhando o LED branco do sensor e ouvindo o som de "dispositivo
+    conectado" do Windows; e abrir o KINECT STUDIO agora -- se o Studio TAMBEM
+    nao mostrar imagem depois da religacao, o sensor nao esta' mais entregando
+    para ninguem (cabo/fonte/hardware), e nenhum conserto de software resolve.
+
+  * HIPOTESE DE BIBLIOTECA (comtypes/pykinect2): TESTADA E DESCARTADA.
+    O usuario levantou a hipotese certa -- e ela era a unica que faltava: o
+    `Kinect Studio` ve o dispositivo chegar e sair, os arquivos do SDK nao foram
+    tocados desde 2014 (`Kinect20.dll` e `KinectSensor.sys` com data de 2014),
+    nao ha Windows Update recente (ultimo em 12/09/2026) e nenhum filtro de
+    classe bloqueia o Kinect (`UpperFilters`/`LowerFilters` vazios).
+    Entao eu li o `IsAvailable` SEM o comtypes: peguei o ponteiro da interface,
+    andei no vtable e chamei com `ctypes.WINFUNCTYPE` (a ABI do COM e' a unica
+    coisa entre o Python e o sensor).
+      - caminho do pykinect2 (comtypes): IsAvailable = False
+      - caminho cru (vtable, indice 9)  : S_OK, valor=False
+      - IsOpen (indice 8)               : S_OK, valor=False
+    FALSE nos DOIS caminhos: NAO e' a biblioteca. O proprio SDK reporta o sensor
+    indisponivel. (O comtypes sempre esteve certo.)
+
+    ERRO MEU, REGISTRADO DE PROPOSITO: a primeira versao desta sonda CHUTOU a
+    ordem do vtable -- eu supus `get_IsAvailable` na entrada 3. Nao e': antes
+    dele vem `SubscribeIsAvailableChanged` (3), `UnsubscribeIsAvailableChanged`
+    (4), `GetIsAvailableChangedEventData` (5), `Open` (6), `Close` (7), `IsOpen`
+    (8) e SO' ENTAO `IsAvailable` (9) -- ordem lida de
+    `pykinect2/PyKinectV2.py:2532`. Chamar a entrada 3 (um SUBSCRIBE, que espera
+    `INT_PTR*`) com o ponteiro de um `c_int` devolveu `E_INVALIDARG`, e o numero
+    impresso (`valor=820`) era lixo dos outros 3 bytes de um `BOOLEAN` de 1 byte
+    lido como `c_int`. Em cima disso eu anunciei um falso "o sensor diz TRUE pelo
+    vtable cru" -- que e' exatamente o tipo de conclusao que nao pode sair de um
+    prototipo errado. Conserto: a sonda agora tem ORDEM LIDA DO FONTE, usa
+    `c_bool` (1 byte) e `sem_saida` para `Open`/`Close`, e tem 4 vereditos
+    (biblioteca / disponivel / indisponivel / inconclusivo) em vez de tratar
+    qualquer numero como booleano. `test_probe_kinect_vtable.py` (5 casos) le a
+    ordem do PROPRIO `PyKinectV2.py` e cai se o pykinect2 mudar -- essa classe de
+    erro nao volta calada.
+
+    O QUE SOBRA (e o que a topologia USB mostrou): o hub/acervo USB do PC esta'
+    denso -- 72 dispositivos USB conhecidos, todos os que consegui localizar com
+    `LocationInformation` estao no MESMO `Hub_#0001` do Kinect, incluindo a
+    `g.Nautilus Base Station`, dois adaptadores seriais (CP210x e Prolific),
+    webcams, audio e HID -- e ha DUAS entradas
+    "Unknown USB Device (Device Descriptor Request Failed)" no registro, que e'
+    o sintoma classico de energia/banda insuficiente no hub. O Kinect v2 precisa
+    das DUAS faixas de banda de um SuperSpeed dedicado; dividir o controlador
+    com esse parque todo explica "enumera, driver carrega, e nao transmite".
+    Proximo passo do usuario: ISOLAR o Kinect (porta de OUTRA controladora, de
+    preferencia uma placa PCIe USB 3.0 so' para ele) e/ou desconectar o que nao
+    for necessario; e rodar o "Kinect Configuration Verifier" do SDK, que avalia
+    justamente a controladora USB e reprova em texto quando e' o caso.
+
+  * PESQUISA DO USUARIO (as 4 receitas que o Google devolve para "pykinect2 nao
+    conecta"): cada uma foi CHECADA nesta maquina, e nao opinada.
+    1) "editar o assert do sizeof(tagSTATSTG) no site-packages": JA' RESOLVIDO,
+       por outro caminho. O arquivo instalado continua ORIGINAL do PyPI
+       (`assert sizeof(tagSTATSTG) == 72`, ocorrencia unica; nenhuma edicao
+       manual), e quem resolve e' o `kinect_compat.py` do repositorio: ele le' o
+       FONTE instalado, troca a linha para aceitar 72 E 80 e so' entao executa --
+       sobrevive a `pip install --force-reinstall` e a recriacao do `.venv`, o que
+       a receita manual (editar site-packages) NAO sobrevive. Medido: import OK,
+       `GetDefaultKinectSensor` = S_OK. Ou seja: este item esta' descartado.
+    2) "testar com o Kinect Studio / Configuration Verifier": o Studio funciona
+       (mostra frames, e ve o sensor chegar/sair). O VERIFIER esta' instalado e
+       esta' no caminho exato:
+         C:\Program Files\Microsoft SDKs\Kinect\v2.0_1409\Tools\ConfigurationVerifier\KinectV2ConfigurationVerifier.exe
+       (o Studio: ...\Tools\KinectStudio\KStudio.exe). E' o proximo passo
+       obrigatorio: ele avalia a CONTROLADORA USB e reprova em texto.
+    3) "o computador pode desligar o dispositivo para economizar energia":
+       ENCONTRADO LIGADO. `MSPower_DeviceEnable` (root\wmi) do sensor:
+         USB\VID_045E&PID_02C4&MI_00\6&31c278cf&0&0000_0  Enable = True
+       e o `MSPower_DeviceWakeEnable` do mesmo device tambem True. Tentei
+       desligar por codigo (`Set-CimInstance`) e o Windows devolveu
+       "Acesso negado" -- exige elevacao, que o agente nao tem. Fica para o
+       usuario: Gerenciador de Dispositivos > "Kinect sensor devices" >
+       "WDF KinectSensor Interface 0" > Propriedades > Gerenciamento de Energia >
+       desmarcar "O computador pode desligar o dispositivo para economizar
+       energia" (e, se existir, "Permitir que este dispositivo ative o
+       computador").
+    4) "bug do microfone (audio enhancements)": JA' DESCARTADO por medicao, e
+       agora com dois numeros a mais: o endpoint do Kinect NAO tem
+       `FxProperties` (a aba nao existe) e a permissao de microfone esta'
+       concedida (`ConsentStore\microphone` = Allow, nenhum app com Deny).
+       Desabilitar o dispositivo de audio inteiro + reiniciar NAO mudou nada.
+    Resumo do valor da pesquisa: os itens 1 e 4 ja' estavam cobertos (e o 1 por um
+    caminho melhor), o item 3 rendeu um achado novo ACIONAVEL, e o item 2 aponta
+    a ferramenta que ainda nao foi usada.
+
+  * RELATO DO LOOP (usuario, mesmo dia): "mesmo depois de desmarcar a config de
+    audio o kinect ainda ta' meio bugado; com o Kinect Studio ligado eu vejo o
+    comportamento de LIGA E DESLIGA EM LOOP". Este e' o mecanismo que fecha tudo:
+    com o dispositivo entrando e saindo, o `IsAvailable` NUNCA fica estavel em
+    TRUE -- os programas do SDK pegam sempre uma janela em que ele nao esta'
+    pronto, e o Studio (que reabre o stream a cada ciclo) segue mostrando imagem.
+
+    MAS A MINHA MEDICAO NAO CONFIRMA O LOOP AGORA, e isso fica registrado:
+      - `probe_kinect_loop.py --observar 40`: 0 mudancas de instancia, contador de
+        "descritor falhou" estavel em 2, `IsAvailable` FALSE no fim;
+      - amostra de 8 s do conjunto de dispositivos: 72 -> 72, kinect 3 -> 3,
+        descritor falhou 2 -> 2 (nada se mexeu);
+      - EventLog de HOJE: 9 eventos PnP no dia, ZERO citando 045E -- ou seja, o
+        Windows nao registrou NENHUMA re-enumeracao do Kinect hoje.
+    CORRECAO DE UMA AFIRMACAO MINHA: eu havia dito que o EventLog "nao registra
+    enumeracao USB". O que da' para afirmar e' mais fraco: ele registra eventos
+    PnP (9 hoje, de outros dispositivos) e nenhum de Kinect -- nao da' para
+    separar "nao aconteceu" de "nao e' registrado" so' por isso. Por isso o
+    detector do loop le' o REGISTRO (a instancia e o contador de descritor
+    falhou), e nao o log.
+    Conclusao honesta: a observacao do usuario vale mais que a minha janela de
+    medicao (ele estava com o Studio capturando, eu nao posso ver a tela); o que
+    eu posso afirmar e' que nos periodos medidos nao houve re-enumeracao.
+
+  * O AUDIO NAO ESTAVA REALMENTE FORA DO CAMINHO (achado que explica "desmarquei
+    e continuou"). Desabilitar o ponto de captura no Som do Windows desabilita o
+    ENDPOINT, nao o DISPOSITIVO: medido agora,
+      - endpoint "Grupo de microfones / Xbox NUI Sensor": DESABILITADO (ok);
+      - MAS o PnP do audio continua no ar: `USB\VID_045E&PID_02C4&MI_02` com
+        `Service=usbaudio`, `ConfigFlags=0` e o `pnputil` dizendo
+        "Status: Iniciado".
+    Ou seja: o Windows continua carregando a interface de audio do dispositivo
+    COMPOSTO, que e' justamente o caminho do bug de DSP. O conserto completo e'
+    DESINSTALAR o dispositivo de audio do Kinect (nao so' desabilitar o
+    endpoint) -- o projeto nao usa audio nenhum (varredura ja' feita), e o
+    Windows reinstala sozinho ao religar o USB:
+      Gerenciador de Dispositivos > Audio inputs and outputs (ou Controladores de
+      som, video e jogos) > "Xbox NUI Sensor" > botao direito > DESINSTALAR
+      (sem marcar "apagar driver").
+    Alternativa por linha de comando (precisa de administrador):
+      pnputil /remove-device "USB\VID_045E&PID_02C4&MI_02\6&31c278cf&0&0002"
+
+  * CARGA DO CONTROLADOR USB (o numero que mais preocupa): o Kinect esta' num
+    Intel USB 3.1 eXtensible Host Controller (`PCI\VEN_8086&DEV_A36D`) dividido
+    com MUITO mais coisa do que deveria -- 31 dispositivos no MESMO `Hub_#0001`,
+    entre eles a `g.Nautilus Base Station` (o EEG!), CP210x, Prolific, as
+    webcams, audio e HID; e ha DUAS entradas "Unknown USB Device (Device
+    Descriptor Request Failed)" (VID_0000&PID_0002) no registro, que e' o que
+    sobra de uma chegada que falhou. O v2 precisa das DUAS faixas de um
+    SuperSpeed praticamente dedicado: dividir o controlador com esse parque
+    explica "enumera, driver carrega, e nao transmite" -- e pode explicar o loop.
+    Recomendacao: deixar o Kinect SOZINHO no controlador Intel e mover o resto
+    (webcams em USB 2.0, g.Nautilus, seriais) para outro; remover os dois
+    "descritor falhou"; e so' entao remedir.
+
+  * O FLAG ERA ROTULO -- E ESTA E' A SEGUNDA VEZ QUE EU LEIO UM NUMERO E CONTO
+    UMA HISTORIA. Depois do reinicio o `DeviceSelectiveSuspended` do MI_00
+    continuou em 1 e eu disse que era "ele que prende o sensor". MEDIDO:
+      - a chave que REALMENTE decide (`SelectiveSuspendEnabled`) NAO EXISTE nesta
+        maquina, em nenhuma das 3 interfaces;
+      - o `DeviceSelectiveSuspended=1` estava presente TAMBEM nos periodos em que
+        o Kinect Studio mostrava imagem normalmente;
+      - ele sobrevive a reinicio, a ciclo de energia e a mudanca de porta.
+    Ou seja: e' um rotulo PERSISTENTE, nao prova de suspensao viva. (O primeiro
+    erro foi o `valor=820` do vtable lido no indice errado; este e' o segundo, e
+    os dois tem a mesma forma: um numero lido fora de contexto virou conclusao.)
+    Os dois ficam registrados de proposito. O `verifica_kinect_antes_depois.py`
+    foi corrigido para NAO concluir pelo flag.
+
+  * O CAMINHO CANONICO DO SDK TAMBEM NAO DISPARA (teste novo, sem depender de
+    interpretacao): `probe_kinect_isavailable_event.py` faz o bootstrap que os
+    samples oficiais usam -- `Open()`, `SubscribeIsAvailableChanged()` (vtable
+    [3], ordem lida de `PyKinectV2.py:2532`), e espera o handle com
+    `WaitForSingleObject`:
+      - `GetDefaultKinectSensor` = S_OK, `Open()` = S_OK,
+        `SubscribeIsAvailableChanged` = S_OK com handle VALIDO (1196);
+      - 20 s de espera: ZERO eventos e `IsAvailable` FALSE o tempo todo.
+    Isso fecha a porta do "era so' polling errado": nem o evento que o SDK usa
+    para avisar "o sensor ficou pronto" chega. O SDK simplesmente nao considera
+    este sensor pronto.
+
+  * ESTADO DA INVESTIGACAO (o que sobrou, e o que ja' foi eliminado por medicao):
+    ELIMINADOS -- biblioteca (vtable cru x comtypes = False nos dois); patches do
+    pykinect2 (o `kinect_compat` cobre, e o import e' OK); melhorias de audio
+    (endpoint sem `FxProperties`; desabilitado + reinicio nao mudou); privacidade
+    de microfone (Allow); suspensao seletiva de USB no plano (desligada + ciclo
+    de energia nao mudou); arquivos do SDK (2014, intactos); Windows Update
+    (12/09/2026); filtros de classe (vazios); banda do hub (o Kinect saiu do
+    barramento cheio e foi para porta propria -- `Port_#0017` -> `#0018`, e o
+    Studio parou de travar, mas o `IsAvailable` continuou FALSE).
+    SOBRA -- (a) a interface de AUDIO do Kinect ainda carrega `usbaudio`
+    (`MI_02`, `ConfigFlags=0`, `pnputil: Status: Iniciado`), e desabilitar o
+    ENDPOINT no Som do Windows nao tira o DISPOSITIVO do caminho; (b) a
+    controladora USB (o Configuration Verifier oficial ainda NAO foi rodado).
+    A ordem agora e': 1) DESINSTALAR o dispositivo de audio do Kinect e
+    reiniciar; 2) rodar o `KinectV2ConfigurationVerifier.exe`; 3) se ele
+    reprovar a controladora, placa PCIe USB 3.0 compativel.
+
+  * VEREDITO DO VERIFIER (usuario rodou o oficial, mesmo dia): no item
+    "USB Controller" ele marcou EXCLAMACAO com
+      "checks your usb controller for kinect for windows v2 compatibility
+       result: unknown usb 3.0 port detected. your usb config may support kinect"
+    Ou seja: o proprio SDK NAO reconhece a porta como uma USB 3.0 compativel com
+    o v2. Isso deixa de ser hipotese e passa a ser o veredito oficial do problema.
+
+  * O NUMERO QUE EXPLICA (medido): ESTA MAQUINA TEM UMA UNICA CONTROLADORA USB.
+      Win32_USBController -> 1 controladora:
+        "Intel(R) USB 3.1 eXtensible Host Controller - 1.10 (Microsoft)"
+        PCI\VEN_8086&DEV_A36D
+      Win32_USBHub -> 5 hubs, e o 3.0 e' UM so': "USB Root Hub (USB 3.0)"
+        (USB\ROOT_HUB30\4&2720BDB3&0&0)
+      Dispositivos USB enumerados: 73 (setenta e tres) -- TODOS na mesma
+      controladora. Entre eles, os que o projeto usa e os que nao usa: as 2
+      webcams, a g.Nautilus Base Station (o EEG!), 2 seriais (CP210x e Prolific),
+      audio, HID, um headset VR (VID_1B80), captura de video (VID_0E6A) e uma
+      camera (VID_145F&PID_0203).
+    A trajetoria fisica do Kinect tambem foi confirmada:
+      DEVPKEY_Device_LocationPaths = {PCIROOT(0)#PCI(1400)#USBROOT(0)#USB(18), ...}
+      -> ele esta' no PORT 18 do ROOT HUB 3.0 da controladora Intel. Foi o
+      usuario que o isolou num barramento so' dele (Port_#0017 -> #0018, Address
+      17 -> 18) e o Kinect Studio PAROU de travar -- mas `IsAvailable` continuou
+      FALSE, porque o barramento dedicado nao e' o mesmo que CONTROLADORA
+      dedicada: a banda/isocrona do controlador continua dividida com 73
+      dispositivos.
+    E' por isso que o Verifier diz "unknown usb 3.0 port": ele checa a
+    CONTROLADORA, e esta nao e' uma das que ele reconhece como compativel para o
+    v2 -- agravado por ter 73 dispositivos pendurados nela.
+    Observacao de compatibilidade: o usuario tem uma GTX 1080 Ti, ou seja e' um
+    DESKTOP -- entao existe a opcao de placa PCIe USB 3.0 dedicada (chipset
+    Renesas uPD720201/720202, Fresco Logic FL1100 ou VIA VL805 costumam ser
+    reconhecidos pelo Verifier), que e' o conserto classico para este veredito.
+    Alternativa sem comprar nada: DESLIGAR dispositivos USB que nao participam da
+    sessao (headset VR, captura, a terceira webcam, seriais) para liberar banda e
+    poder de barramento do unico controlador -- e so' entao remedir.
+
+  * A DESINSTALACAO DO AUDIO NAO PEGOU: depois de desinstalar no Gerenciador de
+    Dispositivos, o `pnputil` ainda mostra o audio do Kinect como
+    "Status: Iniciado" (instance `USB\VID_045E&PID_02C4&MI_02\6&31c278cf&0&0002`,
+    Classe MEDIA, `Service=usbaudio`, `ConfigFlags=0`). Ou seja: o Windows
+    reinstalou/carregou de novo, ou foi desinstalado o endpoint e nao a
+    interface. Como o veredito de agora e' do Verifier (controladora), este item
+    deixa de ser o suspeito principal -- mas fica registrado que ele resiste.
+
+  * RETRATACAO E O TESTE QUE FALTA: DESLIGAMENTO FRIO (mesmo dia, ~18:10).
+    Eu havia dito que "a controladora Intel nao e' aceita pelo Kinect v2". O
+    usuario contestou com o argumento certo e eu retiro: o Kinect FUNCIONAVA
+    neste PC as 15:09 (o `hand_landmark_calibration_aux2.npz` e' a prova em
+    disco). Hardware incompativel nao funciona e depois para. O que mudou foi
+    ESTADO, nao compatibilidade.
+
+    A receita que ele trouxe (trocar os .py do pykinect2 pelos do GitHub) foi
+    CHECADA item por item e nao toca no que falha aqui:
+      - o `assert sizeof(tagSTATSTG) == 72` esta' no site-packages, mas NUNCA e'
+        executado sem patch: o `kinect_compat` le' o fonte, troca a linha por
+        "in (72, 80)" e so' entao executa;
+      - o import JA funciona (`PyKinectV2` e `PyKinectRuntime` importam);
+      - `GetDefaultKinectSensor` = S_OK e `Open()` = S_OK;
+      - o que falha e' o passo SEGUINTE: o SDK nunca dispara
+        `IsAvailableChanged` (20 s, zero eventos). Isso e' depois do import e do
+        Open, entao trocar arquivos nao alcanca esse ponto.
+
+    MEDIDO AGORA (e o que eu nao tinha olhado):
+      HiberbootEnabled (Fast Startup) = 1   <- LIGADO
+      HibernateEnabled                = 1
+      uptime no momento da medicao: 93 min (ultimo boot 16:43)
+    Fast Startup ligado significa que "Desligar" e' HIBRIDACAO (o kernel e' salvo
+    e restaurado na proxima vez) -- o estado da pilha USB e do driver do Kinect
+    atravessa o desligamento. (Referencia: o "Reiniciar" e' que faz o
+    desligamento completo; por isso reiniciar costuma resolver o que o Desligar
+    nao resolve -- e aqui o reinicio JA foi feito e NAO resolveu, o que aponta
+    para estado preso no PROPRIO dispositivo/controladora, que so' sai com
+    remocao de energia.)
+    Isso explica tudo o que nao fechava: o sensor ficou preso no estado ruim
+    (depois do uso do Kinect Studio), sobreviveu ao reinicio, ao ciclo de energia
+    do Kinect e a troca de porta.
+
+    TESTE QUE FALTA (o usuario foi avisado de que interrompe tudo):
+      1. DESLIGAR o Fast Startup: HiberbootEnabled = 0 (tentado pelo agente no
+         token nao elevado -- ver o resultado no mesmo item);
+      2. `shutdown /s /f /t 0` E, com a maquina desligada, TIRAR O CABO DE FORCA
+         (ou segurar o botao ~10 s) para drenar a energia -- e' a drenagem que
+         zera o estado do controlador, e e' justamente o que nenhuma tentativa
+         anterior fez;
+      3. ligar e rodar `.venv\Scripts\python.exe tools\probe_kinect_vtable.py`:
+         o alvo e' `IsAvailable = TRUE`.
+    Licao de bancada para o HISTORICO, se isso resolver: com Fast Startup ligado,
+    reiniciar NAO substitui o desligamento com drenagem para o Kinect.
+
+  Ferramentas novas deste desfecho:
+    * `tools\checklist_kinect_mudo.py`: o estado medido (IsAvailable, servico,
+      suspensao seletiva de USB) + o checklist NA ORDEM, cada passo com o comando
+      exato e o que fazer depois. Passo 1 = suspensao seletiva, com comando de ida
+      e de VOLTA:
+          powercfg /setacvalueindex SCHEME_CURRENT 2a737441-1930-4402-8d77-b2bebba308a3 48e6b7a6-50f5-4782-a5d4-53bb8f07e226 0
+          powercfg /setdcvalueindex SCHEME_CURRENT 2a737441-1930-4402-8d77-b2bebba308a3 48e6b7a6-50f5-4782-a5d4-53bb8f07e226 0
+          powercfg /setactive SCHEME_CURRENT
+      (voltar atras: mesmo comando com 1 no ultimo numero). Depois: DESLIGAR e
+      RELIGAR a fonte do Kinect e rodar o probe. Passos 2-6: porta USB 3.0 de
+      OUTRA controladora (o v2 precisa das duas faixas; hub/extensao/painel
+      frontal nao servem), fonte propria ligada antes do USB, reinstalar o
+      "WDF KinectSensor Interface 0" no Gerenciador de Dispositivos, o
+      "Kinect Configuration Verifier" oficial (avalia a CONTROLADORA) e, por
+      fim, reparar/reinstalar o SDK 2.0.
+    * `tools\pos_reinicio_kinect.py`: rodar DEPOIS de cada tentativa -- mostra o
+      `IsAvailable` (comparando com o FALSE de antes), se o caminho do projeto
+      entrega frame e o mapa indice->nome das webcams.
+    * `test_checklist_kinect_mudo.py` (7 casos): o parser da suspensao seletiva
+      pelo VALOR nos dois idiomas (o rotulo em portugues e' outro), a
+      decodificacao forcada em UTF-8 -- o `powercfg` em portugues derrubou o
+      programa com `UnicodeDecodeError` (byte 0x8d) porque `text=True` sozinho
+      usa o codec do console --, powercfg que falha sem estourar, o passo 1 com
+      comando de ida E de volta, e `--estado` sem imprimir o checklist.
+
+ITEM 42 - 08/10/2026: A CAUSA RAIZ DO SENSOR MUDO: ROTULO DE INTEGRIDADE LOW EM C:\mestradopy
+================================================================================
+DIAGNOSTICO DIFERENCIAL (o passo que virou tudo)
+  O ColorBasics-D2D (app oficial do SDK) mostrava VIDEO AO VIVO no mesmo instante
+  em que TODO caminho python media `IsAvailable=FALSE` e zero frames. Isso cortou
+  hardware, driver, servico e USB de uma vez: o problema era DO PROCESSO NOSSO.
+  Entao comparei os dois processos ate' nao dar mais: binarios IDENTICOS (SHA256
+  igual em python.exe/python311.dll/python3.DLL/VCRUNTIME140), 50 modulos
+  carregados IGUAIS (Kinect20.DLL e MSVCP110/MSVCR110 do System32 nos dois),
+  sem pacote MSIX nos dois (GetCurrentPackageFullName=15700), ADS/reparse ausentes,
+  token dono igual. O unico discriminatorio restante era o CAMINHO:
+
+      C:\py_plain\python.exe          -> FRAME em 1,4-1,8 s   (5/5)
+      C:\mestradopy2\Scripts2\...     -> FRAME                (fora da pasta)
+      C:\mestradopy\.venv\Scripts\... -> mudo                 (0/5)
+      C:\mestradopy\Scripts2\...      -> mudo                 (fora do venv!)
+
+A CAUSA (icacls C:\mestradopy vs as vizinhas)
+  A pasta tinha/traz 3 ACEs que NINGUEM das outras tem:
+      Todos:(CI)(DENY)(S,DC)
+      S-1-4-433059479-869258309:(OI)(CI)(W,D,DC)
+      Rotulo Obrigatorio\Nivel Obrigatorio Baixo:(OI)(CI)(NW)   <-- O CULPADO
+  O ROTULO MANDATORY LOW herdado faz o processo filho nascer em integridade LOW.
+  O KinectService (integridade MEDIA) nao sinaliza os callbacks de clientes LOW:
+  o resultado e' `Open()=S_OK`, handle de `SubscribeFrameArrived` valido, e o
+  EVENTO NUNCA dispara -- `IsAvailable` fica FALSE para sempre dentro do processo
+  baixo. Conserto (owner faz sem admin):
+
+      icacls C:\mestradopy /setintegritylevel (OI)(CI)M
+
+  Depois do rotulo MEDIUM: o MESMO `.venv` na MESMA pasta passou a entregar
+  (`sonda_wait [.,1]`, handler chamado, FRAME em 1,5 s). Os 2 ACEs estranhos
+  continuam la' (a remocao por nome nao casou: "Todos"/SID nao casou no comando)
+  e sao INOFENSIVOS com o rotulo certo -- nao mexer sem saber de onde vieram
+  (nem o 07/10, nem task manager, nem ferramenta conhecida se revelou autor).
+
+PREMISSA DAS SONDAS, AGORA CORRIGIDA
+  `IsAvailable=FALSE` NAO decide nada: foi medido FALSE TAMBEM num processo que
+  entregava frame no mesmo minuto. O termometro real e' o EVENTO/`has_new_color_frame`
+  (o proprio `probe_kinect_runtime` diz "ISTO que decide" -- estava errado).
+
+CONSORTE DERRUBADO E REBASE MANTIDO
+  A suspeita de "python da Store/MSIX" nasceu do mesmo mal (pacote nao tinha
+  problema, a pasta sim) e do auto-update da Store (tocado 08/10 10:18, puro
+  ruido). Ainda assim o rebase FEITO durante a investigacao e' mantido porque
+  conserta OUTRO problema real: o pacote MSIX escrevia virtualizado (PermissionError
+  no platforms.lock do .platformio). Estado atual: `.venv\pyvenv.cfg` com
+  `home/executable = C:\py_plain` (binarios COPIADOS do pacote Store em
+  C:\py_plain + stdlib Lib/DLLs), launcher `.venv\Scripts\python.exe` = copia
+  desses binarios (+ python311.dll/python3.DLL/VCRUNTIME140.dll irmãos), backups
+  `.store-bak` e `pyvenv.cfg.bak` no lugar. Imune a proxima atualizacao da Store.
+
+O QUE NAO CONCERTOU (antes de achar isto)
+  disable/enable elevado do composite, restart KinectMonitor/KinectService,
+  suspensao seletiva USB (ja' desligada), remocao do audio MI_02 (recriou na
+  hora), reinstall COMPLETO do SDK pelo usuario (08/10, os 4 pacotes com
+  InstallDate novo), N power cycles da fonte+USB (usuario), comtypes/pykinect2
+  intocados desde 28/09, AppCompat/shims ausentes, DLL sombreada inexistente.
+  Tambem: o `.venv\Scripts\python.exe` original era um STUB que spawna o
+  python3.11 do pacote -- por isso TODOS os caminhos do venv falhavam juntos.
+
+FERRAMENTAS QUE FICARAM
+  * `tools/preview_kinect.py` -- janela de video do sensor (ESC/--duracao-s/
+    --sem-janela), nasce so' com o1o frame, exit 1/2 honestos;
+  * `test_preview_kinect.py` -- 7 casos (contrato BGRA->BGR, loop fake entregando/
+    mudo, teto do --sem-janela, main exit 2/1, close em todo caminho);
+  * `tools/reset_kinect_elevado.ps1` -- reset elevado UAC (disable/enable+scan+
+    restart de servicos), com log;
+  * `C:\py_plain` e' a BASE do venv agora -- NAO apagar.
+
+RESULTADO MEDIDO (08/10/2026, pos-rotulo)
+  `.venv\Scripts\python.exe tools\preview_kinect.py --duracao-s 45`:
+  primeiro frame em 1,7 s, 1920x1080, 3340 frames, 74,2 fps de media, janela
+  "Kinect RGB - preview (ESC fecha)" na tela. Sensor 100% vivo.
+
+PENDENTES DO PROJETO (nao muda com este item)
+  Captura do `freeze_kinect_direto.py` (span mediano >=35%, 0,35-0,40 m) para
+  substituir o kinect_intrinsics.npz paliativo de 30/09, e gravar o ESP32
+  esp32_duas_imus no COM4 (segurar BOOT no "Connecting...").
+
+
+================================================================================
+ITEM 43 - 08/10/2026: O CONSERTO DO KINECT REVERTEU, E O FREEZE ESTAVA TRUNCADO
+================================================================================
+CONTEXTO
+  O usuario informou que o Cline resolveu o acesso do Kinect (item 42) e publicou
+  o issue no pykinect2, e pediu para voltarmos ao que estavamos fazendo antes do
+  incidente.
+
+1) O CONSERTO DO KINECT ESTAVA REVERTIDO NA PASTA -- reaplicado
+  `C:\mestradopy` tinha de novo o rotulo `Rotulo Obrigatorio\Nivel Obrigatorio
+  Baixo:(OI)(CI)(NW)`. Esse rotulo faz o processo filho nascer em integridade LOW,
+  e o KinectService (integridade MEDIA) nao sinaliza os callbacks: o sintoma e'
+  exatamente `Open()=S_OK` + handle de evento valido + EVENTO NUNCA DISPARA.
+  Conserto (sem admin -- o dono da pasta faz):
+
+      icacls C:\mestradopy /setintegritylevel (OI)(CI)M
+
+  MEDIDO depois: `tools\preview_kinect.py --duracao-s 10 --sem-janela` -> primeiro
+  frame em 1,4 s, 410 frames, 40,9 fps de media. Sensor 100% vivo.
+  LICAO DE BANCADA: se o Kinect "morrer" de novo, o primeiro comando e' esse
+  `icacls` -- o rotulo ja' voltou uma vez sem ninguem pedir.
+
+2) O `freeze_kinect_direto.py` ESTAVA TRUNCADO (regressao nao commitada)
+  Medido no cruzamento com o teste: o modulo em disco tinha 429 linhas / 8 funcoes
+  e o `test_freeze_kinect_direto.py` (846 linhas) exige 24 nomes -- encontrava 5.
+  Faltavam 19 nomes (17 funcoes + `FX_NOMINAL_PX` + `DESCARTES_MAX`).
+  NINGUEM DELETOU o arquivo: o modulo em disco e' uma versao ANTERIOR aos recursos
+  que o teste descreve (o teste foi escrito e crescido em 05/10, itens 38/39).
+
+  A versao completa NAO existia em disco nem em checkpoint:
+    - copias do disco: a de 30/09 (21090 B, no scratch do Cline) e' mais antiga
+      ainda e nao tem nenhuma das funcoes que faltam;
+    - `git log -- freeze_kinect_direto.py` = vazio (nunca foi commitado);
+    - `git grep 'def distancia_aproximada_m'` nos 37 refs
+      `refs/cline/checkpoints/*` = NADA. O Cline versiona checkpoints, mas este
+      arquivo era UNTRACKED -- entao nenhum checkpoint o guarda.
+
+  COMO FOI RECUPERADO: o TRANSCRIPT da sessao do Cline
+  (`.cline\data\sessions\1790605600415_1s82h\*.messages.json`) guarda os
+  resultados das leituras do arquivo com numeros de linha reais. Uma dessas
+  leituras cobre as 710 linhas do modulo (2..711), SEM buracos e SEM linha
+  truncada, e traz as 21 funcoes que o teste exige. O extrator:
+    * junta os blocos de leitura numerada que contenham `def avalia_conjunto` E
+      `def coleta_poses` (as duas pontas -- e' isso que separa esta leitura das
+      leituras de outros arquivos, que poluem o intervalo se o filtro for so' o
+      numero da linha);
+    * fica com a versao MAIS LONGA de cada numero de linha (o Cline trunca linhas
+      longas em ~2000 chars; a curta e' a truncada);
+    * desfaz o escape do JSON e normaliza a continuacao de linha duplicada.
+  O que a leitura NAO tinha, porque o Cline cortou no fim: o LOOP de `coleta_poses`
+  (do `while True:` em diante) e o `main()`. Essa cauda foi reconstruida a partir do
+  codigo original lido antes da regressao (citado no item 39) e validada pelo
+  teste -- nao por inspecao.
+
+  RESULTADO: `freeze_kinect_direto.py` com 745 linhas / 43782 B no projeto;
+  `test_freeze_kinect_direto.py` passa INTEIRO (inclusive o bloco do DESCARTE das
+  poses borradas, que era o recurso perdido mais importante); suite completa de
+  volta a 45 suites / 0 falhas.
+
+  Nada foi apagado: o modulo revertido esta' em
+  `_cleanup/freeze_kinect_direto_revertido_20261008.py` (21987 B) e a evidencia da
+  recuperacao (a leitura de 710 linhas, o `main`/loop reconstruido e o runner que
+  roda o teste contra um candidato) esta' em `_recuperado_evidencia/`. Os dois sao
+  ignorados pelo git pela regra `_*`.
+
+PENDENTE (nao muda com este item)
+  - FASE 1 continua NAO feita: o `kinect_intrinsics.npz` e' o paliativo de 30/09 e a
+    leitura o RECUSA ("nao registra poses nem span"), entao o Kinect segue sendo
+    re-estimado por sessao. Agora o sensor esta' vivo E o freeze esta' completo:
+    falta a bancada (o usuario esta' fora do laboratorio, acesso remoto).
+  - ESP32 `esp32_duas_imus` no COM4 (segurar BOOT no "Connecting...").
+
+
+ITEM 44 (08/10/2026) - Crash `UnboundLocalError: 'rms'` na Fase 1, corrigido
+  O usuario rodou `freeze_kinect_direto.py` (Fase 1). O Kinect abriu com frame em
+  ~1,6 s, mas `coleta_poses` quebrou na PRIMEIRA janela, antes de capturar pose
+  alguma: o bloco de desenho da janela chama `linha_de_status(... , rms, ...)`,
+  porem `rms` so' era atribuido dentro do `if aceita:` da captura. Sem nenhuma
+  pose aceita ainda, a leitura bateu em variavel local indefinida.
+
+  Correcao: inicializei `rms = None` no topo de `coleta_poses` (junto de
+  `gravou = False`). `linha_de_status` ja' trata `rms is None` e imprime "--".
+
+  Verificacao: `test_freeze_kinect_direto.py` passou (FREEZE_KINECT_DIRETO_OK),
+  inclusive o cenario FakeKinect SEM pose aceita na distancia do par (19 poses a
+  12% da diagonal, "gravou=False, rms=None, arquivo nao criado") -- exatamente o
+  caminho que antes crashava. Suite completa: 45 suites / 0 falhas.
+  Pode-se rodar a Fase 1 na bancada sem o crash.
+
+  Nota: o `edit`/`write` da ferramenta falhou de novo com ReplaceFileW EIO (1175);
+  aplicado via substituicao de string com `_fix_rms.py` temp + `C:\py_plain`.
+
+
+ITEM 45 (08/10/2026) - `stereo_calibration.py --help` quebrava (TypeError %d), corrigido
+  Ajuda do paquete `--salvar-intrinsecas-kinect` usava substituicao com tupla
+  `% (...)` e deixava `%` literal solto no texto resultante; o argparse
+  re-formatava essa ajuda com `%`-dict e estourava `TypeError: %d format: a real
+  number is required, not dict` -- ninguem conseguia ler a usage no dia de
+  bancada. Troquei por `.format()` com `%%` dobrado (convencao ja usada em
+  `--largura-deteccao`), deixando `%` literal como `%%` para o argparse.
+  `--help` volta a imprimir (>= 35% da diagonal, 12 poses, RMS <= 0.6 px; 11-13%).
+  test_intrinsecas_kinect / test_stereo_solve / test_aux_pair_stereo: OK.
+  (Relatorio do agente auxiliar `bench-tools-verifier`; achado dele, eu corrigi.)
+
+
+ITEM 46 (08/10/2026) - Gate de RMS do modelo congelado do Kinect afrouxado 0.6 -> 0.75 px
+  Captura Fase 1 boa na bancada (17 poses, span mediano 37%, todas >= 35%) foi
+  RECUSADA: RMS 0.959 px (15 boas em 0.692, pose #16 = 2.61 px, mediana 0.80).
+  Mesmo descartando a #16 (poda DESCARTES_MAX), as 15 boas ficam em 0.69 px --
+  acima do gate de 0.6 px. O proprio `stereo_calibration.py` (comentario da
+  deteccao) mede o erro de canto DESTE setup em 0.67 px na escala cheia: o gate
+  0.6 px pedia precisao ABAIXO do piso fisico do detector do Kinect. Pedido do
+  usuario ("vamos afrouxar o gate").
+
+  Mudanca: `KINECT_INTRINSICS_MAX_RMS` 0.6 -> 0.75 px, em stereo_calibration.py.
+  E' fonte unica (sc.): vale no write e no read (portoes_do_modelo_kinect /
+  aceita_modelo_kinect), no freeze, na distancia e no veredito do RMS.
+  Com 0.75, a captura boa passa (15 boas 0.692; e a poda ainda tira a #16 ruim).
+
+  Verificacao: suite completa 45/45 OK (os testes usam sc.KINECT_INTRINSICS_MAX_RMS
+  ou passam o limiar como argumento -- nenhum quebrou). --help do freeze e do
+  stereo imprimem "RMS <= 0.75 px".
+
+
+ITEM 47 (08/10/2026) - Flag --log-overlay no kinect_groundtruth_tool (log de desvio automatico)
+  O usuario queria que o log dos OFFSETS DA MAO ja' fosse gravado em todo teste,
+  sem precisar apertar a tecla L (que liga/desliga na mao). Motivo: os offsets
+  do overlay ficavam "grotescos" em certos pontos e ele queria um arquivo pra
+  eu analisar depois onde a projecao saiu da mao.
+
+  Mudanca (so' em tools/kinect_groundtruth_tool.py):
+  - novo arg --log-overlay (store_true): abre o overlay_deviation_log.csv NO
+    SETUP (antes do loop), com cabecalho, e deixa overlay_logging=True. O
+    `finally` ja' fechava o overlay_log_file, entao a saida limpa funciona igual.
+  - helper NOVO cabecalho_overlay_log(): a lista de 79 colunas (16 fixas + 3/no
+    x 21 nos) estava so' dentro da tecla L; agora os DOIS caminhos (init com a
+    flag e tecla L) chamam o mesmo helper -- sem a lista duplicada, o arquivo
+    nao pode mais sair com colunas divergentes dependendo de quem abriu.
+
+  Verificacao: py_compile OK; --help mostra --log-overlay (exit 0);
+  cabecalho_overlay_log() devolve 79 colunas terminando em n20_dy; as 6 suites
+  que importam a ferramenta (diagnostico_calibracao, deteccao_cascata,
+  lateralidade_maos, janelas_grade, palm_alignment, cameras_multi) OK.
+
+  Uso: python tools\kinect_groundtruth_tool.py --log-overlay [--aux-index N]
+  Depois: leia overlay_deviation_log.csv (colunas n{n}_dev_px/dx/dy por frame).
+
+ITEM 48 (08/10/2026) - BUG: cabecalho do overlay_deviation_log.csv NAO batia com a linha
+  Sintoma: analisando os CSVs gerados com --log-overlay, o `n0_dev_px` (coluna 16
+  do cabecalho) vinha NEGATIVO (-0.2) -- mas dev_px = hypot(dx,dy), magnitude,
+  nunca negativa. Prova de que o DictReader lia coluna errada.
+
+  Causa: a ORDEM do cabecalho diferia da ORDEM DA LINHA.
+    cabecalho: [t_s..note] [PALMA 7] [nos 63]
+    linha    : [t_s..note] [NOS 63]  [PALMA 7]
+  Quem lia por NOME (n0_dev_px, palm_kin_x) pegava a coluna vizinha. AFETAVA o
+  proprio tools/analise_estatistica.py (DictReader + linha.get(f"n{i}_dev_px")).
+
+  Correcao: cabecalho_overlay_log() reordenado para [t_s..note] [nos] [palma] --
+  igual a linha. So' o cabecalho mudou (a linha e' a fonte da verdade). PRE-EXISTENTE
+  (cabecalho antigo estava so' na tecla L; copiei verbatim no item 47, preservando).
+
+  Analise REFEITA por POSICAO (CSVs antigos tem cabecalho velho):
+    SIGMA (aux0): 369 frames | mediana 4.5 px | p90 17.5 | max 229.6
+    Trust (aux1): 518 frames | mediana 1.9 px | p90 14.8 | max 166.0
+  -> mediana (offset tipico) OTIMA nas duas (< 30 px).
+  -> "offsets grotescos" = PICOS TRANSITORIOS (2% SIGMA / 6% Trust >= 60 px).
+  CAUSA = MOVIMENTO, nao calibracao:
+    SIGMA: grotescos a 830 px/s (normais 113), z 2.12 m (normais 1.09)
+    Trust: 160 vs 86 px/s; correlacao dev_max x vel +0.17/+0.25
+    borda igual (grotesco x normal) -> NAO e' borda/distorsao.
+  O overlay vermelho (triangulado -- note='triangulado' em 100% dos frames)
+  ATRASA o verde do Kinect no movimento rapido (latencia/sync de 2 webcams nao
+  sincronizadas). NAO e' defeito de calibracao. A calibragem da mao da Trust
+  (RMS ~90 px na tecla H) NAO aparece como offset tipico: a mediana da Trust
+  (1.9 px) e' a MELHOR das duas.
+
+  Verificacao: py_compile OK; cabecalho 79 cols (nos em 9, palma em 72);
+  suites test_janelas_grade / test_lateralidade_maos / test_diagnostico_calibracao OK.
+
+ITEM 49 (09/10/2026) - Gates 1+2 da triangulacao (picos do overlay em movimento rapido)
+  Contexto: analise dos CSVs (item 48) mostrou offsets tipicos OTIMOS (SIGMA 4,5 px,
+  Trust 1,9 px) mas PICOS de 166-229 px em 2-6% dos frames, correlacionados com
+  VELOCIDADE (830 vs 113 px/s) e DISTANCIA (z 2,12 vs 1,09 m) -- nao com borda.
+  Causa: o overlay vermelho vem de triangulacao aux+Kinect (tool linha ~1320) com
+  webcams NAO sincronizadas: em mao rapida aux_px e kin_px vem de momentos
+  diferentes, os raios nao fecham -> 3D errado -> salto.
+
+  Implementado (1 e 2, pedido do usuario), so' em tools/kinect_groundtruth_tool.py:
+  - constantes TRI_ERR_MAX_PX=6.0 e TRI_VEL_MAX_M_S=5.0 (0 = desliga cada gate).
+  - funcao PURA avalia_triangulacao(tri3d, tri_err, ref, dt, ...) ->
+    (aceita, categoria, motivo, palm):
+      Gate 1: mediana do tri_err (reprojecao px, JA' calculado e antes ignorado)
+              > limite -> rejeita (dessincronia).
+      Gate 2: ||palm - ultimo_aceito||/dt > limite fisico -> rejeita (pico).
+      Nos rejeitos devolve palm=None: a referencia NAO avanca, entao o dt do
+      proximo frame cresce e movimento legitimo rapido passa; o pico continua
+      rejeitado ate' a mao voltar perto.
+  - no bloco da triangulacao: se rejeitada, marca `tri_descartada` e NAO cai no
+    par de auxiliares (tambem dessincronizado) -> o overlay cai no DEPTH DO
+    KINECT (suave). Quando a Prioridade 1 nem roda (Kinect cego), o par segue
+    como antes (e' a funcao dele). Notificacao anti-spam a cada 2 s com contadores.
+
+  EFEITO ESPERADO: os frames >= 60 px caem (as medicoes ruins viram fallback
+  Kinect), afetando overlay E hand_source gravado (medida ruim > sem medida).
+
+  Teste: secao 8 nova em test_overlay_auxiliares.py (7/7 -> 8/8) cobre aceitacao,
+  gate reproj, gate vel, gate vel desligado e movimento legitimo rapido.
+
+  COLATERAL: test_conserta_intrinsecas.py falhou 1x -- o TRIPWIRE no topo dele
+  ("o kinect_intrinsics.npz REAL tem de ser RECUSADO") disparou porque o freeze da
+  Fase 1 reescreveu o arquivo real com modelo VALIDO (aceito com o gate 0,75 do
+  item 46). A suite NAO depende do arquivo real (usa paliativos SINTETICOS em
+  temp), entao troquei o assert por um print informativo do estado real.
+
+  Verificacao: 45/45 suites OK.
+
+ITEM 50 (09/10/2026) - O gate 1+2 tinha o REMEDIO errado; consertado (manter o ultimo bom)
+  O usuario gravou com os gates e relatou: "mao esquerda com erro sistemático
+  mesmo com a mão parada". Analise do overlay_deviation_log.csv NOVO (309 frames):
+
+    aceito (triangulado):  med 1.5-3.7 px | max 36.5 | >=60px 0/185  <- OTIMO
+    rejeitado (note=Kinect): med 65-88 px | max 691 | >=60px 122/124 <- PESSIMO
+      right|parado rejeitado: dx -218 px (SISTEMATICO), dev 105 px
+
+  O gate DETECTA bem o pico (as aceitas ficaram limpas: max 36 vs 229 antes do
+  gate) -- a parte boa funcionou. Mas o REMEDIO estava errado: cair no DEPTH DO
+  KINECT deu 87-105 px (dx -218 sistematico) contra ~6-15 px da PROPRIA
+  triangulacao "ruim" (tri_err ~ dev). O fallback e' PIOR que a doenca.
+
+  Conserto: no bloco da triangulacao, quando rejeitada, MANTEM o ultimo esqueleto
+  3D ACEITO (`tri_ultima[lado]`) em vez de deixar None (que caia no depth). O pico
+  e' transitivo e o ponto bom e' recente -> dev limita ao movimento real, nao ao
+  salto de 200 px nem ao fallback de 87 px. So' cai no depth se NUNCA houve
+  aceite (1o frame). Novo contador `mantidas`. Print: "mantido o ultimo 3D bom".
+
+  A esquerda no log tem cobertura fina (27 frames, 4 parados; triangulado parado
+  = 2.6 px BOM) -- o offset sistemático relatado vem dos frames REJEITADOS
+  (fallback) e/ou do esqueleto ROXO da OUTRA camera, que o log NAO captura (so'
+  grava a camera ATIVA/vermelha). Para isolar: gravar com a mao esquerda ativa e
+  parada.
+
+  Verificacao: py_compile OK; 45/45 suites OK (secao 8 do overlay inalterada --
+  `avalia_triangulacao` nao mudou).
+
+ITEM 51 (09/10/2026) - note agora diz ACEITA x MANTIDA (gate) -- destrava o diag da esquerda
+  Contexto: agravamento da mao esquerda (item 50) nao podia ser diagnosticado porque,
+  apos o conserto do remedio (hold), TODAS as notas viraram "triangulado" -- o CSV nao
+  distinguia se o frame foi ACEITO pelo gate ou MANTIDO (hold), nem a CAUSA.
+
+  Investigacao SEM gravar (dados existentes): CRUZAMENTO por posicao cx:
+    cx 600-900   : RIGHT ruim (127 px, dx -106) | LEFT bom (5 px)
+    cx 1050-1250 : RIGHT bom (1.4-4.6 px)       | LEFT ruim (146-196 px, dx +72/+213)
+  Cada mao ruim de UM lado e boa do outro, com sinais de dx OPPOSTOS. Duas causas
+  possiveis, ambos batem nos sinais:
+    (A) gate de velocidade segurando posicao antiga durante movimento lateral
+        das duas maos (efeito colateral do MEU gate);
+    (B) pareamento/lado errado (vermelho de uma mao com dados da outra).
+  Dado existente nao bastava para separar A de B -> precisa do estado do gate.
+
+  Mudanca (so' tools/kinect_groundtruth_tool.py, 2 pontos):
+  - bloco da triangulacao: `mao["tri_gate"] = "aceita"` no aceite, `= categoria`
+    ("reproj"/"vel") na rejeicao.
+  - atribuicao de depth_note: anexa `:{tri_gate}` -> `note` vira
+    "triangulado:aceita" | "triangulado:reproj" | "triangulado:vel"
+    (e "Kinect:reproj" se caiu no depth por falta de aceite anterior).
+
+  Proximo passo (pedido do usuario = opcao a): gravar ~10 s de Mao ESQUERDA PARADA
+  e ler o `note`: frames ruins "mantida:*/reproj" -> (A) meu gate; "aceita" com dev
+  alto -> (B) triangulacao/pareamento. SEM mudanca de comportamento (só' o rotulo).
+
+  Verificacao: py_compile OK; 45/45 suites OK.
+
+ITEM 52 (09/10/2026) - Veredito A x B: e' o HOLD VELHO; conserto = limitar idade do hold
+  Gravacao com `note` instrumentado (item 51), 144 frames:
+    RIGHT: 127 aceita (dev 1.2) + 16 reproj (dev 3.8) -> 0 frames >= 60 px  [LIMPO]
+    LEFT : 1 frame, note=triangulado:reproj, dev_max 128, cx 1199 PARADO
+  -> A direita esta' LIMPA (o gate+hold funciona quando o ref e' FRESCO: dev 3.8).
+  -> O frame da esquerda e' `reproj` (gate rejeitou a triangulacao) e ficou 128 px:
+     e' o HOLD VELHO (tri_ultima[left] de quando a esquerda foi aceita da ultima
+     vez -- raramente rastreada). DIAGNOSE = (A), com a observacao de que o
+     `reproj` tambem mostra que a triangulacao naquele ponto NAO perfeita (tri_err>6).
+
+  Conserto: limitar a IDADE do hold (TRI_HOLD_MAX_S = 0.25 s).
+    - hold FRESCO (<=0.25s) -> mantem (e' o pico transitorio; direita dev 3.8).
+    - hold VELHO  (>0.25s)  -> usa a BRUTA (tri_err ~ dezenas de px), que projeta
+      mais perto que um ponto 128 px atras; `note` vira `{cat}-crua`.
+    - sem aceite anterior  -> cai no depth (como antes).
+  contadores: +`cruas`; print [gate-tri] mostra mantidas/cruas.
+
+  Observacao de COBERTURA: a esquerda so' entrou 1x no log (o CSV grava a mao
+  PRIMARIA). Para diagnosticar a esquerda, ela precisa ser a mao em destaque.
+
+  Verificacao: py_compile OK; 45/45 suites OK.
+
+ITEM 53 (09/10/2026) - ESP32 dual-IMU na bancada: firmware com sondeo de pinos, gravar.bat com auto-retry, e o VEREDITO e' que NENHUM MPU fala no barramento
+  Contexto: o probe_lateralidade --gravar (13h37) rodou SEM MEDICAO (ninguem na
+  frente das cameras); aux_handedness_flip.json INTACTO (05/10 16:44) -- o
+  portao de evidencia funcionou como projetado. Foco foi para o ESP32 duas
+  IMUs no COM4 (cabo novo; upload exige BOOT: auto-reset nao entra em download
+  mode (0x13) nesta placa, mesmo com cabo bom).
+
+  FERRAMENTAS NOVAS/MELHORADAS:
+  - tools\diagnostico_imu_serial.py (NOVO; era _diag_imu.py na raiz): abre a
+    serial, reseta o ESP32 via DTR/RTS, captura N segundos e CLASSIFICA tudo:
+    boot, Wi-Fi, sonda de pinos, calibracao/bias por MPU, "Erro de leitura
+    I2C D/E", dados com prefixo de lado (1,.../2,...), histograma temporal de
+    erros Wire e VEREDITO automatico (bias exatamente 0.0000 = 500/500
+    leituras falharam = chip mudo). Dump cru em _diagnostico_imu_serial.raw.log.
+  - DECODIFICACAO do framework (framework-arduinoespressif32 2.0.17): o
+    Wire.endTransmission(false) e' um NO-OP (retorna 0 sem tocar o barramento);
+    a transacao inteira acontece no requestFrom -> i2c_master_write_read_device;
+    "Error -1" = ESP_FAIL = NACK (timeout seria 0x107/ESP_ERR_TIMEOUT). Logo
+    NACK deterministico = endereco NAO respondeu. (O rotulo antigo do diag
+    dizia "chip RESPONDE" -- errado, corrigido.)
+  - gravar.bat REESCRITO com auto-retry: 10 tentativas (4 s de intervalo,
+    variavel GRAVAR_TENTATIVAS para teste), banners de instrucao/resultado e
+    exit code correto; fluxo completo testado headless. Motivo: cada execucao
+    do esptool da' UMA chance de ~12 s para acertar o BOOT; o retry transforma
+    isso em "segure o BOOT e espere".
+
+  FIRMWARE esp32_duas_imus (4 mudancas; compila RAM 13,9% / Flash 57,8%):
+  1. SONDEO DE PINOS: setupI2c() varre os 136 PARES de GPIO seguros
+     (4,5,13..33) x 2 enderecos (0x68/0x69), adota o par achado e imprime
+     "[i2c] barramento vivo em SDA=.. SCL=.. (endereco 0x..)". Motivo: a
+     fiação da bancada e' "de memoria" (21/22) e 3 mapas nao bastaram.
+  2. SERIAL COM PREFIXO DE LADO: `1,<10 campos>` / `2,<10 campos>` SO' na
+     serial (UDP continua 10 campos; imu.py inalterado) -- fecha o contrato
+     pendente com o imu_serial_bridge, que descartava TODAS as linhas.
+  3. FIM DO MASCARAMENTO D->E: o `return` no erro do MPU D abortava a volta e
+     o MPU E nunca era lido (antes do fix: erro_E=0 mesmo com E morto;
+     depois: 210 x 210).
+  4. BACKOFF DE WI-FI: 20 s no boot, depois 6 s a cada 15 s no loop (antes:
+     20 s TRAVADO em CADA volta; sem hotspot os dados saiam em rajadas).
+
+  VEREDITO DA BANCADA (firmware do sondeo, 15:55):
+  - Wi-Fi conecta em 1-3 s (hotspot EDUARDO-PC 9049 ligado; IP
+    192.168.137.39; UDP 4210/4211 enviando para 192.168.137.1).
+  - SONDEO: "NENHUM MPU6050 respondeu em NENHUM par de GPIO candidato" -- 136
+    pares x 2 enderecos, NACK deterministico (~60 erros/s). O ESP32 habilita
+    pull-up interno (sda/scl_pullup_en), logo o barramento repousa ALTO e NACK
+    universal = NINGUEM falando no barramento, em nenhum pino.
+  - So' UM modulo com LED aceso; o outro SEM ENERGIA (LED apagado = VCC nao
+    chegando). Multimetro nos fios passa; o caminho ASSENTADO nao entrega.
+
+  PENDENTE (usuario, testar em casa):
+  - Isolamento com UM modulo: 3V3/GND, SDA->GPIO21, SCL->GPIO22, AD0 solto
+    (0x68); tools\diagnostico_imu_serial.py COM4 115200 10 -> procurar
+    "[i2c] barramento vivo".
+  - Causa do modulo apagado: trilha de protoboard cortada no meio e' classica;
+    medir 3,3 V NO PINO do modulo (fio com 3,3 e pino com 0 = solda fria);
+    se morto, substituir.
+  - Com 2 modulos bons: AD0 direita->GND (0x68/UDP 4210), esquerda->VCC
+    (0x69/UDP 4211) e rodar 60 s -> dados lado 1/2; depois
+    tools\teste_imu_dois_esp32.py --segundos 20 via hotspot.
+  - So' entao o probe_lateralidade com as DUAS maos visiveis (~40 cm).
+
+  COLATERAL: suite completa 45/45 OK no meio da sessao (nada das mudancas de
+  firmware/python quebrou testes).
+
+ITEM 53 (09/10/2026) - Regra final do gate: escolher por MENOR ERRO PROJETADO (bruta x hold)
+  Gravacao da esquerda (216 frames esq / 15 dir), com o `note` instrumentado:
+    esquerda PARADO  : med 2,5 px (aceita parado = 2,0, 0/75 >= 60)  [BOM]
+    esquerda MOVIMENTO: med 5,4 | ruins>=60 14/122
+    por nota: aceita 140 (med 2,6, 0/140 ruins) | reproj 41 (med 29,9, 18/41
+    ruins) | reproj-crua 35 (med 10,2, 2/35 ruins) | Kinect:reproj 2
+  -> o HOLD (mesmo "fresco" <= 0,25 s) continuou PIOR que a bruta rejeitada
+     (30 vs 10 px): a regra por IDADE (item 52) estava errada.
+
+  Regra NOVA (sem limiar achado a mao): quando o gate rejeita, projeta as DUAS
+  fontes na MESMA metrica (px, view do Kinect) e usa a MENOR:
+    - bruta : erro = mediana de `tri_err` (ja' calculado na triangulacao);
+    - hold  : erro = mediana |alignment.project_camera_points(hold) - kin_px|.
+  `err_hold <= err_crua` (com hold existente) -> mantida; senao -> `-crua`.
+  Isso resolve OS DOIS casos: mild (6-20 px: bruta vence) e catastrofico
+  (~200 px: hold vence) -- o pico original de 229 px continua protegido.
+  Depth do Kinect segue fora (medido 87-105 px, dx -218).
+  TRI_HOLD_MAX_S removido (morto; comentario no lugar documenta a troca).
+  Observacao do usuario: o esqueleto ROXO = camera da direita (a outra aux);
+  ele e' desenhado do MESMO `triangulated_3d` primario, entao este conserto
+  vale para o roxo tambem.
+
+  Verificacao: py_compile OK; import ok; 45/45 suites OK.
+
+ITEM 54 (09/10/2026) - CONCLUIDO: overlay da mao esquerda estabilizado (grafia final)
+  Gravacao de verificacao (325 frames, 311 esquerda), apos a regra por MENOR
+  ERRO PROJETADO (item 53):
+
+  esquerda PARADO   : 201 frames | med 2,2 px | >=60 px 0/201   [PERFEITO]
+  esquerda MOVIMENTO: 110 frames | med 10,2  | >=60 px 5/110 (4,5%)
+    (medio med 7,8 | rapido med 15,7 | max 79,3 -- antes o pico era 229)
+  por nota: aceita 224 (med 2,3, 0 ruins) | reproj(hold) SO' 2 | reproj-crua 85
+  Os 5 ruins restantes sao TODOS `reproj-crua` em movimento rapido (vel 181-954
+  px/s, dev 63-79) -- quadros em que bruta E hold estavam ruins (desincronia
+  extrema); 70 px a 954 px/s = ~2 quadros de LATENCIA do pipeline (webcams nao
+  sincronizadas), so' resolve com sync (opcao 3) ou predicao, nao com gate.
+
+  PROGRESSAO dos frames >= 60 px:
+    sem gate 2-6% -> fallback depth 39% -> hold sempre 20% -> COMPARE 1,6% (5/311)
+  Pico maximo: 229 px -> 79 px.
+
+  Frente de overlay/movimento ENCERRADA. Pendencias do cronograma continuam:
+  tecla O (IMU, com o Cline) e eeg_motor_paradigm.
+
+ITEM 55 (09/10/2026) - Mao DIREITA validada; frente de overlay ENCERRADA nas duas maos
+  Gravacao dedicada da direita (251 frames, todas right), regra por MENOR ERRO
+  PROJETADO ativa:
+    PARADO   : 148 frames | med 1,9 px | >=60 px 0/148 -> PASS (crit: med<5, ruins 0)
+    MOVIMENTO: 103 frames | med 4,7 px | >=60 px 2/103 = 1,9% | max 82 -> PASS
+               (crit: med<15, <=6%, max<100)
+    por nota: aceita 208 (med 2,0, 0 ruins) | reproj-crua 43 (med 12,4, 2 ruins)
+    ZERO frames `reproj` (hold) e ZERO `Kinect` (depth) -- a comparacao escolheu
+    a bruta em todas as 43 rejeicoes, corretamente.
+  Os 2 ruins: vel 285-338 px/s, `reproj-crua`, dev 66-82 -- mesma classe residual
+  de LATENCIA da esquerda (poucos quadros em movimento rapido; sync resolveria).
+
+  FRENTE ENCERRADA (as duas maos):
+    esquerda: parado 0/201 | mov 4,5% | max 79
+    direita : parado 0/148 | mov 1,9% | max 82
+    progressao global >= 60 px: 2-6% (sem gate) -> 1,6% -> ~1% (hoje)
+  Suite 45/45. Proximo do cronograma: tecla O (ESP32/Cline) e paradigma.
+
+ITEM 56 (09/10/2026) - Log do overlay agora grava as DUAS maos por frame
+  Para o veredito FINAL com as duas maos ao mesmo tempo: antes o CSV gravava SO'
+  a mao PRIMARIA (por isso a esquerda apareceu 27x na primeira gravacao e o
+  veredito de uma mao so' ficava com metade dos dados).
+
+  Mudanca (tools/kinect_groundtruth_tool.py, 3 pontos):
+  - bloco do log passa a iterar ("right","left") sobre `resultados_por_lado`,
+    gravando UMA LINHA POR MAO por frame (coluna `lado` ja' existia);
+  - `overlay_prev_palm`/`overlay_prev_time` viraram dicts POR MAO (velocidade
+    antes misturaria os lados); reset da tecla L atualizado;
+  - prints de ativacao: "1 linha/mao por frame"; except ganhou KeyError.
+  Sem mudanca de comportamento do overlay -- so' o log.
+
+  Verificacao: py_compile OK; 45/45 suites OK.
+  Proximo: gravacao FINAL com as DUAS maos (parado + movimento).
+
+ITEM 57 (09/10/2026) - ROXO offset na mao esquerda (2 maos): referencia por MAO no desenho
+  Gravacao final com as DUAS maos (551 linhas: 274 right + 277 left):
+    VERMELHO/verde (o que o CSV mede): right parado med 1,1 | mov med 5,9 (1,3%
+    ruins, max 64) | left parado med 1,5 | mov med 4,8 (0% ruins, max 57) ->
+    PASS no movimento nas DUAS. As 2 "falhas" do parado sao 1 frame por mao,
+    ambas `vel=nan` + `reproj-crua`: o PRIMEIRO frame da mao na sessao (hold nao
+    existe ainda) com triangulacao bruta ruim (106-197 px) -- comportamento
+    PRE-EXISTENTE (o codigo sem gate desenhava o mesmo glitch), nao regressao.
+
+  O QUE O USUARIO VIU (esqueleto ROXO da camera direita offset na mao esquerda,
+  pior com as duas maos juntas) -- NAO esta' no CSV (o log so' mede vermelho):
+  `draw_auxiliary_cameras_on_color` recebia `tri_primario`/`z_primario` e via o
+  loop `if hand_index == 0` repartia: mao 0 da outra camera = 3D da PRIMARIA e
+  as demais = z da PRIMARIA. Com as duas maos na tela, a NAO primaria (a
+  esquerda, tipicamente) era desenhada na profundidade/3D da OUTRA mao ->
+  offset. O VERMELHO nunca teve o problema porque o loop por lado passa o
+  triangulated_3d/z_used de CADA lado.
+
+  Conserto (biblioteca + tool):
+  - `draw_auxiliary_cameras_on_color`: aceita depths/triangulados POR MAO (lista
+    do tamanho da lista de maos). Formato ANTIGO (ndarray tri na mao 0; [z]
+    broadcast) continua funcionando -> chamador do paradigma e os 5 call-sites
+    de teste seguem iguais.
+  - tool: monta `lados_outras` (side de cada entrada de aux_por_camera) e passa
+    tri_por_mao/z_por_mao tirados de `resultados_por_lado[side]` -- a mesma
+    fonte por-mao que o vermelho ja' usava.
+
+  Verificacao: py_compile OK nos 3 arquivos; 45/45 suites OK.
+  Proximo: regravar com as 2 maos e olhar o ROXO na mao esquerda (visual -- o
+  roxo nao entra no CSV).
+
+ITEM 58 (09/10/2026) - Mascara ABAIXO_DO_TRONCO (a mesa tapa a vista do Kinect)
+  Pedido do usuario (fechamento da frente de overlay): "o esqueleto do Kinect
+  nao [deve] tentar achar os pontos abaixo do tronco, porque a mesa tapa essa
+  vista". O SDK infere quadril/joelho/pe ATRAVES da tampo (state Inferred, que
+  os desenhos ACEITAVAM -- so' filtravam NotTracked) e esses pontos sao fantasma:
+  linha do esqueleto atravessando a mesa no video E medida errada se consumidos
+  (ancora de profundidade do punho -> corrompe o EMA last_hand_depth_m; modelo
+  do braco -> elbow_angle lixo).
+
+  Implementado (kinect_imu_groundtruth.py):
+  - constante MASCARA_ABAIXO_TRONCO_M = 0.10 m (camera space, Y pra cima):
+    junta mais de 10 cm ABAIXO do SpineBase e' DESCARTADA. Margem escolhida
+    para: joelhos/pes (~0,25 m abaixo) somem; quadril (~0,05 m) e PUNHO NA MESA
+    (sentado, mesma altura do tronco -- por isso margem e' 0,10 e nao 0)
+    continuam. 0 = mascara desligada.
+  - helpers estaticos `_tronco_base_y(joints)` (None se sem referencia -> nao
+    mascara nada, seguro) e `_abaixo_do_tronco(y, y_base)`.
+  - gates nos 4 consumidores: `_draw_skeleton` (cor), `_draw_skeleton_depth`,
+    `_joint_camera_position` (o do modelo do braco) e `body_hand_anchor` (a
+    ancora de profundidade -- o caminho que corromperia o EMA).
+  Sem SpineBase valido nada e' descartado (melhor nao mexer do que descartar
+  o certo).
+
+  Teste: test_body_anchor.py 6 -> 8 casos (7: punho 0,25 m abaixo rejeitado e
+  punho na altura aceito; 8: todos abaixo -> None).
+
+  Estado da frente de overlay (resposta a "tem mais algo?"): roxo consertado
+  (item 57, usuario confirmou melhora), vermelho/verde med 1,1-1,9 px, picos
+  229->~80 px. SOBRA opcional: sincronia das webcams (unica forma de baixar os
+  ~80 px residuais a 200-950 px/s -- hardware/pipeline, so' se o ground truth
+  exigir); e os passos IMU (tecla O) esperando o ESP32 com o Cline.
+
+  Verificacao: py_compile OK; 45/45 suites OK.
+
+ITEM 54 (09/10/2026) - DECISAO: o ESP32 vira CENTRAL com os 2 IMUs (1 placa no lugar de 2)
+  O usuario decidiu trocar o conceito "1 ESP32 por luva" (firmware/esp32_luvas,
+  commit 0434839) pela CENTRAL unica firmware/esp32_duas_imus: um ESP32 com os
+  DOIS MPU6050 no mesmo barramento -> um UDP por lado (4210 dir / 4211 esq),
+  um cabo USB, um upload. A validacao dos IMUs passa a ser feita NA OUTRA
+  MAQUINA (testes de casa) antes de voltar para a bancada Kinect.
+
+  Nesta outra maquina: clonar o repo, `pio run -e esp32_duas_imus`, gravar com
+  `gravar.bat COMx` (auto-retry, BOOT obrigatorio) e diagnosticar com
+  `tools\diagnostico_imu_serial.py COMx 115200 10` procurando
+  "[i2c] barramento vivo". Credenciais de Wi-Fi NAO vao no repo (copiar
+  `src/credenciais.h.example` -> `src/credenciais.h`).

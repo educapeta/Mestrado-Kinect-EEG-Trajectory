@@ -9,6 +9,15 @@ Cobre o que o smoke manual nao garantia:
 6. Tabela de impedancias (#23): marca canal ruim, conta OK, trata "-10".
 7. Questionario do participante (#2): ENTER mantem o padrao e o JSON sai.
 8. SharedState: diagnosticos novos e traducao da fonte da posicao (KT_src).
+9. Integracao com o TREINO: carregador le o CSV de movimento + alvo preditivo.
+10. Nome REAL do CSV/JSON nos metadados (o FileWriter do g.Pype anexa
+    timestamp ao arquivo; o resumo nao pode anunciar um nome inexistente).
+11. Pre-checagem do g.Nautilus: a mensagem separa as tres causas de falha
+    (Python sem o pacote; Suite/GDS ausente; Suite instalado e invisivel para a
+    SESSAO, porque o PATH do terminal e' anterior a instalacao). A mensagem
+    antiga mandava usar o .venv, que era' o que ja' estava rodando, e definia
+    GNEEDACCESS_DIR -- que neste gtec_gds faz o wrapper exigir headers C. O
+    reparo do PATH e a politica da variavel vivem em `test_gtec_runtime.py`.
 """
 import builtins
 import json
@@ -290,8 +299,100 @@ try:
 finally:
     shutil.rmtree(pasta_teste, ignore_errors=True)
 
-print("PARADIGM_OK: 9/9 blocos (trials balanceados, trial de 12 s, codigos "
+# ---------------------------------------------------------------------------
+# 10) Nome REAL do CSV nos metadados: o FileWriter do g.Pype anexa timestamp
+#     (+ sufixo de colisao) ao arquivo, entao o caminho que o resumo e o JSON
+#     anunciam tem de ser o que existe em disco. Medido em 28/09/2026: a
+#     sessao gravou `..._20260928_121041_20260928_121043_779.csv` enquanto o
+#     JSON apontava para `..._20260928_121041.csv` (inexistente).
+# ---------------------------------------------------------------------------
+pasta_nomes = tempfile.mkdtemp(prefix="_teste_nomes_", dir=".")
+try:
+    pedido = os.path.join(pasta_nomes, "gravacao_MEMI_teste.csv")
+    # `_caminho_real_csv` le o caminho no NO' INTERNO da chain do CsvWriter.
+    # A chain em si nao tem `_file_path` valido -- era o que fazia o resumo
+    # imprimir (e o JSON gravar) o nome PEDIDO, que nao existe no disco.
+    escritor = p.RecordingCsvWriter(file_name=pedido)
+    assert p._caminho_real_csv(escritor) is None, \
+        "sem start() o gpype ainda nao escolheu o nome"
+    cores = [no for no in getattr(escritor, "_internal_nodes", None) or []
+             if hasattr(no, "_generate_file_path")]
+    assert len(cores) == 1, "o caminho real mora no no' interno do CsvWriter"
+    real = os.path.join(pasta_nomes,
+                        "gravacao_MEMI_teste_20260928_135647_158.csv")
+    cores[0]._file_path = real          # o que o start() do gpype faz na sessao
+    assert p._caminho_real_csv(escritor) == real, p._caminho_real_csv(escritor)
+
+    # `_align_event_json`: renomeia o JSON para o MESMO prefixo do CSV e
+    # corrige os caminhos gravados nos metadados (a chave `arquivos.eeg_csv`
+    # e' a que os scripts de analise usam para achar a gravacao).
+    eventos = os.path.join(pasta_nomes, "gravacao_MEMI_teste_eventos.json")
+    with open(eventos, "w", encoding="utf-8") as handle:
+        json.dump({"meta": {"arquivos": {"eeg_csv": pedido,
+                                         "eventos_json": eventos,
+                                         "movimento_csv": pedido}}}, handle)
+    devolvido = p._align_event_json(escritor, eventos, pedido)
+    esperado_json = os.path.splitext(real)[0] + "_eventos.json"
+    assert devolvido == esperado_json, devolvido
+    assert not os.path.exists(eventos), "o JSON antigo deve sair do caminho"
+    assert os.path.exists(esperado_json), esperado_json
+    with open(esperado_json, encoding="utf-8") as handle:
+        gravado = json.load(handle)
+    assert gravado["arquivo_csv"] == os.path.basename(real)
+    assert gravado["meta"]["arquivos"]["eeg_csv"] == real
+    assert gravado["meta"]["arquivos"]["eventos_json"] == esperado_json
+    # E o CSV nomeado pelo gpype continua intocado (nada de renomear dados).
+    with open(real, "w", encoding="utf-8") as handle:
+        handle.write("Time,EEG_Ch01,Marker\n")
+    assert os.path.exists(real)
+finally:
+    shutil.rmtree(pasta_nomes, ignore_errors=True)
+
+# ---------------------------------------------------------------------------
+# 11) Pre-checagem do g.Nautilus: a mensagem tem de separar as causas de falha.
+#     Medido em 28/09/2026 com o .venv (gtec_gds 1.7.1): o erro era
+#     `GDS library not found; tried GDSServer.dll, GDSClientAPI.dll` (o g.tec
+#     Suite ainda nao estava instalado nesta maquina) e a mensagem antiga
+#     mandava "rode com o .venv do projeto" -- o interpretador em uso.
+#     Desde 29/09/2026 o Suite ESTA' instalado, entao o mesmo erro injetado cai
+#     no ramo "Suite instalado e invisivel para a sessao": as assercoes abaixo
+#     valem nos DOIS ramos (a mensagem nunca manda usar o .venv). O reparo
+#     preemptivo do PATH e a politica do GNEEDACCESS_DIR sao a suite
+#     `test_gtec_runtime.py` (o duble aqui nem chega a acionar o reparo).
+#     O teste injeta esse erro no wrapper e cobra a mensagem certa.
+# ---------------------------------------------------------------------------
+try:
+    from gtec_gds.lib import gtec_gds_wrapper
+except ImportError:                        # maquina sem o pacote g.tec
+    print("  (11) gtec_gds ausente nesta Python: mensagem do GDS nao testada")
+else:
+    _conectados_original = gtec_gds_wrapper.ConnectedDevices
+
+    def _sem_runtime_gds():
+        raise RuntimeError(
+            "GDS library not found; tried GDSServer.dll, GDSClientAPI.dll. "
+            "Install GDS, or set GDS_LIBRARY to its name or full path.")
+
+    gtec_gds_wrapper.ConnectedDevices = _sem_runtime_gds
+    try:
+        p._check_gtec_environment()
+    except RuntimeError as erro:
+        texto_gds = str(erro)
+    else:
+        raise AssertionError("sem o runtime do GDS a checagem tinha de falhar")
+    finally:
+        gtec_gds_wrapper.ConnectedDevices = _conectados_original
+    assert "g.tec Suite" in texto_gds, texto_gds
+    assert "GDS_LIBRARY" in texto_gds, texto_gds
+    assert "trocar de Python NAO resolve" in texto_gds, texto_gds
+    # O caminho ERRADO: acusar a Python quando o que falta e' o runtime do GDS.
+    assert "rode com o .venv do projeto" not in texto_gds, texto_gds
+    assert sys.executable in texto_gds, texto_gds
+    print("  (11) mensagem do GDS OK: aponta o g.tec Suite (e nao o .venv)")
+
+print("PARADIGM_OK: 11/11 blocos (trials balanceados, trial de 12 s, codigos "
       "unicos, EEG de 34 colunas + movimento de 45 a 30 Hz (com KT_onset), "
-      "vigia 899/898, painel de impedancias, questionario, KT_src e integracao "
-      "com o treino)")
+      "vigia 899/898, painel de impedancias, questionario, KT_src, integracao "
+      "com o treino, nome REAL do CSV/JSON nos metadados e a pre-checagem do "
+      "g.Nautilus separando runtime do GDS de Python errada)")
 sys.exit(0)

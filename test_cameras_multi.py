@@ -21,9 +21,13 @@ TMP_DIR = Path(__file__).with_name("_aux_test")
 TMP_DIR.mkdir(exist_ok=True)
 STF = TMP_DIR / "stereo_calibration_aux1.npz"
 HCF = TMP_DIR / "hand_landmark_calibration_aux1.npz"
-#: Stereo da camera 5 = o MESMO par Kinect x auxiliar, mas gravado na placa
-#: ANTERIOR (quadrado de 52 mm). Serve para testar o motivo da recusa por
-#: incompatibilidade de placa (caso 5b).
+#: Stereo da camera 5 = o MESMO par Kinect x auxiliar, mas com o QUADRADO da placa
+#: ANTERIOR (52 mm; o lado foi 52 -> 57 em 23/09/2026 e 57 -> 45 em 01/10/2026).
+#: Serve para testar o motivo da recusa por incompatibilidade de placa (caso 5b).
+#: Os DOIS lados da recusa sao cobertos: quadrado diferente (5b) e GEOMETRIA de
+#: cantos diferente (5b2) -- o segundo apareceu no dia em que a placa mudou e a
+#: constante da biblioteca ficou para tras, calando todas as calibracoes novas
+#: (ver test_intrinsecas_kinect.py, guarda de MIGRACAO).
 STF_ANTIGA = TMP_DIR / "stereo_calibration_aux5.npz"
 
 # --- arquivos sinteticos da camera 1 ---
@@ -154,7 +158,9 @@ try:
         auxiliary_dist=np.zeros(5),
         rotation=np.eye(3),
         translation=np.array([-0.22, 0.0, 0.01]),
-        checkerboard_size=np.array([5, 3]),
+        # GEOMETRIA de hoje: a recusa deste caso tem de vir do QUADRADO, nao dos
+        # cantos (senao o teste mediria o caso 5b2)
+        checkerboard_size=np.array(gt.CHECKERBOARD_SIZE),
         square_size_m=0.052,                 # quadrado da placa ANTIGA
         rms=0.4,                             # RMS BOM: a recusa nao e' de qualidade
         auxiliary_size=np.array([1280, 720]),
@@ -164,11 +170,39 @@ try:
     estado, motivo = so_antiga.stereo_status(5)
     assert estado == "rejeitada", (estado, motivo)
     assert "RECALIBRE" in motivo, motivo
-    assert "52" in motivo and "57" in motivo, motivo
+    mm_atual = "%g" % (gt.SQUARE_SIZE_M * 1000.0)
+    assert "52" in motivo and mm_atual in motivo, motivo
     assert not so_antiga.aux_ready(5), "placa diferente nao pode passar por pronta"
     assert so_antiga.aux_usable(5), (
         "o overlay segue desenhando (stereo_usable) -- o que muda e' a escala")
     # e a placa do proprio arquivo e' o que denuncia: nada de "RMS alto"
+    assert "RMS" not in motivo, motivo
+    antiga.unlink(missing_ok=True)
+
+    # 5b2) NPZ DE OUTRA GEOMETRIA de cantos. Foi o caso real de 01/10/2026: o
+    # calibrador ja' gravava a placa nova (7x5 @ 45 mm) e a biblioteca ainda
+    # validava a antiga (5x3 @ 57 mm) -- TODA calibracao nova voltava
+    # "rejeitada -- tabuleiro gravado 7x5 != 5x3 cantos da placa atual", e o
+    # modelo congelado do Kinect saia do ar junto (a sessao voltava a re-estima-lo).
+    np.savez(
+        antiga,
+        kinect_matrix=np.eye(3) * 1000.0,
+        kinect_dist=np.zeros(5),
+        auxiliary_matrix=matrix,
+        auxiliary_dist=np.zeros(5),
+        rotation=np.eye(3),
+        translation=np.array([-0.22, 0.0, 0.01]),
+        checkerboard_size=np.array([11, 7]),
+        square_size_m=gt.SQUARE_SIZE_M,      # quadrado CERTO: so' os cantos mudam
+        rms=0.4,
+        auxiliary_size=np.array([1280, 720]),
+        kinect_size=np.array([1920, 1080]),
+    )
+    outra_grade = gt.CameraAlignment(aux_indices=(5,))
+    estado, motivo = outra_grade.stereo_status(5)
+    assert estado == "rejeitada", (estado, motivo)
+    assert "11x7" in motivo, motivo
+    assert "%dx%d" % tuple(gt.CHECKERBOARD_SIZE) in motivo, motivo
     assert "RMS" not in motivo, motivo
     antiga.unlink(missing_ok=True)
 
@@ -210,6 +244,76 @@ try:
         destino_mao.unlink(missing_ok=True)
         legado_em_tmp.unlink(missing_ok=True)
 
+    # 5d) DE QUAL CAMERA E' O NPZ? O indice do OpenCV e' a POSICAO na enumeracao
+    # do DirectShow: quando ele troca de camera (cabo/USB), um stereo do OUTRO
+    # par era carregado sem sintoma nenhum (RMS lindo, sobreposicao centenas de
+    # px fora -- foi o que a bancada viveu em 28/09/2026). O npz novo grava o
+    # NOME (`camera_names`) e o carregador compara com o nome de AGORA. npz
+    # ANTIGO (sem o campo) continua aceito: nada de inventar conflito.
+    STF_NOME = TMP_DIR / "stereo_calibration_aux6.npz"
+    STF_NOME_OK = TMP_DIR / "stereo_calibration_aux7.npz"
+
+    def escreve_stereo(caminho, camera_name):
+        np.savez(
+            caminho,
+            camera_name=camera_name,
+            kinect_matrix=np.eye(3) * 1000.0,
+            kinect_dist=np.zeros(5),
+            auxiliary_matrix=matrix,
+            auxiliary_dist=np.zeros(5),
+            rotation=np.eye(3),
+            translation=np.array([-0.22, 0.0, 0.01]),
+            checkerboard_size=np.array(gt.CHECKERBOARD_SIZE),
+            square_size_m=gt.SQUARE_SIZE_M,
+            rms=0.4,
+            auxiliary_size=np.array([1280, 720]),
+            kinect_size=np.array([1920, 1080]),
+        )
+
+    # 6 = "Trust USB Camera" hoje, mas o arquivo diz ter sido gravado na SIGMA
+    escreve_stereo(STF_NOME, "SIGMA-W780M")
+    # 7 = "SIGMA-W780M": o arquivo diz o mesmo, com espacos e caixa diferente
+    #     (nenhum conflito pode ser inventado por isso)
+    escreve_stereo(STF_NOME_OK, "  sigma-w780m ")
+    original_stereo_com_nome = gt.aux_stereo_file
+
+    def fake_stereo_com_nome(index):
+        if int(index) == 6:
+            return STF_NOME
+        if int(index) == 7:
+            return STF_NOME_OK
+        return fake_stereo(index)
+
+    gt.aux_stereo_file = fake_stereo_com_nome
+    try:
+        mapa = ["SIGMA-W780M", "Integrated Camera", "Trust USB Camera",
+                "SIGMA-W780M", "Integrated Camera", "Trust USB Camera",
+                "Trust USB Camera", "SIGMA-W780M"]
+        gt.camera_names._CACHE = mapa
+        # 5d) npz antigo (sem o campo) x nome conhecido: segue aceito
+        estado, motivo = alignment.stereo_status(1)
+        assert estado == "aceita", (estado, motivo)
+        assert alignment.camera_name_conflict(1) is None, motivo
+        # 5e) npz de OUTRA camera: recusado, com os DOIS nomes na mensagem
+        outra = gt.CameraAlignment(aux_indices=(6,))
+        estado, motivo = outra.stereo_status(6)
+        assert estado == "rejeitada", (estado, motivo)
+        assert "SIGMA-W780M" in motivo and "Trust USB Camera" in motivo, motivo
+        assert "RECALIBRE" in motivo and "diagnostico_cameras.py" in motivo, motivo
+        assert outra.camera_name_conflict(6) == "SIGMA-W780M"
+        assert not outra.aux_ready(6), "npz de outra camera nao pode passar"
+        # 5f) mesmo nome (caixa/espaco nao contam): aceito normalmente
+        mesma = gt.CameraAlignment(aux_indices=(7,))
+        estado, motivo = mesma.stereo_status(7)
+        assert estado == "aceita", (estado, motivo)
+        assert mesma.camera_name_conflict(7) is None, motivo
+        assert mesma.stereo_camera_name == "sigma-w780m", mesma.stereo_camera_name
+    finally:
+        gt.aux_stereo_file = original_stereo_com_nome
+        gt.camera_names._CACHE = None
+        STF_NOME.unlink(missing_ok=True)
+        STF_NOME_OK.unlink(missing_ok=True)
+
     # 6) escolha POR NOME (--aux-cameras auto): injeta uma enumeracao do Windows
     # sem hardware. O mapa injetado tem a webcam do laptop no indice 1 e uma
     # externa SEM calibracao no indice 3 -- ela deve ficar por ULTIMO (a primeira
@@ -223,12 +327,29 @@ try:
     assert gt.nome_auxiliar(1) == "Integrated Camera", gt.nome_auxiliar(1)
     assert gt.aviso_camera_do_laptop(1) is not None
     assert gt.aviso_camera_do_laptop(0) is None
+
+    # 6b) o indice da camera ATIVA quando ninguem passa --aux-index: era a
+    #     constante 2 (AUX_CAMERA_INDEX) e ABORTAVA a ferramenta nesta maquina,
+    #     onde so' existem 0 e 1 (medido em 28/09/2026); agora sai do NOME, com
+    #     a constante apenas como ULTIMO recurso.
+    assert gt.indice_auxiliar_automatico() == 0, gt.indice_auxiliar_automatico()
+    assert gt.indice_auxiliar_automatico(preferidas=[2, 3]) == 2
+    assert gt.indice_auxiliar_automatico(preferidas=[]) == gt.AUX_CAMERA_INDEX, (
+        "sem enumeracao tem de cair na constante (ultimo recurso)")
+    assert gt.indice_auxiliar_automatico(preferidas=[], reserva=7) == 7
+    # a MESMA enumeracao, agora com a webcam do laptop no indice 0: a ativa nao
+    # pode ser ela
+    gt.camera_names._CACHE = ["Integrated Camera", "SIGMA-W780M"]
+    assert gt.indice_auxiliar_automatico() == 1, gt.indice_auxiliar_automatico()
     gt.camera_names._CACHE = None          # devolve a enumeracao real ao modulo
 
-    print("CAMERAS_MULTI_OK: 8/8 (padrao = as DUAS externas (2, 0), SEM a do "
+    print("CAMERAS_MULTI_OK: 12/12 (padrao = as DUAS externas (2, 0), SEM a do "
           "laptop; lista personalizada, escolha por NOME, o MOTIVO da recusa de "
-          "calibracao de placa diferente e o DESTINO por camera da calibracao "
-          "da mao)")
+          "calibracao de placa diferente -- QUADRADO antigo e GEOMETRIA de cantos "
+          "diferente, os dois sem falar de RMS --, o DESTINO por camera da "
+          "calibracao "
+          "da mao e o nome da camera gravado no npz -- npz de OUTRA camera e' "
+          "recusado, npz antigo sem o campo segue aceito)")
 finally:
     gt.aux_stereo_file = original_stereo
     gt.aux_hand_file = original_hand

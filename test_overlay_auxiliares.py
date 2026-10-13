@@ -12,11 +12,18 @@ contra o esqueleto verde.
 
     .venv\\Scripts\\python.exe test_overlay_auxiliares.py
 """
+import os
 import sys
 
 import numpy as np
 
 import kinect_imu_groundtruth as gt
+
+RAIZ = os.path.dirname(os.path.abspath(__file__))
+# A ferramenta vive em tools/; importar NAO abre Kinect nem camera (o `main()` so'
+# roda com `__main__`). Aqui e' so' para `avalia_triangulacao` (funcao PURA).
+sys.path.insert(0, os.path.join(RAIZ, "tools"))
+import kinect_groundtruth_tool as tool  # noqa: E402
 
 LARGURA, ALTURA = 1920, 1080
 
@@ -219,9 +226,46 @@ def main():
     assert dentro.sum() >= 19, "os 21 nos estao dentro do frame"
     assert vazio.any(), "o tracado dentro do frame tem de aparecer"
 
-    print("OVERLAY_AUXILIARES_OK: 7/7 (dois esqueletos auxiliares em cores "
+    # --- 8) gates da triangulacao (picos em movimento rapido) ----------------
+    # `avalia_triangulacao` e' PURA (sem estado/impressao): e' ela que decide se
+    # uma medicao vale ou cai no depth do Kinect. Regressao dos picos de 166-229
+    # px da bancada de 09/10/2026 (dessincronia aux x Kinect em mao rapida).
+    boa = np.zeros((21, 3))
+    boa[:, 2] = 1.0
+    boa[:, 0] = np.arange(21) * 0.01
+    err_ok = np.full(21, 1.5)
+    aceita, cat, _, palm = tool.avalia_triangulacao(boa, err_ok, None, None)
+    assert aceita and cat == "ok" and palm is not None, (aceita, cat)
+
+    # Gate 1: erro de reprojecao acima do limite (dessincronia) -> rejeita e NAO
+    # devolve palm (o chamador mantem o ultimo aceite, dt so' cresce).
+    err_ruim = np.full(21, 12.0)
+    aceita, cat, motivo, palm = tool.avalia_triangulacao(boa, err_ruim, None, None)
+    assert not aceita and cat == "reproj" and palm is None, (aceita, cat, motivo)
+
+    # Gate 2: salto de posicao em dt curto = velocidade absurda -> rejeita.
+    ref = (boa[9].copy(), 0.0)
+    salto = boa.copy()
+    salto[9] = [5.0, 0.0, 1.0]            # 5 m em 0.03 s = ~167 m/s
+    aceita, cat, motivo, palm = tool.avalia_triangulacao(salto, err_ok, ref, 0.03)
+    assert not aceita and cat == "vel" and palm is None, (aceita, cat, motivo)
+
+    # Gate 2 desligado (0) aceita o MESMO salto (regressao do override).
+    aceita, cat, _, _ = tool.avalia_triangulacao(
+        salto, err_ok, ref, 0.03, max_vel_m_s=0)
+    assert aceita and cat == "ok", (aceita, cat)
+
+    # Movimento legitimo RAPIDO passa: dt maior desde o ultimo aceite baixa a
+    # velocidade calculada para dentro do limite (4 cm em 0.5 s = 0.08 m/s).
+    lenta = boa.copy()
+    lenta[9] += [0.04, 0.0, 0.0]
+    aceita, cat, _, _ = tool.avalia_triangulacao(lenta, err_ok, ref, 0.5)
+    assert aceita, (aceita, cat)
+
+    print("OVERLAY_AUXILIARES_OK: 8/8 (dois esqueletos auxiliares em cores "
           "distintas, desvio contra o verde, profundidade rigida, camera sem "
-          "stereo ignorada, gating de borda e prioridade da triangulacao)")
+          "stereo ignorada, gating de borda, prioridade da triangulacao e "
+          "GATES reprojecao/velocidade)")
     return 0
 
 
