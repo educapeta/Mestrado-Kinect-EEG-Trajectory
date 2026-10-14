@@ -4283,3 +4283,31 @@ ITEM 65 (14/10/2026) - ASSISTENCIA AO CLINE: 5 pedidos do usuario implementados;
   PENDENTE (bancada/capacete, nao-verificavel sem hardware): rodar o trial de
   verdade com g.Nautilus -- conferir painel de impedancia na tela, slides,
   pratica, KT_onset nas gravacoes da ESQUERDA e o mi_desenho na MI.
+
+--------------------------------------------------------------------------------
+57. SESSAO 2026-10-14 (parte 2) - COLABORACAO COM O HARNESS: OCLUSAO DO VERMELHO + TRAVA DE EXPOSICAO
+--------------------------------------------------------------------------------
+(a) kinect_imu_groundtruth.py: `last_draw_recusa` no KinectHandTracker
+  - O desenho VERMELHO do overlay agora REGISTRA POR QUE recusou: sem
+    pixels (3D finitos=N; depth_frame=sim/NAO), projecao fora do quadro
+    (N de 21 dentro), lista de maos vazia ou sem stereo+hand_ready.
+  - Motivo: no teste de OCLUSAO de 14/10 a tool imprimia "SEM vermelho"
+    mas nao dizia SE o draw recusou ou nem foi chamado (o usuario leu
+    aux_hand=sim / 3D=sim e o vermelho mesmo assim nao saiu). O tool le
+    via getattr; None = desenhou.
+(b) tools/kinect_groundtruth_tool.py: diagnostico de OCLUSAO + cameras
+  - Contador "SEM vermelho" por sessao (truncado na primeira recusa de
+    cada sessao; a medicao anterior teve 567 linhas de par) com o estado
+    de cada frame lido direto do tracker.
+  - Trava de EXPOSICAO/FOCO das webcams com relatorio de obediencia:
+    `--exposicao N` (unidades do driver; -7 ~ 1/128 s) e
+    `--sem-trava-exposicao` (padrao: trava LIGADA) + modo MJPEG via
+    camera_uvc (define_modo/le_fourcc).
+(c) stereo_calibration.py: `trava_exposicao` tambem nas capturas de
+  calibracao -- luz e foco CONSTANTES em todas as poses (a camera deixa
+  de variar exposicao meio-calibracao).
+(d) test_paradigm_abort.py / test_video_priming.py: fakes de janela
+  aceitam **kwargs (o paradigma passa `pulsante=` desde o item 56).
+(e) VALIDACAO: py_compile limpo + suites verdes: camera_uvc 9/9,
+  stereo_solve, paradigma_abort 8/8, video_priming, lateralidade,
+  overlay_auxiliares 8/8, aux_pair_stereo 7/7, melhorias.

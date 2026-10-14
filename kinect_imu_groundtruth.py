@@ -3167,10 +3167,17 @@ class KinectHandTracker:
         desenhado e registrado, pois NAO depende do tracking verde.
         """
         if not (alignment.stereo_usable or alignment.hand_landmark_ready):
+            self.last_draw_recusa = "sem stereo/hand_ready"
             return None
         first_deviation = None
         first_red = None
         first_green = None
+        #: Motivo da recusa do ultimo draw (diagnostico de oclusao 14/10: o
+        #: tool imprimia "SEM vermelho" mas nao sabia SE o draw recusou ou nem
+        #: foi chamado -- o usuario leu aux_hand=sim/3D=sim e o vermelho mesmo
+        #: assim nao saiu). O tool le via getattr; None = desenhou.
+        recusa = None
+        finitos3 = -1
         for hand_index, hand_landmarks in enumerate(auxiliary_hands):
             normalized = np.array(
                 [(lm.x, lm.y) for lm in hand_landmarks], dtype=np.float64
@@ -3192,6 +3199,7 @@ class KinectHandTracker:
             if triangulated_3d is not None and hand_index == 0:
                 tri = np.asarray(triangulated_3d, np.float64).reshape(-1, 3)
                 finite3 = np.isfinite(tri).all(axis=1)
+                finitos3 = int(finite3.sum())
                 if finite3.sum() >= 5:
                     projected, _ = cv2.projectPoints(
                         tri.reshape(-1, 1, 3),
@@ -3225,6 +3233,11 @@ class KinectHandTracker:
                 kinect_pixels = np.asarray(kinect_pixels, np.float64).reshape(-1, 2)
 
             if kinect_pixels is None:
+                recusa = (f"sem pixels (3D "
+                          + (f"finitos={finitos3}" if finitos3 >= 0
+                             else "ausente")
+                          + f"; depth_frame="
+                          f"{'sim' if self.last_depth is not None else 'NAO'})")
                 continue
             kinect_pixels = np.asarray(kinect_pixels, dtype=np.float64).reshape(-1, 2)
             # Trim fixo de calibracao (medido com tecla K, salvo em
@@ -3241,6 +3254,8 @@ class KinectHandTracker:
             in_frame = (finite & mascara_dentro_do_frame(
                 kinect_pixels, self.color_width, self.color_height))
             if in_frame.sum() < 5:
+                recusa = (f"projecao fora do quadro "
+                          f"({int(in_frame.sum())} de 21 dentro)")
                 continue
             if (
                 first_deviation is None
@@ -3278,7 +3293,11 @@ class KinectHandTracker:
             # Tracado: fonte unica (nos + conexoes + gating de borda).
             desenhar_esqueleto_projetado(frame, kinect_pixels)
         if first_red is None:
+            self.last_draw_recusa = recusa or (
+                "nenhuma mao desenhavel" if auxiliary_hands
+                else "lista de maos vazia")
             return None
+        self.last_draw_recusa = None
         if first_deviation is None:
             # Sem mao verde (Kinect cego): desvio indefinido, mas a trajetoria
             # vermelha segue disponivel para o log de diagnostico.

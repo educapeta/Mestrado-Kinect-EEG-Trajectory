@@ -172,7 +172,8 @@ class _WindowFake:
     def show_home(self):
         self.mostrados.append("home")
 
-    def show_condition(self, objeto, mao):
+    def show_condition(self, objeto, mao, **kwargs):
+        #: **kwargs: o paradigma passa `pulsante=` (cue MI pulsante, 14/10).
         self.mostrados.append(f"cue:{objeto}_{mao}")
 
     def show_message(self, texto):

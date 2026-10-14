@@ -49,7 +49,9 @@ class _JanelaFake:
     def show_home(self):
         self.chamadas.append(("home",))
 
-    def show_condition(self, objeto, mao):
+    def show_condition(self, objeto, mao, **kwargs):
+        #: **kwargs: o paradigma passa `pulsante=` (cue MI pulsante, 14/10) --
+        #: o fake aceita e IGNORA; a tupla gravada fica igual para as assercoes.
         self.chamadas.append(("cue", objeto, mao))
 
     def show_message(self, texto):

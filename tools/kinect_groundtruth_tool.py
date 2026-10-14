@@ -82,6 +82,12 @@ import kinect_imu_groundtruth as _gt  # noqa: E402
 globals().update({nome: valor for nome, valor in vars(_gt).items()
                   if not nome.startswith("__")})
 
+# Trava de exposicao/foco e o modo MJPEG das webcams (module proprio:
+# camera_names.py e' deliberadamente "sem cv2"; camera_uvc.py e' o espelho
+# enxuto dele -- la' esta' medido que o bruto cai a 8-10 fps, o MJPEG da 30 e
+# que a ORDEM dos set's decide se a stream fica MJPG ou volta pra YUY2).
+from camera_uvc import define_modo, le_fourcc, trava_exposicao  # noqa: E402
+
 #: Landmark do MediaPipe Hands usado como POSICAO DA MAO (9 = centro da palma,
 #: conforme a metodologia; 0 = pulso). Mesmo valor do paradigma
 #: (`eeg_motor_paradigm.HAND_TRACK_LANDMARK`), mas definido aqui: a biblioteca
@@ -413,6 +419,29 @@ def parse_cli():
               "mao (offset grotesco em alguma posicao)."),
     )
     parser.add_argument(
+        "--exposicao", type=float, default=None, metavar="N",
+        help=("FIXA o tempo de exposicao das webcams em unidades do DRIVER (o "
+              "que cv2.CAP_PROP_EXPOSURE le; no DirectShow costuma ser log2 de "
+              "segundos: -7 ~ 1/128 s -- a linha '[exposicao ...]' mostra o "
+              "atual com a heuristica). Sem este flag a camera SO' e' congelada "
+              "na exposicao atual (para de variar); com ele voce ENCURTA o "
+              "tempo, que e' o que mata o borrado no movimento rapido -- exige "
+              "mais LUZ (LED difuso). Direto na camera (fisico): ok, so' "
+              "reporta."),
+    )
+    parser.add_argument(
+        "--fps-cam", type=int, default=None, metavar="N",
+        help=("pede um fps fixo para as webcams (ex.: 60 se a camera suportar "
+              "720p60). Menos tempo entre quadros = menos deslocamento por "
+              "frame no movimento rapido. Sem flag, o fps fica no atual."),
+    )
+    parser.add_argument(
+        "--sem-trava-exposicao", action="store_true",
+        help=("desliga a trava de auto-exposicao/autofocus (padrao: LIGADA -- "
+              "a imagem para de variar durante a sessao e o foco nao respira). "
+              "So' para comparar A/B ou usar o controle automatico de luz."),
+    )
+    parser.add_argument(
         "--escala-janelas", type=float, default=None, metavar="F",
         help=("escala das janelas de video (padrao: automatica -- o maior valor "
               "<= 0.5 que faz TODAS as janelas caberem na tela; em telas com "
@@ -511,6 +540,12 @@ def _sem_numeros(texto):
 #: linhas por frame durante toda a sessao.
 INTERVALO_LOG_LATERALIDADE_S = 2.0
 
+#: Arquivo do diagnostico "SEM vermelho" (oclusao 14/10): estado de cada frame
+#: em que a mao EXISTE mas o overlay nao nasce. Escrito em arquivo porque a
+#: sidebar do PowerShell nao da' Ctrl+C/V -- o experimentador roda e o arquivo
+#: e' lido direto. Truncado na primeira recusa de cada sessao.
+DIAG_OVERLAY_PATH = Path(__file__).resolve().parent.parent / "overlay_diag.log"
+
 #: --- GATES da triangulacao (picos do overlay em movimento rapido) ------------
 #: (1) Erro de reprojecao mediano em px. As webcams NAO sao sincronizadas com o
 #: Kinect: com a mao rapida, `aux_px` e `kin_px` vem de momentos DIFERENTES, os
@@ -583,33 +618,61 @@ def estado_lateralidade(relatorio):
             for indice, info in (relatorio or {}).items()}
 
 
-def abre_camera_auxiliar(indice, tamanho):
+def abre_camera_auxiliar(indice, tamanho, exposicao=None, fps=None,
+                         trava_expo=True):
     """Abre a webcam auxiliar no MESMO backend que a calibracao usou.
 
     O DSHOW vem primeiro: `stereo_calibration.py` calibra por ele (AUX_BACKENDS)
     e ele abre em ~1 s, contra os 20-40 s do MSMF. Se o driver nao entregar
     frame, cai para o MSMF -- nesta maquina os dois backends enumeram os
     MESMOS indices, entao trocar de backend nao troca de camera.
+
+    `trava_expo` (padrao LIGADO) congela auto-exposicao/autofocus via
+    `camera_uvc.trava_exposicao`, que IMPRIME o que a camera obedeceu e o que
+    ignorou; com `exposicao`/`fps` dados, tempo/fps tambem sao FIXADOS
+    (unidades do driver -- ver `--exposicao`/`--fps-cam`).
     """
     for backend, nome in ((cv2.CAP_DSHOW, "DSHOW"), (cv2.CAP_MSMF, "MSMF")):
-        captura = cv2.VideoCapture(indice, backend)
-        if not captura.isOpened():
+        for tentativa, mjpeg in enumerate((True, False)):
+            captura = cv2.VideoCapture(indice, backend)
+            if not captura.isOpened():
+                captura.release()
+                if tentativa == 0:
+                    print(f"Camera auxiliar {indice}: backend {nome} nao abriu.")
+                break                      # o backend nao abre: nao repete
+            #: MJPEG: no padrao (720p bruto/YUY2) esta bancada mediu 8-10 fps
+            #: (100-125 ms/quadro = os picos de movimento); MJPEG entrega 30 na
+            #: MESMA resolucao. `define_modo` faz W/H ANTES do fourcc -- ordem
+            #: inversa renegocia e volta pra YUY2 (medido em 10/10). O modo que
+            #: VAI valer e' o que `le_fourcc` LER da stream, nao o pedido.
+            define_modo(captura, tamanho[0], tamanho[1], mjpeg=mjpeg)
+            captura.set(cv2.CAP_PROP_BUFFERSIZE, 1)
+            if trava_expo:
+                trava_exposicao(captura, exposicao=exposicao, fps=fps,
+                                rotulo=f"aux {indice}")
+            for _ in range(4):
+                captura.read()
+            ok, quadro = captura.read()
+            if ok and quadro is not None:
+                real = le_fourcc(captura)
+                if mjpeg and real not in ("?", "MJPG"):
+                    #: pediu MJPEG e a stream NAO ficou MJPG -> desiste e
+                    #: reabre no modo padrao (fallback daqui abaixo)
+                    captura.release()
+                    print(f"Camera auxiliar {indice}: stream ficou em "
+                          f"'{real}' (esperava MJPG); reabrindo no padrao...")
+                    continue
+                modo = (real if real != "?" else
+                        ("MJPEG" if mjpeg else "bruto"))
+                print(
+                    f"Camera auxiliar {indice}: backend {nome} OK "
+                    f"({quadro.shape[1]}x{quadro.shape[0]}, {modo})."
+                )
+                return captura
             captura.release()
-            print(f"Camera auxiliar {indice}: backend {nome} nao abriu.")
-            continue
-        captura.set(cv2.CAP_PROP_FRAME_WIDTH, tamanho[0])
-        captura.set(cv2.CAP_PROP_FRAME_HEIGHT, tamanho[1])
-        captura.set(cv2.CAP_PROP_BUFFERSIZE, 1)
-        for _ in range(4):
-            captura.read()
-        ok, quadro = captura.read()
-        if ok and quadro is not None:
-            print(
-                f"Camera auxiliar {indice}: backend {nome} OK "
-                f"({quadro.shape[1]}x{quadro.shape[0]})."
-            )
-            return captura
-        captura.release()
+            if mjpeg:
+                print(f"Camera auxiliar {indice}: MJPEG sem frame; "
+                      f"reabrindo no modo padrao...")
     raise RuntimeError(
         f"Nao consegui abrir a camera auxiliar de indice {indice} (DSHOW nem "
         "MSMF). Rode `python tools\\diagnostico_cameras.py --salvar` para ver "
@@ -977,7 +1040,10 @@ def main():
     auxiliares = {}
     for indice in aux_indices:
         try:
-            captura = abre_camera_auxiliar(indice, requested_size)
+            captura = abre_camera_auxiliar(
+                indice, requested_size,
+                exposicao=args.exposicao, fps=args.fps_cam,
+                trava_expo=not args.sem_trava_exposicao)
         except RuntimeError as exc:                 # nao abriu: avisa e segue
             print(f"AVISO: webcam auxiliar {indice} nao abriu ({exc})")
             continue
@@ -1084,6 +1150,9 @@ def main():
     #: um `overlay_prev_palm` unico misturaria os lados no calculo de vel).
     overlay_prev_palm = {"right": None, "left": None}
     overlay_prev_time = {"right": 0.0, "left": 0.0}
+    #: Contador do diagnostico "SEM vermelho" (oclusao 14/10: 567 linhas de par
+    #: no CSV e ZERO no overlay -- imprime a causa na 1a vez e 1 em cada 30).
+    sem_vermelho = {}
     # --log-overlay: liga o log de desvio DESDE O INICIO (sem apertar L). Mesma
     # abertura da tecla L, so' que no setup. `overlay_log_file` ja' e' fechado no
     # `finally` entao a saida limpa funciona igual. -- 08/10/2026.
@@ -1716,11 +1785,19 @@ def main():
                             "visivel nas DUAS cameras e parada."
                         )
                     trim_measure_samples = []
-            if prim_mao is not None:
-                mark = "" if prim_mao["depth_note"] in ("Kinect", "esqueletoSDK") else "!"
-                depth_text = (
-                    f"Z {prim_mao['z_m']:.2f} m ({prim_mao['depth_note']}{mark})"
-                )
+            #: O log NAO pode depender do prim_mao (que vem SO' da mao do
+            #: Kinect): no teste de OCLUSAO (14/10) o Kinect cego zerava o
+            #: prim_mao e o log sumia EXATAMENTE nas 74 frames de fallback --
+            #: o vermelho continuava desenhado (usuario confirmou) e o CSV
+            #: principal gravava, so o overlay_deviation_log perdia. Por isso
+            #: o bloco abre com `or overlay_logging` e o depth_text (que sim
+            #: precisa do Kinect) fica guardado por dentro.
+            if prim_mao is not None or overlay_logging:
+                if prim_mao is not None:
+                    mark = "" if prim_mao["depth_note"] in ("Kinect", "esqueletoSDK") else "!"
+                    depth_text = (
+                        f"Z {prim_mao['z_m']:.2f} m ({prim_mao['depth_note']}{mark})"
+                    )
                 # --- Log de diagnostico do overlay (tecla L liga/desliga) --------
                 # Grava UMA LINHA POR MAO por frame em overlay_deviation_log.csv
                 # com o desvio vermelho-verde por no + contexto (profundidade,
@@ -1734,8 +1811,38 @@ def main():
                 if overlay_logging:
                     for lado_log in ("right", "left"):
                         mao_log = resultados_por_lado.get(lado_log)
-                        if (mao_log is None
-                                or mao_log.get("overlay_red") is None):
+                        if mao_log is None:
+                            continue
+                        if mao_log.get("overlay_red") is None:
+                            #: Diagnostico de OCLUSAO (14/10): o CSV teve 567
+                            #: linhas de PAR e o overlay ZERO -- o vermelho nao
+                            #: saia. O estado (e o motivo do DRAW, lido de
+                            #: tracker.last_draw_recusa) vai para o ARQUIVO
+                            #: overlay_diag.log (a sidebar nao da' Ctrl+C/V)
+                            #: e para o console (1a vez + 1 em cada 30).
+                            primeira = not sem_vermelho
+                            oculto = sem_vermelho.get(lado_log, 0) + 1
+                            sem_vermelho[lado_log] = oculto
+                            estado = (
+                                f"3D={'sim' if mao_log.get('triangulated_3d') is not None else 'nao'}"
+                                f" fonte={mao_log.get('depth_note') or '?'}"
+                                f" aux_hand={'sim' if mao_log.get('aux_hand') else 'nao'}"
+                                f" display={'sim' if display is not None else 'nao'}"
+                                f" stereo={'sim' if (alignment.stereo_usable or alignment.hand_landmark_ready) else 'nao'}"
+                                f" recusa_draw={getattr(tracker, 'last_draw_recusa', None)}"
+                            )
+                            try:
+                                with open(DIAG_OVERLAY_PATH,
+                                          "w" if primeira else "a",
+                                          encoding="utf-8") as fh_diag:
+                                    fh_diag.write(
+                                        f"{time.strftime('%H:%M:%S')} "
+                                        f"{lado_log} {estado}\n")
+                            except Exception:
+                                pass
+                            if oculto == 1 or oculto % 30 == 0:
+                                print(f"[overlay] {lado_log} SEM vermelho "
+                                      f"({oculto}x): {estado}", flush=True)
                             continue
                         try:
                             red = np.asarray(

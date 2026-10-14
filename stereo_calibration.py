@@ -93,6 +93,10 @@ from pathlib import Path
 import cv2
 import numpy as np
 
+# Trava de exposicao/foco das webcams (camera_names.py e' "sem cv2" por
+# design; camera_uvc.py e' o modulo enxuto que precisa dele).
+from camera_uvc import trava_exposicao
+
 import kinect_compat      # pykinect2 64 bits: ANTES do import do pykinect2
 
 kinect_compat.aplicar()
@@ -1560,6 +1564,9 @@ def abre_auxiliar(indice):
         captura.set(cv2.CAP_PROP_FRAME_WIDTH, AUX_REQUEST_SIZE[0])
         captura.set(cv2.CAP_PROP_FRAME_HEIGHT, AUX_REQUEST_SIZE[1])
         aceitou_buffer = captura.set(cv2.CAP_PROP_BUFFERSIZE, 1)
+        #: Congela auto-exposicao/autofocus: luz e foco CONSTANTES em
+        #: todas as capturas (relatorio do que a camera obedeu vs ignorou).
+        trava_exposicao(captura, rotulo=f"aux {indice}")
         for _ in range(AUX_DESCARTE):
             captura.read()
         ok, quadro = captura.read()
