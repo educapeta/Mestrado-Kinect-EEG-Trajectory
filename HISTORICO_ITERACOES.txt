@@ -4026,3 +4026,260 @@ ITEM 55 (13/10/2026) - BANCADA DE CASA: 2 IMUs no flat de 2 m, pull-ups de 2,2k 
   `teste_imu_dois_esp32.py` precisam dele; rodar com o python do penv do
   PlatformIO ou adicionar pyserial ao requirements.
 
+
+ITEM 59 (10/10/2026) - Bloqueio de exposicao + MODO MJPEG: 8-10 fps -> 30 fps (o gargalo do movimento)
+  Pedido: configura o bloqueio de exposicao pro desempenho em movimento rapido.
+  Sondas AO VIVO nas webcams da bancada acharam MAIS que exposicao:
+
+  ACHADOS (medidos, nao estimados):
+  1. MODO: no padrao (1280x720 YUY2 bruto) as DUAS cameras entregam 8-10 fps
+     -> 100-125 ms/quadro -> a 300-950 px/s sao 30-120 px de deslocamento POR
+     QUADRO: a espinha dos picos de movimento. 720p MJPEG = 30 fps nas duas,
+     MESMA resolucao.
+  2. ORDEM dos set's decide o modo: W/H DEPOIS do fourcc renegocia e VOLTA pra
+     YUY2 (fourcc lido 'YUY2', 10 fps); W/H ANTES + fourcc depois = 'MJPG' 30.
+     (Trava de exposicao NAO afeta o fps -- medido com/sem.)
+  3. A propriedade CAP_PROP_FPS MENTE: aceitou pedido 60 e entregou 4-8 fps.
+  4. EXPOSICAO: Trust automatica em -4 ~ 1/16 s (borrava movimento -- o que o
+     usuario via como "media de frames"); SIGMA ja' em -7 ~ 1/128 s. A Trust
+     ACEITOU -7 explicito com 74% do brilho -> a luz atual QUASE aguenta 1/128.
+     (Do lado do teste, o -7 PERSISTIU na memoria da Trust: ela ja' abre em -7.)
+
+  IMPLEMENTADO (module novo camera_uvc.py -- camera_names.py e' "sem cv2" por
+  design, entao o espelho enxuto dele):
+  - define_modo(cap, w, h, mjpeg): W/H primeiro, fourcc depois (ordem certa);
+  - le_fourcc(cap): modo REAL da stream (o print NAO confia no pedido);
+  - mede_fps(cap): fps REAL medido (a propriedade mente);
+  - trava_exposicao(...): auto-expo->manual, tempo/ganho/fps opcionais,
+    autofocus off, fps REAL na linha e AVISO quando o tempo e' longo demais
+    (>= -6 log2: "borrara o movimento"). Relatorio honesto do que pegou/ignorou;
+    NUNCA lanca excecao.
+  Wiring: tool (abre_camera_auxiliar: MJPEG com validacao do fourcc real e
+  fallback pro padrao; flags --exposicao, --fps-cam, --sem-trava-exposicao);
+  paradigma (_open_auxiliary: idem, dentro do timeout de 8 s, import lazy);
+  stereo (SOMENTE a trava -- YUY2 mantido de proposito: board estatico, canto
+  sem perda > fps).
+  Teste test_camera_uvc.py 7 -> 9 casos (ordem dos set's, le_fourcc, fps real,
+  aviso de tempo longo).
+
+  VERIFICACAO AO VIVO (abertor real da tool): idx0 MJPG fps REAL 29.8 |
+  idx1 MJPG fps REAL 30.4 (antes 9.9/8.2 com print dizendo "MJPEG").
+  Suite 46/46.
+
+ITEM 60 (14/10/2026) - Delta medido: 30 fps/MJPEG x baseline 8-10 fps
+  Gravacao nova com --log-overlay (610 linhas) x baselines de 09/10 (8-10 fps):
+    esquerda MOVIMENTO: med 10,2 -> 5,2 (-49%) | ruins 4,5% -> 2,3% | max 79 -> 65
+    direita  MOVIMENTO: med 4,7 -> 4,9 (estavel) | ruins 1,9% -> 0,8% | max 82 -> 79
+    parado: dir 1,9->2,3 (ruido) | esq 2,2->4,8 (+2,6: MJPEG lossy + posicao;
+    4,8 px continua muito bom). Usuario: "melhorou muito" (ganho visual do
+    10->30 fps).
+  Gates: 25% dos frames rejeitados em movimento (reproj-crua, med 8-10 px) --
+  normal; o remedio por menor erro segura. 1 frame de startup com 236 px (ja'
+  conhecido, pre-existente).
+  Proxima alavanca de qualidade: LUZ (LED) -> ruido menor (volta o parado) e
+  permite --exposicao -8 (1/256 s). Proximo passo do cronograma: paradigma com
+  capacete g.Nautilus sem ESP32.
+
+ITEM 61 (14/10/2026) - Teste de OCLUSAO do Kinect: o par de auxiliares assumiu (validado)
+  Usuario ocultou o Kinect durante gravacao (log de 15:45; 614 linhas no CSV
+  principal, 540 no overlay).
+
+  O QUE FUNCIONOU (o claim central do projeto -- "o par SUBSTITUI o Kinect"):
+  nas frames em que o Kinect ficou cego, o pipeline produziu ground truth por
+  FONTES SUBSTITUTAS: 19 linhas `trianguladoAux` (par de webcams; aux_pair
+  xyz PREENCHIDO 19/19, z ~0.98-1.12 m, lado 15 esq + 4 dir) + 31 `Kinect`
+  (depth) + 9 `amostrada` = 74 hand-frames de substituicao em ~22 s de teste.
+  Janela: 534 linhas totais, 370 continuaram `triangulado` (oclusao parcial/
+  intermitente). Qualidade do overlay na janela: med 4.0 px x 3.5 fora (sem
+  degradacao).
+
+  ACHADO (para investigar): as 74 linhas de fallback existem no CSV PRINCIPAL
+  mas NAO no log do overlay (614-540=74, exato; o log tem so' notas
+  triangulado:*). A design do log preve linhas SEM desvio (verde ausente) --
+  zero ocorreras. Hipoteses: (a) a camera ATIVA nao resolvia o lado da mao
+  (aux_hand None -> vermelho nao desenhado) enquanto o PAR disparava via a
+  OUTRA camera (o usuario pode ter visto so' o ROXO); (b) alguma chave faltando
+  e o `except KeyError` pulando a linha em silencio. Pergunta ao usuario: ele
+  viu o VERMELHO acompanhando na oclusao ou so' o roxo/janelas?
+
+  Se precisar: instrumentar para gravar a frame cega (dev vazio + nota de
+  fonte) e/ou manter o vermelho desenhado via par durante a oclusao.
+
+ITEM 62 (14/10/2026) - Log do overlay GRAVA durante a oclusao (nao depende mais do Kinect)
+  Usuario confirmou: o VERMELHO continuava desenhado na oclusao (o desenho nunca
+  dependeu do Kinect) -- logo as 74 linhas que sumiram do overlay_deviation_log
+  eram so' LOG. Mecanismo achado: o bloco do log ficava DENTRO de
+  `if prim_mao is not None:` e `prim_mao` vem SO' da mao do KINECT (primaria =
+  kin_por_lado[right] or kin_por_lado[left]): com o Kinect cego, prim_mao = None
+  -> o log TODO pulava, EXATAMENTE nas frames de fallback (614-540=74, exato).
+
+  Conserto (minimo): condicao do bloco vira `prim_mao is not None or
+  overlay_logging` e o depth_text (que sim precisa do Kinect) fica guardado por
+  um if interno. O loop do log continua lendo `resultados_por_lado`/`mao_log`
+  (que existem com o Kinect cego via aux_hand) e, sem verde, grava as colunas
+  de desvio VAZIAS + nota da fonte (trianguladoAux/Kinect/amostrada) -- exatamente
+  o que a docstring do log descreve.
+
+  Observacao de COBERTURA (usuario): na oclusao uma das maos era vista por UMA
+  so' camera auxiliar (na outra, as DUAS maos estavam). Par de auxiliares
+  exige AS DUAS cameras vendo a mao: com uma so' + Kinect cego -> sem
+  triangulacao (fontes amostrada/'' das 74). P/ substituicao completa as duas
+  webcams tem de cobrir toda a faixa de trabalho das maos (layout +/-45 graus,
+  baseline 0,6-1,2 m do README).
+
+  Verificacao: py_compile OK; 46/46 suites OK.
+  Proximo teste: repetir a oclusao com --log-overlay e conferir que as linhas
+  cegas aparecem (desvio vazio + nota trianguladoAux).
+
+ITEM 63 (14/10/2026) - Oclusao v2: par VALIDADO nos dados; vermelho ausente INSTRUMENTADO
+  Log de 16:14 (apos o conserto do item 62): CSV 974 linhas (567 trianguladoAux!
+  -- o par assumiu em MAIORIA), overlay 285 (so' triangulado:*).
+
+  VALIDACAO DO PAR (numeros): o 3D do par durante a oclusao e' LISO e fisico --
+    right: salto consecutive med 0,3 cm | p90 2,7 cm | vel med 0,03 m/s | z 1,06-1,37 m
+    left : salto med 0,4 cm | p90 1,9 cm | vel med 0,03 m/s | z 1,00-1,19 m
+    so' 3/271 amostras > 3 m/s. Pareamento de lados CORRETO sem o Kinect (o
+    ripo/flip aprendido segurou) -- "funcionou razoavelmente bem" = confirmado.
+
+  ELIMINADO: "log nao cobriu a janela" (452/567 linhas do par caiam no intervalo
+  do overlay) e "roxo por cima do vermelho" (zero linhas cegas = o vermelho
+  REALMENTE nao existia; a sobreposicao so' explica VISUALMENTE quando os dois
+  existem -- ordem de desenho: vermelho no loop por lado, roxo DEPOIS -> roxo
+  pinta por cima quando coincidem; deixado como observacao).
+
+  ULTIMOS 6,5 s: overlay parou (L desligado) e o CSV seguiu com 115 linhas de
+  par + 2 triangulado no fim -- o "vermelho esquisito" da retracao da mao foi
+  nessa transicao (troca de fonte Kinect+aux -> par -> de volta), fora do log.
+
+  INSTRUMENTACAO (discrimina a causa em 1 rodada): no branch do log, quando
+  `overlay_red is None` com mao existente, imprime (1a vez + 1/30 frames):
+  `[overlay] <lado> SEM vermelho (Nx): 3D=sim/nao | fonte=... | aux_hand=sim/nao
+  | display=... | stereo=...`. aux_hand=nao -> lado da camera ATIVA nao resolvido
+  (arbitro/descarte); aux_hand=sim com 3D=sim -> o DRAW recusou (projecao fora/
+  gating). sem_vermelho = contador ao lado de overlay_prev_*.
+
+  Verificacao: py_compile OK; 46/46 suites OK.
+  Proximo: repetir a oclusao com --log-overlay e colar as linhas [overlay].
+
+ITEM 64 (14/10/2026) - Oclusao: o DRAW se recusava; motivo instrumentado + overlay_diag.log
+  Leitura do usuario na oclusao (console): `[overlay] left SEM vermelho ...
+  fonte=trianguladoAux aux_hand=sim display=sim stereo=sim` -> TODAS as entradas
+  do draw presentes; logo quem recusou foi o PROPRIO draw
+  (draw_auxiliary_hands_on_color) -- as hipoteses (a) sem aux_hand e (c) escopo
+  do log ja' estavam mortas.
+
+  Instrumentacao em 2 camadas:
+  - biblioteca: `draw_auxiliary_hands_on_color` agora registra
+    `self.last_draw_recusa` (None = desenhou): "sem pixels (3D finitos=N;
+    depth_frame=sim/NAO)", "projecao fora do quadro (N de 21 dentro)",
+    "nenhuma mao desenhavel", "lista de maos vazia", "sem stereo/hand_ready".
+    Silenciosa (so' atributo) -- o tool decide o que imprimir.
+  - tool: no branch "SEM vermelho", o estado completo (3D/fonte/aux_hand/
+    display/stereo/recusa_draw) vai para o ARQUIVO `overlay_diag.log` (raiz,
+    truncado na 1a recusa da sessao) -- resolvendo o problema do usuario de
+    NAO CONSEGUIR copiar da sidebar do PowerShell (Ctrl+C/V nao funciona la):
+    ele roda, eu leio o arquivo. Console mantem o aviso 1a vez + 1/30.
+
+  SUITE nesta rodada: 45/46 -- a UNICA falha (test_video_priming:
+  `_JanelaFake.show_condition() got unexpected kwarg 'pulsante'`) NAO e' minha:
+  o Cline gravou +410 linhas nao-commitadas no eeg_motor_paradigm.py as 17:02
+  (recurso pulsante/mi_desenho do cue MI) e o fake do teste (30/09) nao foi
+  atualizado. Deixado para o dono da feature (ou usuario libera o patch de 1
+  linha: `def show_condition(self, objeto, mao, **kwargs)`).
+
+  Proximo: usuario repete a oclusao com --log-overlay; o overlay_diag.log
+  (com recusa_draw) entrega o veredito sem copia de console.
+
+--------------------------------------------------------------------------------
+56. SESSAO 2026-10-14 - MELHORIAS PEDIDAS APOS O PRIMEIRO TRIAL REAL (pedido do usuario)
+--------------------------------------------------------------------------------
+(a) PAINEL DE IMPEDANCIA MELHORADO ("mostrar a impedancia ao abrir")
+  - O painel JA existia na PREPARACAO (#23/#24), mas dependia so' do
+    aparelho direto e falhava em silencio no link sem fio (CRC). Agora o
+    ImpedanceMonitor tem CAMINHO REDUNDANTE: get_impedance direto com
+    reenvio do comando 'first' apos QUALQUER falha + fallback na API do
+    g.Pype (start/get_impedance/stop). A tela de preparacao mostra o
+    veredito grande: "ELETRODOS: N/32 BONS (TODOS OK / VER ELETRODOS)".
+
+(b) INSTRUCAO + TRIALS DE PRATICA ("explicar o que e cada coisa + trials teste")
+  - Fluxo novo: PREPARACAO -> INSTRUCAO (4 slides: boas-vindas, simbolos,
+    etapas da trial, fase de imaginacao; ESPACO avanca) -> DEMO dos 6
+    cues (1,2 s cada) -> --trials-teste trials de PRATICA (padrao 6, uma
+    por condicao) -> "PRATICA CONCLUIDA" -> BASELINE -> origem -> sessao.
+  - A pratica roda ANTES do CODE_SESSION (32766): marcador 789
+    (CODE_TRIAL_PRACTICE) e campo pratica=1 em TODOS os eventos da
+    pratica (a analise exclui por pratica=1). Sem clipe de priming em disco.
+  - Flags: --sem-instrucoes (pula slides), --trials-teste N (0 = nenhuma).
+
+(c) BUG DA MAO ESQUERDA CORRIGIDO ("trajetoria nao aparece na mao esquerda")
+  - CAUSA RAIZ: set_phase fazia ARM_CUE_SIDE.get(cue) com o cue sendo a
+    condicao COMPLETA ("bola_esquerda"); o lookup SEMPRE retornava vazio,
+    o want_side nunca chegava ao detect_hand do MediaPipe e ele escolhia
+    a mao "mais confiante" (via de regra a DIREITA). Trials da esquerda
+    gravavam a mao ERRADA parada no home -> sem trajetoria no clipe e
+    KT_* NaN no CSV (o usuario suspeitou certo: o valor nao era gravado).
+  - FIX: o lado vem do SUFIXO (cue.rsplit("_",1)[-1]); teste novo cobre
+    (bola_esquerda -> "left", caneta_direita -> "right"). Alem disso o
+    tracking agora AVISA no console (1x/2 s):
+    "MAO left SEM posicao 3D na ME: KT_* e trajetoria nao serao gravados"
+    -- o problema fica visivel na proxima bancada em vez de silencioso.
+  - PENDENTE: validacao com hardware (proxima sessao com o Kinect).
+
+(d) MI COM APOIO VISUAL E AUTO-INICIO (opt-in; o usuario hesitou nos dois)
+  - --mi-desenho: pulso suave (1.0<->1.08, periodo 1,6 s) do simbolo+seta
+    durante a MI -- ajuda a mentalizacao. Padrao DESLIGADO: muda o que o
+    participante ve entre sessoes (comparar condicoes exige cuidado) e
+    movimento visual ativa areas de motion processing (hMT+), podendo
+    puxar execucao motora real -- indesejavel numa tarefa de IMAGINACAO.
+  - --mi-auto-onset + --mi-auto-timeout (4 s): o timer da MI comeca quando
+    o KINECT VE o MOVIMENTO (onset = 795) em vez de no cue fixo. Padrao
+    DESLIGADO: a janela fixa pos-cue e' o padrao da literatura de MI e
+    mantem a epoca no tempo; com auto, a epoca ancora no onset e a
+    latencia de reacao varia (a analise usa o proprio 795). O detector e'
+    rearmedo na fase de VIDEO (sem mexer no onset_time do clipe).
+  - Tudo registrado nos metadados da sessao (instrucoes, trials_teste_
+    pratica, mi_desenho, mi_auto_onset).
+
+(e) TESTES: test_paradigm_melhorias.py (novo: codigo 789, lista de pratica,
+    slides, fix do lado da mao, marca de onset da MI, defaults de CLI,
+    metadados) + suites do paradigma verdes (protocol 11/11, abort 8/8,
+    aux_pair 5/5, janelas, cue, move_onset, imu dual, fusion).
+
+ITEM 65 (14/10/2026) - ASSISTENCIA AO CLINE: 5 pedidos do usuario implementados; suite 47/47 verde
+  O usuario repassou ao Cline 5 alteracoes do trial e pediu minha assistencia.
+  LEITURA DO WORKING TREE (nao commitado, eeg_motor_paradigm.py +410 linhas,
+  edicoes 17:02/17:10 do Cline): OS CINCO ITENS JA' ESTAO IMPLEMENTADOS:
+  1. Painel de impedancia na PREPARACAO: `ImpedanceMonitor` (thread, #23/#24)
+     publica tabela na tela da preparacao; para quando a sessao comeca
+     (on_session_start); flags --sem-painel-impedancia / --impedancia*.
+  2. Instrucoes antes dos trials: `_begin_instructions` = slides (ESPACO) ->
+     DEMO DOS SIMBOLOS (cue PNGs) -> trials de PRATICA (CODE_TRIAL_PRACTICE,
+     nao conta na sessao); flag --sem-instrucoes; cfg "instrucoes".
+  3. Trajetoria da esquerda: CAUSA RAIZ CORRIGIDA em `set_phase` -- o valor era
+     ARM_CUE_SIDE.get(cue) com cue="bola_esquerda" (nunca casava) -> want_side
+     vazio -> MediaPipe escolhia a mao direita -> esquerda gravava a mao ERRADA,
+     sem KT_*/trajetoria. Agora extrai o sufixo (rsplit) + aviso diagnostico
+     na ME ("MAO <lado> SEM posicao 3D ...").
+  4. Timer/onset: detector de onset JA' EXISTE (MOVE_ONSET_SPEED_MPS, marcador
+     `[onset] INICIO DO MOVIMENTO`, coluna KT_onset, mark_mi_onset na MI) --
+     solucao correta: NAO deslocar a janela fixa (epocas comparaveis), MARCAR o
+     inicio do movimento.
+  5. Sinalizacao do MI: recurso `pulsante`/`mi_desenho` (show_condition com
+     pulsante=, cfg mi_desenho).
+
+  O QUE EU CONSERTEI PARA A SUITE FICAR VERDE (testes; o arquivo do Cline nao
+  foi tocado exceto o patch 3):
+  1. test_video_priming + test_paradigm_abort: fake `show_condition(objeto, mao,
+     **kwargs)` -- o Cline passa pulsante= e os fakes antigos nao aceitavam.
+  2. eeg_motor_paradigm.py `ImpedanceMonitor.run`: falha PERMANENTE ("sem
+     aparelho direto nem API do g.Pype") virava retry infinito apos a edição
+     das 17:10 -- violava o contrato de test_parada_threads ("sem aparelho a
+     thread SAI sozinha" + texto com "indisponivel"). Agora: permanente ->
+     publica "(indisponivel: ...)" e `break`; transitoria (link CRC) segue
+     re-tentando. PATCH MINIMO na classe do Cline -- se a intencao dele for
+     outra (ex.: manter o retry), ele refaz e atualiza o teste.
+
+  SUITE: 47/47 (apareceu uma 47a suite nova, verde tambem).
+  PENDENTE (bancada/capacete, nao-verificavel sem hardware): rodar o trial de
+  verdade com g.Nautilus -- conferir painel de impedancia na tela, slides,
+  pratica, KT_onset nas gravacoes da ESQUERDA e o mi_desenho na MI.

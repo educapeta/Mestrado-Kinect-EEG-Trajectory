@@ -6,7 +6,7 @@ Programa 1 (gravacao offline). Um UNICO processo integra:
      -> Bandpass 1-30 Hz -> Notch 50/60 Hz -> RecordingMuxer -> CSV.
   2. Paradigma Qt (thread principal), protocolo final da dissertacao:
      [PREPARACAO ~10 min: EEG, calibracao do Kinect e teste de sinal; ESPACO
-      inicia] -> [BASELINE 5 min: 2 min olhos abertos, 2 min olhos fechados,
+      inicia] -> [INSTRUCAO: slides + demo dos simbolos + --trials-teste trials de PRATICA (padrao 6; 789 + pratica=1; --sem-instrucoes pula)] -> [BASELINE 5 min: 2 min olhos abertos, 2 min olhos fechados,
       1 min repouso ativo] -> calibracao de origem (10 s) -> contagem ->
       [5 BLOCOS de 50 trials com 2 min de pausa entre eles] -> encerramento.
      Cada trial tem 12 s:
@@ -15,7 +15,7 @@ Programa 1 (gravacao offline). Um UNICO processo integra:
          da mao; o participante EXECUTA alcance/preensao)
        PAUSA + VIDEO 2 s (video do proprio movimento em camera lenta 0,5x,
          com a trajetoria 3D desenhada sobre o quadro - priming visual)
-       MI 4 s (IMAGINA o mesmo movimento; o MESMO cue permanece na tela)
+       MI 4 s (IMAGINA o mesmo movimento; o MESMO cue permanece na tela; --mi-desenho pulsa o simbolo e --mi-auto-onset inicia o timer no onset do movimento -- ambos opt-in)
      Condicoes: 3 objetos x 2 maos = 6, balanceadas ao longo da sessao.
   3. Thread de tracking: reutiliza KinectHandTracker/CameraAlignment de
      kinect_imu_groundtruth (triangulacao stereo MediaPipe->3D + cadeia de
@@ -74,6 +74,7 @@ Codigos de marcador (convensao BCI Competition IV 2a estendida):
   780/781 = inicio/fim da MI
   790/791 = inicio/fim do bloco      792/793 = inicio/fim da pausa
   794   = inicio do video em 0,5x     796 = TRIAL CANCELADO pelo experimentador
+   789 = trial de PRATICA (instrucoes; TODOS os eventos da pratica levam pratica=1 no JSON)
 
 Os codigos de mao (769/770), ME (778) e condicao (811-816) sao emitidos com
 offsets de 50/100 ms no inicio do cue para nao colidirem na coluna Marker
@@ -254,6 +255,9 @@ CODE_MOVE_ONSET = 795
 #: tempo. NAO e' falha do participante: e' decisao do experimentador (tosse,
 #: eletrodo, movimento errado, etc.).
 CODE_TRIAL_CANCEL = 796
+#: Trial de PRATICA (instrucoes, antes da sessao real): nao conta no balanco.
+#: Todos os eventos de uma pratica tambem levam `pratica=1` no JSON.
+CODE_TRIAL_PRACTICE = 789
 #: Vigia do link (#15): queda/retorno da entrega de amostras do amplificador.
 CODE_LINK_LOST = 899
 CODE_LINK_OK = 898
@@ -278,6 +282,7 @@ CODE_NAMES = {
     CODE_LINK_OK: "link EEG recuperado",
     CODE_MOVE_ONSET: "INICIO DO MOVIMENTO (onset detectado pelo Kinect)",
     CODE_TRIAL_CANCEL: "TRIAL CANCELADO pelo experimentador (descartado)",
+    CODE_TRIAL_PRACTICE: "trial de PRATICA (instrucoes; nao conta na sessao)",
     CODE_BASELINE_REST: "baseline repouso ativo",
     CODE_TRIAL: "inicio do trial (repouso/home)",
     CODE_ORIGIN_START: "inicio calibracao de origem",
@@ -493,6 +498,11 @@ class SharedState:
         self.video_dur = 0.0
         self.slowmo_request = None       # monotonic do pedido pendente
         self.quit_requested = False      # tecla 'q' no overlay
+        # --- MI auto-iniciada pelo MOVIMENTO (--mi-auto-onset; #55) ---
+        #: True = na fase MI o onset do movimento armena o timer da MI.
+        self.mi_auto_onset = False
+        #: Marca (com lock) de que um onset foi visto DURANTE a MI.
+        self._mi_onset_pending = False
 
     # --------------------------------------------------------------- video
     def request_slowmo(self, destino=None):
@@ -568,7 +578,14 @@ class SharedState:
             self.phase = phase
             if cue is not None:
                 self.cue = cue
-                self.arm_cue_side = ARM_CUE_SIDE.get(cue, "")
+                # `cue` e' a condicao COMPLETA ("bola_esquerda"): o lado da
+                # mao e' o SUFIXO. Antes fazia ARM_CUE_SIDE.get(cue) direto,
+                # que SEMPRE ficava vazio -> want_side nunca era aplicado e o
+                # MediaPipe escolhia a mao "mais confiante" (via de regra a
+                # direita): trials da esquerda gravavam a mao ERRADA, sem
+                # trajetoria (bug da esquerda, 14/10/2026).
+                self.arm_cue_side = ARM_CUE_SIDE.get(
+                    str(cue).rsplit("_", 1)[-1], "")
             self.message = message
 
     def start_origin_collection(self, seconds, measure_arm=False):
@@ -611,6 +628,23 @@ class SharedState:
             self.impedance_values = (None if values is None
                                      else [float(v) for v in values])
             self.impedance_text = text
+
+    def set_mi_auto(self, ativo):
+        """Liga/desliga a deteccao de onset DURANTE a MI (--mi-auto-onset)."""
+        with self.lock:
+            self.mi_auto_onset = bool(ativo)
+
+    def mark_mi_onset(self):
+        """A thread de tracking registra que o movimento comecou na MI."""
+        with self.lock:
+            self._mi_onset_pending = True
+
+    def take_mi_onset(self):
+        """Consome a marca de onset da MI (True uma unica vez)."""
+        with self.lock:
+            visto = self._mi_onset_pending
+            self._mi_onset_pending = False
+            return visto
 
     def impedance_snapshot(self):
         with self.lock:
@@ -879,11 +913,53 @@ class TrackingThread(threading.Thread):
 
         def worker():
             try:
-                capture = cv2.VideoCapture(index)
-                capture.set(cv2.CAP_PROP_FRAME_WIDTH, size[0])
-                capture.set(cv2.CAP_PROP_FRAME_HEIGHT, size[1])
-                obtained = (int(capture.get(cv2.CAP_PROP_FRAME_WIDTH)),
-                            int(capture.get(cv2.CAP_PROP_FRAME_HEIGHT)))
+                capture = None
+                obtained = None
+                # MJPEG PRIMEIRO (medido em 10/10: 720p bruto/YUY2 = 8-10 fps;
+                # MJPEG = 30 fps na MESMA resolucao -- o gargalo de movimento),
+                # validando o fourcc REAL da stream (a ORDEM dos set's decide:
+                # W/H antes do fourcc; inverso volta pra YUY2) e com FALLBACK
+                # para o modo padrao. Import LAZY de proposito (este modulo
+                # carrega cv2 adiado).
+                for mjpeg in (True, False):
+                    captura = cv2.VideoCapture(index)
+                    if not captura.isOpened():
+                        captura.release()
+                        break
+                    try:
+                        from camera_uvc import define_modo
+                        define_modo(captura, size[0], size[1], mjpeg=mjpeg)
+                    except Exception:
+                        captura.set(cv2.CAP_PROP_FRAME_WIDTH, size[0])
+                        captura.set(cv2.CAP_PROP_FRAME_HEIGHT, size[1])
+                    for _ in range(3):
+                        captura.read()
+                    ok, quadro = captura.read()
+                    if ok and quadro is not None:
+                        if mjpeg:
+                            try:
+                                from camera_uvc import le_fourcc
+                                if le_fourcc(captura) not in ("?", "MJPG"):
+                                    captura.release()
+                                    continue   # stream nao ficou MJPG
+                            except Exception:
+                                pass          # sem o modulo: aceita como antes
+                        capture = captura
+                        obtained = (int(quadro.shape[1]),
+                                    int(quadro.shape[0]))
+                        break
+                    captura.release()
+                if capture is None:
+                    raise RuntimeError(
+                        "a camera abriu mas nao entregou frame "
+                        "(MJPEG e modo padrao)")
+                try:
+                    # Trava de exposicao/foco + fps REAL: o relatorio imprime o
+                    # que a camera obedeu/ignorou e o que REALMENTE entrega.
+                    from camera_uvc import trava_exposicao
+                    trava_exposicao(capture, rotulo=f"aux {index}")
+                except Exception as exc:      # trava nunca derruba a abertura
+                    result["trava_exposicao"] = str(exc)
                 result["capture"] = capture
                 result["obtained"] = obtained
                 if result.get("abandon"):
@@ -1020,14 +1096,35 @@ class TrackingThread(threading.Thread):
             if phase in (PHASE_HOME, PHASE_ORIGIN) and self.onset_detector:
                 self.onset_detector.reset()     # nova trial: zera a deteccao
                 self.onset_time = None
+            if phase == PHASE_VIDEO and self.onset_detector:
+                # Fim da ME: REARMA o detector para a MI (--mi-auto-onset),
+                # sem mexer no onset_time -- o clipe de priming ainda usa o
+                # onset da ME que acabou de ser detectado.
+                self.onset_detector.reset()
+            onset_ativo = phase == PHASE_ME or (
+                phase == PHASE_MI and self.state.mi_auto_onset)
             if self.onset_detector is not None and self.onset_detector.update(
-                    time.monotonic(), wrist3d, phase == PHASE_ME):
+                    time.monotonic(), wrist3d, onset_ativo):
                 self.onset_time = self.onset_detector.onset_time
                 self._onset_flag_frames = 2
                 self._emit_onset_marker()
                 print(f"[onset] INICIO DO MOVIMENTO detectado "
                       f"({self.onset_detector.onset_index} amostras apos a cue, "
                       f"limiar {MOVE_ONSET_SPEED_MPS:g} m/s)", flush=True)
+                if phase == PHASE_MI:
+                    self.state.mark_mi_onset()
+            if (phase == PHASE_ME and want_side and wrist3d is None
+                    and time.monotonic()
+                    - getattr(self, "_aviso_mao_ts", 0.0) > 2.0):
+                # Diagnostico da trajetoria faltante (14/10/2026): sem
+                # posicao 3D da mao PEDIDA nao ha KT_* no CSV nem linha de
+                # trajetoria no clipe -- o participante ve "sem trajetoria"
+                # e o registro sai NaN. Sem este aviso o problema ficava
+                # invisivel no console.
+                self._aviso_mao_ts = time.monotonic()
+                print(f"[tracking] MAO {want_side} SEM posicao 3D na ME: "
+                      "KT_* e trajetoria nao serao gravados nesta trial "
+                      "(deteccao falhou)", flush=True)
             onset_flag = 0
             if self._onset_flag_frames > 0:
                 onset_flag = 1
@@ -1813,12 +1910,19 @@ class _StimulusCanvas(QWidget):
         self.image = None
         self.update()
 
-    def show_condition(self, object_name, hand):
+    def show_condition(self, object_name, hand, pulsante=False):
         self.mode = "cue"
         self.object_name = object_name
         self.hand = hand
+        self._pulsante = bool(pulsante)
+        self._pulse_t0 = time.monotonic()
         self.image = None
         self.update()
+
+    def pulse_tick(self):
+        """--mi-desenho: repinta para pulsar simbolo+seta durante a MI."""
+        if getattr(self, "_pulsante", False):
+            self.update()
 
     def show_message(self, text):
         self.mode = "message"
@@ -1847,8 +1951,23 @@ class _StimulusCanvas(QWidget):
             self._paint_image(painter, width, height)
             return
         if self.mode == "cue":
+            if getattr(self, "_pulsante", False):
+                # --mi-desenho: pulso suave (1.0 <-> 1.08, periodo 1,6 s)
+                # em torno do centro do cue -- ajuda a mentalizacao sem
+                # mover o estimulo (que seria um movimento visual real).
+                geo = geometria_cue(width, height)
+                escala = 1.0 + 0.08 * float(np.sin(
+                    2.0 * np.pi * (time.monotonic()
+                                   - getattr(self, "_pulse_t0",
+                                             time.monotonic())) / 1.6))
+                painter.save()
+                painter.translate(geo["cx"], geo["cy"])
+                painter.scale(escala, escala)
+                painter.translate(-geo["cx"], -geo["cy"])
             self._paint_object(painter, width, height)
             self._paint_arrow(painter, width, height)
+            if getattr(self, "_pulsante", False):
+                painter.restore()
         elif self.mode == "home":
             self._paint_home_hint(painter, width, height)
         elif self.mode == "countdown":
@@ -2054,8 +2173,11 @@ class StimulusWindow(QMainWindow):
     def show_home(self):
         self.canvas.show_home()
 
-    def show_condition(self, object_name, hand):
-        self.canvas.show_condition(object_name, hand)
+    def show_condition(self, object_name, hand, pulsante=False):
+        self.canvas.show_condition(object_name, hand, pulsante=pulsante)
+
+    def pulse_tick(self):
+        self.canvas.pulse_tick()
 
     def show_message(self, text):
         self.canvas.show_message(text)
@@ -2186,6 +2308,12 @@ class _ParadigmController(QObject):
         #: True depois do ESC/Ctrl+C: o `abort` so' roda UMA vez (dois ESC nao
         #: podem disparar dois teardowns/hard-exit em paralelo).
         self._aborting = False
+        #: True durante os trials de PRATICA (instrucoes; ver _start_practice).
+        self._pratica = False
+        #: Lista ativa de trials: a pratica tem a propria; None = sessao real.
+        self._active_trials = None
+        #: --mi-desenho: pulsa o cue durante a MI (apagada no _end_mi/stop).
+        self._mi_pulse_active = False
         #: Teardown curto + saida garantida (fornecido pelo main()):
         #: callable(motivo). Sem ele o abort cai no QApplication.quit().
         self._panic = config.get("on_abort")
@@ -2341,9 +2469,14 @@ class _ParadigmController(QObject):
     def stop(self):
         self._generation += 1
         self._pause_on_end = None
+        self._mi_pulse_active = False
 
     def _emit(self, code, **extra):
         """Publica um evento (codigo + legenda + instante + metadados)."""
+        if getattr(self, "_pratica", False):
+            # Trials de pratica marcam TODOS os seus eventos: a analise
+            # exclui o que tiver `pratica=1` (e o 789 delimita o bloco).
+            extra.setdefault("pratica", 1)
         evento = {
             "code": code,
             "nome": CODE_NAMES.get(code, "desconhecido"),
@@ -2388,13 +2521,13 @@ class _ParadigmController(QObject):
         quando todos os eletrodos estao dentro do limite.
         """
         if not self._cfg.get("preparacao", True):
-            self._begin_session()
+            self._entrada_sessao()
             return
         self._prep_active = True
         self._prep_tick()
         print("[paradigma] PREPARACAO: aguardando ESPACO para iniciar "
               "(painel de impedancias ativo)", flush=True)
-        self._start_pause_phase(1e9, "", self._begin_session)
+        self._start_pause_phase(1e9, "", self._entrada_sessao)
 
     def _priming_file(self, indice):
         """Caminho do arquivo do clipe de priming da trial (#7) ou None.
@@ -2405,6 +2538,8 @@ class _ParadigmController(QObject):
         """
         if not self._cfg.get("salvar_priming", True):
             return None
+        if self._pratica:
+            return None          # pratica nao gera clipe em disco
         pasta = self._cfg.get("priming_dir") or ""
         if not pasta:
             return None
@@ -2416,21 +2551,117 @@ class _ParadigmController(QObject):
         """Refresca a tela de preparacao com a tabela de impedancias atual."""
         if not getattr(self, "_prep_active", False):
             return
-        _valores, texto = self._state.impedance_snapshot()
+        valores, texto = self._state.impedance_snapshot()
         if not texto:
             texto = "(medindo impedancias...)"
+        veredito = ""
+        if valores:
+            bons = sum(1 for v in valores
+                       if v is not None and 0 <= v <= IMPEDANCE_LIMIT_KOHM)
+            marca = "TODOS OK" if bons == len(valores) else "VER ELETRODOS"
+            veredito = (f"ELETRODOS: {bons}/{len(valores)} BONS "
+                        f"({marca}, <= {IMPEDANCE_LIMIT_KOHM:g} kOhm)\n\n")
         self._window.show_message(
             "PREPARACAO\n\n"
             "1) Eletrodos / impedancia (abaixo)\n"
-            "2) Calibracao do Kinect\n"
-            "3) Teste de sinal\n\n"
-            f"{texto}\n\n"
-            "ESPACO inicia a sessao")
+            "2) Instrucoes + pratica\n"
+            "3) Calibracao do Kinect\n"
+            "4) Teste de sinal\n\n"
+            f"{veredito}{texto}\n\n"
+            "ESPACO inicia")
         self._schedule(1000, self._prep_tick)
+
+    # --- entrada da sessao: instrucoes -> pratica -> sessao real (#55) ---
+    def _entrada_sessao(self):
+        """Preparacao acabou: instrucoes e pratica ANTES da sessao real.
+
+        A pratica roda ANTES do CODE_SESSION (32766): os trials de teste
+        ficam fora da janela de analise mesmo que o CSV os grave (todos os
+        seus eventos levam `pratica=1` e o codigo 789 delimita o bloco).
+        """
+        self._prep_active = False
+        if self._cfg.get("instrucoes", True):
+            self._begin_instructions()
+        else:
+            self._begin_session()
+
+    def _begin_instructions(self):
+        """Slides de instrucao (ESPACO avanca) -> demo dos simbolos -> pratica."""
+        print("[paradigma] INSTRUCOES: "
+              f"{len(slides_instrucao())} slides + demo dos simbolos + "
+              f"{self._cfg.get('trials_teste', 0)} trials de pratica",
+              flush=True)
+        self._show_slide(0)
+
+    def _show_slide(self, indice):
+        slides = slides_instrucao()
+        if indice >= len(slides):
+            self._demo_simbolos(0)
+            return
+        self._espaco_avanca(
+            lambda: self._show_slide(indice + 1), slides[indice])
+
+    def _demo_simbolos(self, indice):
+        """Mostra os 6 cues da sessao em sequencia (1,2 s cada)."""
+        condicoes = [(obj, mao) for obj in OBJECTS for mao in HANDS]
+        if indice >= len(condicoes):
+            self._inicio_pratica()
+            return
+        objeto, mao = condicoes[indice]
+        self._window.show_condition(objeto, mao)
+        print(f"[paradigma] demo do simbolo: {objeto}/{mao}", flush=True)
+        self._schedule(1200, lambda: self._demo_simbolos(indice + 1))
+
+    def _inicio_pratica(self):
+        total = int(self._cfg.get("trials_teste", 0))
+        if total <= 0:
+            self._begin_session()
+            return
+        self._espaco_avanca(
+            self._start_practice,
+            f"PRATICA\n\nAgora {total} trials de TESTE "
+            "(nao contam na sessao).\nExecute e imagine como na sessao "
+            "real.\n\nESPACO comeca")
+
+    def _start_practice(self):
+        self._pratica = True
+        self._active_trials = build_practice_list(
+            int(self._cfg.get("trials_teste", 0)))
+        print(f"[paradigma] PRATICA: {len(self._active_trials)} trials "
+              "(marcadores com pratica=1; inicio 789)", flush=True)
+        self._run_trial(0)
+
+    def _end_practice(self):
+        self._pratica = False
+        self._active_trials = None
+        self._bloco = 0
+        print("[paradigma] pratica concluida", flush=True)
+        self._espaco_avanca(
+            self._begin_session,
+            "PRATICA CONCLUIDA\n\nAgora comeca a sessao REAL "
+            f"({len(self._cfg['trials'])} trials).\n\nESPACO inicia "
+            "(baseline + calibracao)")
+
+    def _espaco_avanca(self, callback, texto):
+        """Tela de texto SEM contagem: ESPACO avanca para o callback."""
+        self._window.show_message(texto)
+        self._pause_on_end = callback
+        self._pause_skip = False
+        self._espaco_tick()
+
+    def _espaco_tick(self):
+        if self._pause_on_end is None:
+            return
+        if self._pause_skip:
+            callback = self._pause_on_end
+            self._pause_on_end = None
+            self._pause_skip = False
+            callback()
+            return
+        self._schedule(150, self._espaco_tick)
 
     def _begin_session(self):
         """Baseline (olhos abertos, fechados e repouso ativo) -> origem."""
-        self._prep_active = False
         callback = self._cfg.get("on_session_start")
         if callback is not None:
             try:
@@ -2511,20 +2742,27 @@ class _ParadigmController(QObject):
     # --- trial (12 s: home 2 + cue/ME 4 + video 2 + MI 4) ---
     def _run_trial(self, index):
         cfg = self._cfg
-        total = len(cfg["trials"])
+        lista = self._active_trials if self._active_trials is not None \
+            else cfg["trials"]
+        total = len(lista)
         if index >= total:
-            self._finish()
+            if self._pratica:
+                self._end_practice()
+            else:
+                self._finish()
             return
         self._trial_index = index
-        trial = cfg["trials"][index]
+        trial = lista[index]
         self._window.show_trial_progress(index + 1, total)
         self._window.show_home()
         self._state.set_phase(PHASE_HOME, cue="")
-        self._emit(CODE_TRIAL, bloco=self._bloco + 1, trial=index + 1,
+        self._emit(CODE_TRIAL_PRACTICE if self._pratica else CODE_TRIAL,
+                   bloco=self._bloco + 1, trial=index + 1,
                    objeto=trial["objeto"], mao=trial["mao"],
                    condicao=trial["condicao"])
-        print(f"[paradigma] trial {index + 1}/{total} ({trial['condicao']})",
-              flush=True)
+        rotulo = "PRATICA " if self._pratica else ""
+        print(f"[paradigma] {rotulo}trial {index + 1}/{total} "
+              f"({trial['condicao']})", flush=True)
         # REPOUSO (mao no home) -> CUE + ME
         self._schedule(cfg["home_sec"] * 1000,
                        lambda: self._start_cue_me(trial))
@@ -2619,26 +2857,82 @@ class _ParadigmController(QObject):
         return image.copy()
 
     def _start_mi(self):
-        """MI: o MESMO cue permanece na tela; sem video/overlay (imaginacao)."""
+        """MI: o MESMO cue permanece na tela; sem video/overlay (imaginacao).
+
+        Duas opcoes novas (14/10/2026), ambas OPT-IN:
+        --mi-desenho    -> pulse suave do simbolo+seta durante a MI (ajuda a
+                           mentalizacao; padrao DESLIGADO porque muda o que o
+                           participante ve -- comparar condicoes exige cuidado);
+        --mi-auto-onset -> o timer da MI so' comeca quando o KINECT VE o
+                           movimento (onset, marcador 795); --mi-auto-timeout
+                           limita a espera. Padrao DESLIGADO: a janela fixa
+                           pos-cue e' o que a maioria dos estudos de MI usa e
+                           mantem o alvo epocado no tempo (com auto o onset
+                           e' que ancora a epoca; janela de reacao varia).
+        """
+        cfg = self._cfg
         self._emit(CODE_MI_START)
-        trial = self._cfg["trials"][self._trial_index]
+        trial = (self._active_trials if self._active_trials is not None
+                 else cfg["trials"])[self._trial_index]
         self._state.set_phase(PHASE_MI, cue=trial["condicao"])
         # A janela estava em modo "video" (quadro do clipe da pausa). SEM
         # restaurar o cue aqui, o paintEvent continuava no ULTIMO QUADRO
         # CONGELADO durante a MI inteira -- era o "video para de funcionar"
         # reportado em 30/09/2026. O protocolo pede o cue (seta + objeto),
         # identico ao da ME, sem feedback do movimento.
-        self._window.show_condition(trial["objeto"], trial["mao"])
-        self._schedule(self._cfg["mi_sec"] * 1000, self._end_mi)
+        self._mi_pulse_active = bool(cfg.get("mi_desenho", False))
+        self._window.show_condition(trial["objeto"], trial["mao"],
+                                    pulsante=self._mi_pulse_active)
+        if self._mi_pulse_active:
+            self._mi_pulse_tick()
+        if cfg.get("mi_auto_onset", False):
+            _ = self._state.take_mi_onset()      # limpa marca velha
+            self._mi_deadline = (time.monotonic()
+                                 + float(cfg.get("mi_auto_timeout", 4.0)))
+            print("[paradigma] MI aguardando o MOVIMENTO (onset) para "
+                  "comecar a janela da imaginacao", flush=True)
+            self._mi_onset_tick()
+            return
+        self._schedule(cfg["mi_sec"] * 1000, self._end_mi)
+
+    def _mi_onset_tick(self):
+        """--mi-auto-onset: espera o onset (ou o timeout) e entao cronometra."""
+        if not self._cfg.get("mi_auto_onset", False):
+            return
+        if self._state.take_mi_onset():
+            print(f"[paradigma] onset na MI: janela da imaginacao comeca "
+                  f"agora ({self._cfg['mi_sec']:g} s)", flush=True)
+            self._schedule(self._cfg["mi_sec"] * 1000, self._end_mi)
+            return
+        if time.monotonic() >= self._mi_deadline:
+            print("[paradigma] AVISO: sem MOVIMENTO na MI dentro de "
+                  f"{self._cfg.get('mi_auto_timeout', 4.0):g} s "
+                  "(Kinect perdeu a mao?); seguindo para o proximo trial",
+                  flush=True)
+            self._end_mi()
+            return
+        self._schedule(100, self._mi_onset_tick)
+
+    def _mi_pulse_tick(self):
+        """--mi-desenho: repinta a tela da MI em ~8 Hz para pulsar o cue."""
+        if not self._mi_pulse_active:
+            return
+        self._window.pulse_tick()
+        self._schedule(120, self._mi_pulse_tick)
 
     def _end_mi(self):
         cfg = self._cfg
+        self._mi_pulse_active = False
         self._emit(CODE_MI_END)
         self._state.set_phase(PHASE_IDLE, cue="")
         self._window.show_home()
         proximo = self._trial_index + 1
-        if proximo < len(cfg["trials"]) \
-                and proximo % cfg["trials_por_bloco"] == 0:
+        lista = self._active_trials if self._active_trials is not None \
+            else cfg["trials"]
+        if self._pratica:
+            # Pratica nao tem blocos/pausa: trials seguidos ate' acabar.
+            self._run_trial(proximo)
+        elif proximo < len(lista) and proximo % cfg["trials_por_bloco"] == 0:
             self._end_block(proximo)
         else:
             self._run_trial(proximo)
@@ -3229,6 +3523,47 @@ def _impedance_table(values, limite_kohm=IMPEDANCE_LIMIT_KOHM, per_line=8):
     return "\n".join(linhas)
 
 
+# =============================================================================
+# Instrucoes + trials de pratica (#55, 14/10/2026): participante novo precisa
+# saber o que cada simbolo significa ANTES da sessao real.
+# =============================================================================
+def build_practice_list(n, rng=None):
+    """Lista de trials de PRATICA: cobre as 6 condicoes e repete se n > 6."""
+    rng = rng or random.Random(20261014)
+    condicoes = [(obj, mao) for obj in OBJECTS for mao in HANDS]
+    saida = []
+    while len(saida) < max(0, int(n)):
+        bloco = condicoes[:]
+        rng.shuffle(bloco)
+        saida.extend(bloco)
+    return [{"objeto": obj, "mao": mao, "condicao": f"{obj}_{mao}"}
+            for (obj, mao) in saida[:int(n)]]
+
+
+def slides_instrucao():
+    """Slides de instrucao mostrados ANTES da pratica (ESPACO avanca)."""
+    return [
+        "BEM-VINDO(A) AO EXPERIMENTO\n\n"
+        "Voce ver' simbolos na tela e fara movimentos de alcance e "
+        "preensao com as maos.\n\nESPACO para continuar",
+        "OS SIMBOLOS\n\n"
+        "SETA ESQUERDA = use a MAO ESQUERDA\n"
+        "SETA DIREITA = use a MAO DIREITA\n\n"
+        "Objetos: GARRAFA, BOLA e CANETA\n"
+        "(os 3 desenhos aparecem a seguir)\n\nESPACO",
+        "CADA TRIAL (12 s) TEM 4 ETAPAS\n\n"
+        "1) MAO NO HOME (descanse)\n"
+        "2) SETA + OBJETO: EXECUTE o movimento\n"
+        "3) VIDEO: veja seu movimento em camera lenta\n"
+        "4) MESMO SIMBOLO: IMAGINE o movimento "
+        "(sem executar)",
+        "NA FASE DE IMAGINACAO (4)\n\n"
+        "NAO mova a mao: apenas IMAGINE o alcance e a "
+        "preensao, como se estivesse de fato fazendo.\n\n"
+        "Mantenha o olhar no ponto central.",
+    ]
+
+
 class LinkWatchdog(threading.Thread):
     """Vigia do link EEG <-> PC durante a gravacao (#15).
 
@@ -3311,9 +3646,10 @@ class ImpedanceMonitor(threading.Thread):
     """
 
     def __init__(self, device, state, limite_kohm=IMPEDANCE_LIMIT_KOHM,
-                 period=IMPEDANCE_PERIOD_S):
+                 period=IMPEDANCE_PERIOD_S, source=None):
         super().__init__(daemon=True)
         self._device = device
+        self._source = source      # fallback: API do g.Pype (start/get/stop)
         self._state = state
         self._limite = float(limite_kohm)
         self._period = float(period)
@@ -3325,17 +3661,48 @@ class ImpedanceMonitor(threading.Thread):
         self._stop_event.set()
         self.join(timeout=2.5)
 
+    def _medir(self):
+        """Uma medida de impedancia, com caminho redundante.
+
+        Primario: aparelho direto (`get_impedance`); o link sem fio do
+        g.Nautilus pode falhar com CRC, e apos QUALQUER falha o comando
+        'first' tem de ser reenviado (o aparelho nao entendeu o anterior).
+        Fallback: API do g.Pype (start_impedance_check/get_impedance/stop),
+        que' a mesma que o relatorio `--impedancia` usa.
+        """
+        if self._device is not None:
+            try:
+                valores = np.asarray(
+                    self._device.get_impedance(self._primeiro), dtype=float)
+                self._primeiro = False
+                return valores
+            except Exception:
+                self._primeiro = True      # proxima tentativa reenvia 'first'
+        if self._source is not None and hasattr(self._source,
+                                                "get_impedance"):
+            self._source.start_impedance_check()
+            try:
+                time.sleep(0.5)
+                valores, _fresh = self._source.get_impedance()
+            finally:
+                self._source.stop_impedance_check()
+            return np.asarray(valores, dtype=float)
+        raise RuntimeError("sem aparelho direto nem API do g.Pype")
+
     def run(self):
-        if self._device is None:
-            self._state.set_impedance(
-                None, "(medicao de impedancia indisponivel nesta fonte)")
-            return
         while not self._stop_event.is_set():
             try:
-                valores = np.asarray(self._device.get_impedance(self._primeiro),
-                                     dtype=float)
-                self._primeiro = False
+                valores = self._medir()
             except Exception as exc:
+                if "sem aparelho" in str(exc):
+                    #: Falha PERMANENTE (nem aparelho direto nem API do g.Pype):
+                    #: nao ha o que medir -- publica "indisponivel" e a thread
+                    #: SAI SOZINHA (contrato de test_parada_threads; sem isto o
+                    #: loop virava retry infinito e a tela de preparacao mostrava
+                    #: "falha na medicao" pra sempre). Falhas TRANSITORIAS
+                    #: (link CRC do g.Nautilus) continuam re-tentando abaixo.
+                    self._state.set_impedance(None, f"(indisponivel: {exc})")
+                    break
                 self._state.set_impedance(None, f"(falha na medicao: {exc})")
                 time.sleep(self._period)
                 continue
@@ -3494,6 +3861,10 @@ def _build_session_meta(args, trials, source, csv_name, events_name,
                           "video": args.video_sec, "mi": args.mi_sec},
         "trials_por_bloco": args.trials_por_bloco,
         "blocos": args.blocos,
+        "instrucoes": (not getattr(args, "sem_instrucoes", False)),
+        "trials_teste_pratica": int(getattr(args, "trials_teste", 0)),
+        "mi_desenho": bool(getattr(args, "mi_desenho", False)),
+        "mi_auto_onset": bool(getattr(args, "mi_auto_onset", False)),
         "condicoes_contagem": contagem,
         "ordem_dos_trials": [t["condicao"] for t in trials],
     }
@@ -3677,6 +4048,23 @@ def parse_args():
     parser.add_argument("--sem-painel-impedancia", action="store_true",
                         help="Nao mede/mostra o painel de impedancias na "
                              "preparacao.")
+    parser.add_argument("--sem-instrucoes", action="store_true",
+                        help="Pula os slides de instrucao antes da pratica.")
+    parser.add_argument("--trials-teste", type=int, default=6,
+                        help="Trials de PRATICA antes da sessao real "
+                             "(0 = nenhuma; cada condicao aparece ao menos "
+                             "uma vez; marcadores com pratica=1 + codigo 789)")
+    parser.add_argument("--mi-desenho", action="store_true",
+                        help="Durante a MI, pulsa o simbolo+seta (ajuda a "
+                             "mentalizacao; padrao desligado para manter a "
+                             "MI 'limpa' visualmente)")
+    parser.add_argument("--mi-auto-onset", action="store_true",
+                        help="MI auto-iniciada: a janela da imaginacao so' "
+                             "comeca quando o Kinect VE o movimento (795); "
+                             "espera limitada por --mi-auto-timeout")
+    parser.add_argument("--mi-auto-timeout", type=float, default=4.0,
+                        help="Segundos de espera pelo onset na MI antes de "
+                             "seguir adiante (--mi-auto-onset)")
     parser.add_argument("--sem-priming-arquivo", action="store_true",
                         help="Nao grava os clipes do priming em disco "
                              "(mostra na tela, mas nao salva).")
@@ -4204,10 +4592,13 @@ def main():
     marker_channel = args.channel_count  # 0-based: EEG + Marker (fanout)
     # ---- vigilancia da aquisicao (#15) e painel de impedancias (#23/#24) ----
     watchdog = LinkWatchdog(muxer, state, marker_queue)
+    state.set_mi_auto(bool(args.mi_auto_onset))
     impedance_device = getattr(source, "_device", None)
     impedance_monitor = None
-    if args.impedancia_painel and impedance_device is not None:
-        impedance_monitor = ImpedanceMonitor(impedance_device, state)
+    if args.impedancia_painel and (impedance_device is not None
+                                   or hasattr(source, "get_impedance")):
+        impedance_monitor = ImpedanceMonitor(impedance_device, state,
+                                             source=source)
     elif args.impedancia_painel:
         print("[impedancia] painel desativado: a fonte atual nao expoe o "
               "aparelho (use --source gnautilus)", flush=True)
@@ -4312,6 +4703,11 @@ def main():
             "olhos_fechados": args.olhos_fechados,
             "repouso_ativo": args.repouso_ativo,
             "preparacao": not args.sem_preparacao,
+            "instrucoes": not args.sem_instrucoes,
+            "trials_teste": args.trials_teste,
+            "mi_desenho": args.mi_desenho,
+            "mi_auto_onset": args.mi_auto_onset,
+            "mi_auto_timeout": args.mi_auto_timeout,
             # Clipes do priming (#7): pasta ao lado do CSV da sessao.
             "priming_dir": priming_dir,
             "salvar_priming": not args.sem_priming_arquivo,
