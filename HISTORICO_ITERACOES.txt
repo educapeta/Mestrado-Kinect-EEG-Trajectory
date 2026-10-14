@@ -3921,6 +3921,34 @@ ITEM 55 (13/10/2026) - BANCADA DE CASA: 2 IMUs no flat de 2 m, pull-ups de 2,2k 
   (firmware/esp32_duas_imus) para casa com os DOIS MPU6050 ligados num flat cable
   de 2 m (um por mao, para fixar no dorso das maos). Sessao de diagnostico I2C
   nesta maquina (COM6, placa uPesy WROOM).
+(d) CORRECAO PENDENTE DE IDENTIFICACAO DO MODULO MORTO (13/10/2026)
+  A frase do item (b) "ACK para 0x68 vem do MODULO 1 = EXTERNO (ambos com
+  AD0 alto)" e' INTERNAMENTE INCONSISTENTE: AD0 alto = 0x69, baixo = 0x68;
+  com os dois straps altos NENHUM dispositivo responderia em 0x68. O
+  usuario apontou (13/10) que a memoria da bancada pode estar INVERTIDA:
+  suspeita atual = MODULO MORTO = 0x68 e MODULO BOM = 0x69, possivelmente
+  confundida apos uma troca de endereco (strap AD0) feita entre os dois
+  durante os testes. SEM MEDICAO = NAO AFIRMAR qual modulo morreu.
+
+  RESOLUCAO DEFINITIVA (30 s na proxima bancada, 1 modulo isolado):
+  1) isolar UM modulo (4 fios, AD0 no strap) e rodar
+     tools\diagnostico_imu_serial.py COMx 115200 10 -> o banner do sondeo
+     imprime o endereco que ACKA ("[i2c] barramento vivo ... addr=0xXX");
+     esse endereco E' o endereco FISICO atual do modulo.
+  2) strap do AD0: GND -> 0x68, VCC -> 0x69 (ver firmware/esp32_duas_imus/README.md).
+  3) repetir com o outro modulo: o que NAO ACKA em NENHUM endereco = MORTO.
+  4) gravar a dupla final (morto/bom + endereco + modulo interno/externo)
+     e apagar esta incerteza.
+
+  REGRA DE OPERACAO (vale mesmo antes da resolucao): o firmware varre
+  0x68 E 0x69, entao a DETECCAO nao muda com o strap -- o que muda e o
+  LADO: 0x68 -> dir / UDP 4210 / linha "1," e 0x69 -> esq / UDP 4211 /
+  linha "2,". Se o modulo BOM ficar com strap 0x69 e for fisicamente o da
+  mao DIREITA, os lados chegam TROCADOS no CSV/ImuBank. Nesse caso:
+  strapar o modulo bom em 0x68 (AD0 em GND) ou trocar fisicamente o cabo
+  das maos. (Teste de lado: mexer so' na mao certa -> so' a coluna certa
+  do CSV muda; se mover a coluna errada, os lados estao trocados.)
+
 
   Fluxo de gravacao que passou a valer (o usuario grava, o Cline diagnostica):
   `gravar.bat COM6` -> tecla qualquer tecla -> SEGURE o BOOT durante o
