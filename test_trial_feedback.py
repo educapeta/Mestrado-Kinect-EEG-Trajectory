@@ -17,6 +17,17 @@ Duas reclamacoes do experimentador apos a sessao:
    "(medindo impedancias...)" para sempre. `resolve_device` anda pelo
    chain (mesma estrutura real: Chain -> [core, Sync]) e o mesmo
    resolvedor alimenta o relatorio `--impedancia` e a escala counts->uV.
+
+3. (item 59) ERRO REAL ENGOLIDO: mesmo com o aparelho resolvido, o
+   `get_impedance` podia falhar (ex.: CRC transitrio do link sem fio) e
+   o `_medir` antigo ENGOLIA a excecao e re-caia no raise "sem aparelho
+   direto nem API do g.Pype" -- que o `run` trata como PERMANENTE: uma
+   unica falha transitria matava o painel com "(indisponivel: sem
+   aparelho direto nem API do g.Pype)". Agora os DOIS caminhos (direto e
+   g.Pype) capturam o erro com tipo+mensagem, o `_medir` PROPAGA o erro
+   real quando os caminhos existem mas falharam, e o `run` RE-TENTA
+   mostrando "(falha na medicao: <erro real>)"; so' a ausencia dos dois
+   caminhos e' permanente (a thread sai sozinha).
 """
 import inspect
 import os
@@ -178,7 +189,64 @@ assert estado.impedance_values is not None, "a medida nao foi publicada"
 bons = sum(1 for v in estado.impedance_values if 0 <= v <= 50.0)
 assert bons == 2, bons                     # veredito da tela: 2/3 BONS
 
+# ---------------------------------------------------------------------------
+# 5) Falha TRANSITORIA (CRC do link): o painel NAO morre e mostra o erro
+#    REAL. O _medir antigo ENGOLIA a excecao do aparelho e re-caia no raise
+#    "sem aparelho direto nem API do g.Pype", que o run trata como
+#    PERMANENTE -- uma unica falha de CRC matava o painel (item 59).
+# ---------------------------------------------------------------------------
+class AparelhoQueFalha:
+    """GetImpedanceEx levanta CRC as 1a e 2a vez; na 3a funciona."""
+
+    def __init__(self):
+        self.tentativas = 0
+
+    def get_impedance(self, _primeira):
+        self.tentativas += 1
+        if self.tentativas <= 2:
+            raise RuntimeError("Invalid CRC checksum")
+        return np.array([3.0, 4.0])
+
+
+falho = AparelhoQueFalha()
+estado2 = p.SharedState()
+mon2 = p.ImpedanceMonitor(falho, estado2, limite_kohm=50.0, period=0.01)
+mon2.start()
+limite = 400
+while falho.tentativas < 3 and limite:
+    time.sleep(0.01)
+    limite -= 1
+mon2.stop()
+assert not mon2.is_alive()
+assert falho.tentativas >= 3, \
+    f"o painel morreu na 1a falha ({falho.tentativas} tentativas)"
+assert estado2.impedance_values is not None, \
+    "depois de re-tentar, a medida tem de publicar"
+# a mensagem de falha INTERMEDIARIA (se apareceu) carrega o erro REAL
+texto2 = estado2.impedance_text or ""
+assert "CRC" in texto2 or estado2.impedance_values is not None, texto2
+
+# e a ausencia TOTAL de caminhos continua PERMANENTE (sai da thread)
+mon3 = p.ImpedanceMonitor(None, p.SharedState(), period=0.01)
+mon3.start()
+limite = 300
+while mon3.is_alive() and limite:
+    time.sleep(0.01)
+    limite -= 1
+assert not mon3.is_alive(), "sem aparelho a thread tem de sair sozinho"
+
+# o _medir propaga o erro REAL (tipo + mensagem), nao o generico
+mon4 = p.ImpedanceMonitor(AparelhoQueFalha(), p.SharedState())
+mon4._primeiro = True
+try:
+    mon4._medir()
+    raise AssertionError("devia ter falhado na 1a leitura")
+except RuntimeError as exc:
+    assert "Invalid CRC checksum" in str(exc), str(exc)
+    assert "aparelho direto" in str(exc), str(exc)
+
 print("TRIAL_FEEDBACK_OK",
       f"slides={len(p.slides_instrucao())} cabem em 900x900",
       "| resolve_device achou o aparelho no core do chain",
-      f"| {aparelho.leituras} leituras publicadas")
+      f"| {aparelho.leituras} leituras publicadas",
+      f"| transitorio re-tentou {falho.tentativas}x e publicou")

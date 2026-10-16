@@ -3678,7 +3678,7 @@ class LinkWatchdog(threading.Thread):
 
 
 class ImpedanceMonitor(threading.Thread):
-    """Painel de impedancias durante a PREPARACAO (#23/#24).
+    """Painel de impedancias durante a PREPARACAO (#23/#24, itens 58/59).
 
     Mede a impedancia de todos os canais a cada IMPEDANCE_PERIOD_S e publica uma
     tabela pronta para a TELA do paradigma (SharedState.impedance_text) e no
@@ -3686,6 +3686,14 @@ class ImpedanceMonitor(threading.Thread):
     experimentador so' inicia a sessao (ESPACO) quando todos estiverem dentro do
     limite. No console a tabela so' e' impressa quando a LISTA de canais ruins
     muda, para nao inundar o terminal.
+
+    O aparelho e' resolvido ATRAVES do chain do g.Pype (`resolve_device`, item
+    58): no gpype 4.x o `_device` com `get_impedance` mora no `_GNautilusCore`,
+    e o chain nao expoe __getattr__. E os erros NAO sao engolidos (item 59): o
+    `_medir` propaga o erro REAL (tipo+mensagem) quando os caminhos existem mas
+    falharam (ex.: CRC transitrio do link sem fio), e o `run` RE-TENTA
+    mostrando "(falha na medicao: <erro real>)"; so' a AUSENCIA dos dois
+    caminhos (aparelho direto + API do g.Pype) e' permanente (a thread sai).
 
     E' parado quando a sessao comeca (callback `on_session_start`), para nao
     ficar conversando com o aparelho durante a gravacao.
@@ -3715,25 +3723,43 @@ class ImpedanceMonitor(threading.Thread):
         'first' tem de ser reenviado (o aparelho nao entendeu o anterior).
         Fallback: API do g.Pype (start_impedance_check/get_impedance/stop),
         que' a mesma que o relatorio `--impedancia` usa.
+
+        O erro do aparelho direto e' PROPAGADO (com o tipo e a mensagem
+        reais) quando o aparelho EXISTE mas a leitura falhou -- o except
+        antigo ENGOLIA a excecao e re-caia no raise "sem aparelho direto
+        nem API do g.Pype", que o `run` trata como PERMANENTE: uma unica
+        falha transitria de CRC no link matava o painel inteiro (medido
+        no trial de 16/10: tela em "(indisponivel: sem aparelho direto nem
+        API do g.Pype)" com o aparelho ligado e aberto). So' a ausencia
+        dos DOIS caminhos e' permanente.
         """
+        erros = []
         if self._device is not None:
             try:
                 valores = np.asarray(
                     self._device.get_impedance(self._primeiro), dtype=float)
                 self._primeiro = False
                 return valores
-            except Exception:
+            except Exception as exc:
                 self._primeiro = True      # proxima tentativa reenvia 'first'
+                erros.append(f"aparelho direto: {type(exc).__name__}: {exc}")
         if self._source is not None and hasattr(self._source,
                                                 "get_impedance"):
-            self._source.start_impedance_check()
             try:
-                time.sleep(0.5)
-                valores, _fresh = self._source.get_impedance()
-            finally:
-                self._source.stop_impedance_check()
-            return np.asarray(valores, dtype=float)
-        raise RuntimeError("sem aparelho direto nem API do g.Pype")
+                self._source.start_impedance_check()
+                try:
+                    time.sleep(0.5)
+                    valores, _fresh = self._source.get_impedance()
+                finally:
+                    self._source.stop_impedance_check()
+                return np.asarray(valores, dtype=float)
+            except Exception as exc:
+                erros.append(f"API g.Pype: {type(exc).__name__}: {exc}")
+        if not erros:
+            # Nenhum dos dois caminhos existe -- permanente de verdade.
+            raise RuntimeError("sem aparelho direto nem API do g.Pype")
+        # Os caminhos EXISTEM mas falharam: propaga o erro real (transitorio).
+        raise RuntimeError(" | ".join(erros))
 
     def run(self):
         while not self._stop_event.is_set():

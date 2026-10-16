@@ -4423,3 +4423,45 @@ ITEM 68 (16/10/2026) - Superposicao: vermelho da ATIVA RE-PINTADO por cima do ro
   stereo" quando nao ha o que medir) no CSV de diagnostico.
   Validacao: py_compile + lateralidade, overlay_auxiliares 8/8,
   aux_pair_stereo 7/7 e trial_feedback verdes.
+
+--------------------------------------------------------------------------------
+59. SESSAO 2026-10-16 - ERRO REAL ENGOLIDO NO PAINEL DE IMPEDANCIA (o
+    "indisponivel" com o aparelho LIGADO)
+--------------------------------------------------------------------------------
+O usuario rodou o paradigma com o g.Nautilus LIGADO (nao no capacete,
+so' ligado a estacao) e a tela de preparacao mostrou "(indisponivel:
+sem aparelho direto nem API do g.Pype)".
+  Causa raiz (3 camadas, todas provadas por leitura do codigo + probe):
+  (a) `resolve_device` (item 58) FUNCIONOU: o monitor foi criado, ou
+      seja o aparelho foi encontrado no chain. Se nao tivesse sido, a
+      tela mostraria "(medindo impedancias...)" para sempre.
+  (b) o `get_impedance()` do aparelho LANCOU EXCECAO (o `GDS
+      GetImpedanceEx` no link sem fio do g.Nautilus falha com "Invalid
+      CRC checksum" -- transitrio, medido antes no `--impedancia`).
+  (c) o `_medir` antigo ENGOLIA a excecao (`except Exception:` sem
+      capturar) e re-caia no `raise RuntimeError("sem aparelho direto
+      nem API do g.Pype")` -- que o `run` classificava como PERMANENTE
+      e a thread SAIA na PRIMEIRA falha, publicando "(indisponivel: ...)".
+  Conserto: os DOIS caminhos (aparelho direto e API do g.Pype) agora
+  capturam `exc` com tipo+mensagem e constroem `erros[]`; o `_medir`
+  PROPAGA o erro real quando os caminhos EXISTEM mas falharam (monta
+  "aparelho direto: GDSError: ... | API g.Pype: ...") e so' levanta o
+  "sem aparelho direto nem API do g.Pype" quando os DOIS estao ausentes.
+  O `run` re-tenta em falha transitoria mostrando "(falha na medicao:
+  <erro real>)" na tela e so' mata a thread na permanente.
+  tools/probe_impedancia.py (novo): abre o aparelho ISOLADO (sem
+  paradigma, sem gpype) e mede o get_impedance nos DOIS estados (parado
+  e transmitindo), com traceback completo -- para o usuario ver o erro
+  exato do hardware quando quiser (fechar o paradigma antes).
+  test_trial_feedback.py: bloco novo -- aparelho que falha com CRC 2x e
+  funciona na 3a: o painel RE-TENTA (nao morre), publica a medida, e a
+  mensagem de falha intermediaria carrega o erro REAL ("Invalid CRC
+  checksum"); ausencia total de caminhos continua permanente (thread
+  sai); `_medir` propaga "aparelho direto: RuntimeError: Invalid CRC
+  checksum".
+  NOTA: o usuario LEMBROU que o capacete NAO esta na cabeca (so' ligado
+  a estacao). Isso e' esperado: sem eletrodos no escalpo os canais ficam
+  em -10 (nao medido) e o veredito mostra "0/32 BONS" -- o painel deve
+  APARECER com "-10" em tudo, nao sumir. O conserto garante isso.
+  Validacao: py_compile + test_trial_feedback (novo bloco 5),
+  parada_threads 5/5, protocol 11/11, gtec_runtime 9/9, melhorias.
