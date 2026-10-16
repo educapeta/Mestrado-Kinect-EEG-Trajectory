@@ -1876,6 +1876,25 @@ def costura_bola(cx, cy, raio):
     return tuple(pontos)
 
 
+def _ajusta_tamanho_fonte(texto, largura, altura, tamanho_inicial,
+                          tamanho_minimo, medida):
+    """Menor tamanho de fonte (ate' `tamanho_minimo`) em que o texto cabe.
+
+    `medida(texto, tamanho)` devolve (largura, altura) do bloco com o
+    texto JA' quebrado em palavras na `largura` dada. O passo e' par
+    porque tamanhos em pt vao de2 em2 sem perda perceptivel e o pior
+    caso custa ~12 medidas.
+    """
+    tamanho = int(tamanho_inicial)
+    minimo = int(tamanho_minimo)
+    while tamanho > minimo:
+        larg, alt = medida(texto, tamanho)
+        if larg <= largura and alt <= altura:
+            return tamanho
+        tamanho -= 2
+    return minimo
+
+
 class _StimulusCanvas(QWidget):
     """Tela do participante: tudo desenhado em vetor (sem arquivos de imagem).
 
@@ -2093,11 +2112,38 @@ class _StimulusCanvas(QWidget):
         painter.drawPolygon(QPolygonF(points))
 
     def _paint_text(self, painter, width, height):
+        """Mensagem grande (instrucoes, pausas, preparacao) SEM cortar.
+
+        O drawText antigo usava a janela INTEIRA e fonte fixa (0,045 x o
+        menor lado) sem quebra de palavra: nos slides de instrucao do
+        primeiro trial (14/10) a linha mais longa media ~1050 px em Arial
+        Bold 40 pt e era CORTADA na janela de 900 px. Agora o texto quebra
+        em palavras (Qt.TextWordWrap) e a fonte encolhe ate' o bloco caber
+        na caixa com margem de 5% -- a medicao usa o proprio
+        painter.fontMetrics(), ou seja o MESMO layout que o drawText vai
+        desenhar.
+        """
+        if self.mode == "countdown":
+            painter.setPen(QPen(self.WHITE))
+            painter.setFont(QFont("Arial", 420, QFont.Bold))
+            painter.drawText(self.rect(), Qt.AlignCenter, self.text)
+            return
+        margem_x = max(16, int(width * 0.05))
+        margem_y = max(16, int(height * 0.05))
+        rect = self.rect().adjusted(margem_x, margem_y, -margem_x, -margem_y)
+        flags_medida = Qt.AlignLeft | Qt.AlignTop | Qt.TextWordWrap
+        inicial = max(22, int(min(width, height) * 0.045))
+
+        def medida(txt, tamanho):
+            painter.setFont(QFont("Arial", int(tamanho), QFont.Bold))
+            br = painter.fontMetrics().boundingRect(rect, flags_medida, txt)
+            return br.width(), br.height()
+
+        tamanho = _ajusta_tamanho_fonte(self.text, rect.width(), rect.height(),
+                                        inicial, 16, medida)
         painter.setPen(QPen(self.WHITE))
-        size = 420 if self.mode == "countdown" else max(
-            22, int(min(width, height) * 0.045))
-        painter.setFont(QFont("Arial", size, QFont.Bold))
-        painter.drawText(self.rect(), Qt.AlignCenter, self.text)
+        painter.setFont(QFont("Arial", int(tamanho), QFont.Bold))
+        painter.drawText(rect, Qt.AlignCenter | Qt.TextWordWrap, self.text)
 
     def _paint_image(self, painter, width, height):
         """Quadro do video (camera lenta) ajustado a tela mantendo proporcao."""
@@ -4419,6 +4465,32 @@ def _check_gtec_environment():
               flush=True)
 
 
+def resolve_device(source, _prof=0):
+    """Acha o aparelho g.tec ATRAVES do chain do g.Pype (gpype 4.x).
+
+    No gpype 4.0.0 `gp.GNautilus` e' um OChain (Chain -> ProcessingElement,
+    SEM `__getattr__`): o `_device` (gtec_gds.GNautilus, que tem
+    `get_impedance(first)` e `get_scaling()`) mora no `_GNautilusCore`,
+    um dos `internal_nodes` do chain. `getattr(source, "_device", None)`
+    devolvia None e o painel de impedancias NUNCA era criado (o gate via
+    `hasattr(source, "get_impedance")` tambem falha: o chain nao expoe
+    nada) -- a tela de preparacao ficava em "(medindo impedancias...)"
+    para sempre (reclamacao do primeiro trial, 14/10). O mesmo resolvedor
+    alimenta o relatorio `--impedancia` e a escala counts->uV.
+    """
+    if source is None or _prof > 4:
+        return None
+    device = getattr(source, "_device", None)
+    if device is not None and (hasattr(device, "get_impedance")
+                               or hasattr(device, "get_scaling")):
+        return device
+    for filho in (getattr(source, "internal_nodes", None) or []):
+        achado = resolve_device(filho, _prof + 1)
+        if achado is not None:
+            return achado
+    return None
+
+
 def build_source(args):
     if args.source == "gnautilus":
         _check_gtec_environment()
@@ -4469,7 +4541,7 @@ def build_source(args):
 
 def _make_counts_to_uv(source_node, args):
     """Cria o no counts -> uV lendo sensibilidade e calibracao do aparelho."""
-    device = getattr(source_node, "_device", None)
+    device = resolve_device(source_node)
     sensitivity = args.sensibilidade
     if sensitivity is None:
         sensitivity = getattr(device, "sensitivity", None)
@@ -4593,7 +4665,7 @@ def main():
     # ---- vigilancia da aquisicao (#15) e painel de impedancias (#23/#24) ----
     watchdog = LinkWatchdog(muxer, state, marker_queue)
     state.set_mi_auto(bool(args.mi_auto_onset))
-    impedance_device = getattr(source, "_device", None)
+    impedance_device = resolve_device(source)
     impedance_monitor = None
     if args.impedancia_painel and (impedance_device is not None
                                    or hasattr(source, "get_impedance")):
@@ -4832,7 +4904,7 @@ def _impedance_report(source_node, attempts=3, seconds=6.0):
     thread do g.Pype (que morre em silencio no primeiro erro, deixando todos
     os canais em -10), lemos o aparelho direto em um loop com retentativas.
     """
-    device = getattr(source_node, "_device", None)
+    device = resolve_device(source_node)
     values = None
     if device is None or not hasattr(device, "get_impedance"):
         print("[impedancia] aparelho sem get_impedance; tentando a API do "

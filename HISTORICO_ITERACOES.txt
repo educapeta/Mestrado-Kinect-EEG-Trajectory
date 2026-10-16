@@ -4311,3 +4311,104 @@ ITEM 65 (14/10/2026) - ASSISTENCIA AO CLINE: 5 pedidos do usuario implementados;
 (e) VALIDACAO: py_compile limpo + suites verdes: camera_uvc 9/9,
   stereo_solve, paradigma_abort 8/8, video_priming, lateralidade,
   overlay_auxiliares 8/8, aux_pair_stereo 7/7, melhorias.
+
+ITEM 66 (16/10/2026) - Causa-raiz do "vermelho nao aparece/nao loga na oclusao": first_red preso no bloco do verde
+  overlay_diag.log (novo, 461 linhas) entregou o veredito: dominio de
+  `recusa_draw="nenhuma mao desenhavel"` com `3D=sim aux_hand=sim display=sim
+  stereo=sim` -- todas as entradas presentes, recusa=None, mas first_red None.
+
+  AUDITORIA DA FUNCAO: em `draw_auxiliary_hands_on_color` o registro de
+  `first_red` (red_copy) estava DENTRO do
+  `if (first_deviation is None and self.last_kinect_hands and hand_index < ...)`.
+  Com o KINECT CEGO o tool passa last_kinect_hands=[] -> bloco pulava ->
+  first_red nunca setado -> a funcao devolvia None -> tool sem overlay_red ->
+  SEM LINHA no overlay_deviation_log. Contradia o proprio comentario ("A
+  projecao vermelha e registrada MESMO sem verde"). Conserto: registro DEDENTADO
+  para o nivel do laco (antes do tracado), como o comentario promete.
+
+  SEGUNDO DEFEITO (atribuicao): `last_draw_recusa` e' um atributo UNICO do
+  tracker mas o tool chama o draw DUAS vezes por frame (right, left) -- a
+  segunda chamada sobrescrevia e o diag mostrava o resultado do outro lado
+  (linhas "None" e "nenhuma mao desenhavel" no MESMO frame, incombinaveis).
+  Conserto: o tool guarda `mao["draw_recusa"] = getattr(tracker, ...)` APOS
+  cada chamada (else: "sem display/stereo") e o diag le da propria mao.
+
+  Efeito esperado na proxima oclusao: linhas cegas NO LOG (desvio vazio +
+  note=trianguladoAux) + recusa_draw POR MAO verdadeira. Se o vermelho ainda
+  nao aparecer NA TELA com linhas logadas => superposicao do roxo (ordem de
+  desenho) ou projecao fora -- o log tera cx/cy do vermelho pra medir.
+
+  Verificacao: py_compile OK; 47/47 suites.
+
+ITEM 67 (16/10/2026) - OCLUSAO LOGADA: 329 linhas cegas (antes ZERO) -- mistério encerrado
+  Gravacao 14:40 (apos consertos do item 66):
+    overlay: 558 linhas = 229 com verde + 329 CEGAS (306 trianguladoAux +
+    23 amostrada) -- ANTES: zero cegas. Todas as 329 com cx/cy (trajetoria
+    do vermelho) preenchido; por lado 150 right + 179 left; janela de
+    oclusao 1487.7..1517.6 (31,7 s, 2 segmentos).
+  Posicoes da palma vermelha nas cegas: cx 780-1142, cy 308-397 (faixa das
+  maos, passos suaves ~10-25 px) -- projecao registrada em local plausivel.
+  diag: encolheu de 461 -> ~20 linhas, todas `aux_hand=nao / lista de maos
+  vazia` (caso legitimo: Kinect viu, camera ativa nao) -- "nenhuma mao
+  desenhavel" SUMIU (era o first_red preso) e a atribuicao por mao nao mistura
+  mais lados.
+  Baseline com verde desta rodada: med 7,6 | p90 18,8 | max 155,6.
+  CAUSA-RAIZ do misterio "vermelho nao logava na oclusao": first_red capturado
+  DENTRO do bloco que exige last_kinect_hands (vazio com o Kinect cego).
+  Consertos: dedent do registro (item 66) + draw_recusa por mao.
+  Pendente de confirmacao VISUAL pelo usuario: se o vermelho aparece na tela
+  agora (o log prova que os pixels existem/se desenhavam) -- se invisivel, resta
+  superposicao do roxo (ordem de desenho) e o cx/cy do log mede a posicao.
+  47/47 suites.
+
+ITEM 68 (16/10/2026) - Superposicao: vermelho da ATIVA RE-PINTADO por cima do roxo
+  Usuario nao viu o vermelho na tela na oclusao mesmo com o log provando que
+  os pixels existiam (item 67). Causa: ordem de desenho -- o vermelho e' pintado
+  no laco por lado (la' tras) e o bloco "OUTRAS auxiliares" (roxo etc) pinta
+  DEPOIS; com calibracao boa as projecoes da MESMA mao coincidem em ~px e o
+  roxo de 2 px cobria o vermelho inteiro (caso agudo na oclusao: as duas
+  fontes vem do mesmo par 3D).
+
+  Conserto: logo apos draw_auxiliary_cameras_on_color, RE-REPINTA o vermelho
+  da camera ATIVA (desenhar_esqueleto_projetado com o overlay_red JA' medido --
+  zero recalculo; gating de borda/NaN da propria funcao). Efeito em TODOS os
+  frames: a ativa (validada pelas teclas K/L/H) fica VISUALMENTE por cima das
+  outras -- ordem semantica correta. Medicao (dev/log) nao muda: os pixels ja'
+  foram medidos no laco por lado.
+
+  Verificacao: py_compile OK; smoke do namespace OK; 47/47 suites.
+  Proximo: usuario confirma na tela que o vermelho aparece na oclusao.
+
+--------------------------------------------------------------------------------
+58. SESSAO 2026-10-14 (parte 3) - FEEDBACK DO1o TRIAL: TEXTO CORTADO + PAINEL DE IMPEDANCIA SUMIDO
+--------------------------------------------------------------------------------
+(a) TEXTO CORTADO nos slides de instrucao. Causa raiz: `_paint_text`
+  usava `drawText(rect, Qt.AlignCenter, texto)` SEM `Qt.TextWordWrap` e
+  com fonte fixa 0,045 x o menor lado (40 pt em 900x900): a linha mais
+  longa dos slides media ~1050 px em Arial Bold 40 pt e era CORTADA na
+  janela de 900 px. Conserto: o texto quebra em palavras e a fonte
+  ENCOLHE ate' o bloco caber na caixa com margem de 5%
+  (`_ajusta_tamanho_fonte`, piso 16 pt; a medicao usa o proprio
+  painter.fontMetrics(), o MESMO layout que o drawText desenha). O
+  countdown mantem a fonte fixa 420 (numero curto; nao muda).
+(b) PAINEL DE IMPEDANCIAS NUNCA APARECIA (mesmo com o fallback do item
+  56). Causa raiz PROBADA por probe no gpype 4.0.0: `gp.GNautilus` e' um
+  OChain (Chain -> ProcessingElement) SEM `__getattr__`; o `_device`
+  (gtec_gds.GNautilus, que TEM `get_impedance(first=True)` e
+  `get_scaling()`) mora no `_GNautilusCore`, um dos `internal_nodes` do
+  chain. Logo `getattr(source, "_device", None)` devolvia None e
+  `hasattr(source, "get_impedance")` tambem falhava -> o ImpedanceMonitor
+  NUNCA era criado e a tela de preparacao ficava em "(medindo
+  impedancias...)" para sempre. Conserto: `resolve_device(source)` anda
+  pelo chain recursivo (limite de 4 niveis; devolve None para generator,
+  que de fato nao tem aparelho) e alimenta os3 pontos que liam
+  `_device`: o gate do painel, o relatorio `--impedancia` e a escala
+  counts->uV (`_make_counts_to_uv`, que antes caia no padrao 2250000 nV
+  e imprimia o aviso "o aparelho nao informou a sensibilidade").
+(c) test_trial_feedback.py (novo): `_ajusta_tamanho_fonte` com medida
+  falsa de wrap guloso (os4 slides REAIS + a mensagem da preparacao com
+  tabela de 32 canais cabem em 900x900), contrato do `_paint_text`
+  (TextWordWrap + encolhimento na fonte), `resolve_device` contra chains
+  falsas com a MESMA forma do OChain real (core com device, Sync sem,
+  device sem get_impedance, aninhado, generator real -> None) e
+  integracao ImpedanceMonitor medindo ATRAVES do chain (2/3 bons).
