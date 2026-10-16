@@ -3282,14 +3282,20 @@ class KinectHandTracker:
                             float(np.mean(diffs[valid, 1])),
                         )
                         first_green = green.copy()
-                # A projecao vermelha e registrada MESMO sem verde: quando o
-                # Kinect perde a mao, o log continua mostrando onde o overlay
-                # achou que a mao estava (via triangulacao/calibracao/fallback),
-                # em vez de sumir do diagnostico.
-                if first_red is None:
-                    red_copy = kinect_pixels.copy()
-                    red_copy[~in_frame] = np.nan
-                    first_red = red_copy
+            # A projecao vermelha e registrada MESMO sem verde: quando o
+            # Kinect perde a mao, o log continua mostrando onde o overlay
+            # achou que a mao estava (via triangulacao/calibracao/fallback),
+            # em vez de sumir do diagnostico.
+            # (16/10: este registro estava DENTRO do `if ... last_kinect_hands`
+            #  -- com o Kinect cego o bloco pulava, first_red nunca era setado,
+            #  a funcao devolvia None e o overlay_deviation_log PERDIA as frames
+            #  cegas; medido no overlay_diag.log: recusa_draw="nenhuma mao
+            #  desenhavel" com 3D/aux_hand presentes. Fora do bloco, como o
+            #  proprio comentario promete.)
+            if first_red is None:
+                red_copy = kinect_pixels.copy()
+                red_copy[~in_frame] = np.nan
+                first_red = red_copy
             # Tracado: fonte unica (nos + conexoes + gating de borda).
             desenhar_esqueleto_projetado(frame, kinect_pixels)
         if first_red is None:

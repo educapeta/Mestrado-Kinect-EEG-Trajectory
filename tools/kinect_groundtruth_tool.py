@@ -1649,6 +1649,13 @@ def main():
                         )
                     finally:
                         tracker.last_kinect_hands = anteriores
+                    #: O motivo do draw e' POR MAO: `last_draw_recusa` e' um
+                    #: atributo unico e havia DUAS chamadas por frame (right,
+                    #: left) -- a segunda sobrescrevia e o diag misturava os
+                    #: lados (linhas "None" x "nenhuma mao desenhavel" no mesmo
+                    #: frame, medido em 16/10). Guarda na propria mao.
+                    mao["draw_recusa"] = getattr(tracker,
+                                                 "last_draw_recusa", None)
                     overlay_red = overlay_green = None
                     if bruto is not None and len(bruto) == 5:
                         dev, dx, dy, overlay_red, overlay_green = bruto
@@ -1659,6 +1666,8 @@ def main():
                         )
                     mao["overlay_red"] = overlay_red
                     mao["overlay_green"] = overlay_green
+                else:
+                    mao["draw_recusa"] = "sem display/stereo"
                 #: O estado do gate (aceita/reproj/vel) entra no `note` para o
                 #: overlay_deviation_log.csv DISTINGUIR aceita de mantida (hold)
                 #: -- foi o que faltou para diagnosticar a mao esquerda (item 51).
@@ -1726,6 +1735,20 @@ def main():
                         triangulados=tri_por_mao,
                         cores=cores,
                     )
+                    #: RE-TRECO da camera ATIVA: as outras cameras pintam
+                    #: DEPOIS do vermelho (laco por lado, la' tras) e o ROXO
+                    #: COBRIA o vermelho quando as projecoes coincidem -- que,
+                    #: com calibracao boa, e' quase sempre (16/10: o log PROVAVA
+                    #: que os pixels do vermelho existiam na oclusao e o usuario
+                    #: via SO' o roxo). Repinta a ativa por cima com os MESMOS
+                    #: pixels ja' medidos -- sem recalcular nada. A ativa e' a
+                    #: validada (teclas K/L/H), logo ela fica por cima.
+                    for _lado_topo in ("right", "left"):
+                        _mao_topo = resultados_por_lado.get(_lado_topo)
+                        if (_mao_topo is not None
+                                and _mao_topo.get("overlay_red") is not None):
+                            desenhar_esqueleto_projetado(
+                                display, _mao_topo["overlay_red"])
             overlay_red = overlay_green = None
             overlay_deviation = None
             triangulated_3d = None
@@ -1829,7 +1852,7 @@ def main():
                                 f" aux_hand={'sim' if mao_log.get('aux_hand') else 'nao'}"
                                 f" display={'sim' if display is not None else 'nao'}"
                                 f" stereo={'sim' if (alignment.stereo_usable or alignment.hand_landmark_ready) else 'nao'}"
-                                f" recusa_draw={getattr(tracker, 'last_draw_recusa', None)}"
+                                f" recusa_draw={mao_log.get('draw_recusa')}"
                             )
                             try:
                                 with open(DIAG_OVERLAY_PATH,

@@ -4412,3 +4412,14 @@ ITEM 68 (16/10/2026) - Superposicao: vermelho da ATIVA RE-PINTADO por cima do ro
   falsas com a MESMA forma do OChain real (core com device, Sync sem,
   device sem get_impedance, aninhado, generator real -> None) e
   integracao ImpedanceMonitor medindo ATRAVES do chain (2/3 bons).
+(d) Harness (continuacao do diagnostico de oclusao do item 57): mais um
+  bug de verdade -- o registro de `first_red` no overlay estava DENTRO do
+  `if last_kinect_hands`: com o Kinect CEGO o bloco pulava, first_red
+  nunca era setado, a funcao devolvia None e o overlay_deviation_log
+  PERDIA as frames cegas (medido no overlay_diag.log: recusa_draw=
+  "nenhuma mao desenhavel" com 3D/aux_hand presentes). Fora do bloco,
+  como o proprio comentario prometia. A tool agora grava
+  `draw_recusa` POR MAO (last_draw_recusa do tracker; "sem display/
+  stereo" quando nao ha o que medir) no CSV de diagnostico.
+  Validacao: py_compile + lateralidade, overlay_auxiliares 8/8,
+  aux_pair_stereo 7/7 e trial_feedback verdes.
