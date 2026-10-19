@@ -5800,3 +5800,51 @@ PROXIMO
      LENTA; e, se necessario, subir Kp (2 -> 4) ou adicionar Ki no
      AttitudeMahony do firmware (item 83).
 
+
+================================================================================
+ITEM 90 (19/10/2026) - FECHAMENTO DO DIA: SUITE AMPLA 49/49 VERDE e estado do
+    projeto (o que ficou pronto, o que ficou pendente)
+================================================================================
+VALIDACAO FINAL DO DIA (sem bancada): `_roda_suite.py` (driver temporario que
+roda os test_*.py com exit code REAL; o Star-Process do PowerShell mentia o
+codigo): **49/49 suites OK, 0 falhas, 128 s**, excluindo apenas
+test_freeze_kinect_direto.py (pesado/segura minutos, como manda a regra 7).
+Firmwares recompilados no fim: esp32_duas_imus SUCCESS, luva_direita e
+luva_esquerda SUCCESS; test_firmware_luvas 5/5. Calibracao estereo NOVA
+(rodada pelo usuario hoje, aprovada no T e validada pelo overlay em ~1 px) vai
+commitada junto com este item: camera_alignment.npz, stereo_calibration.npz,
+stereo_calibration_aux1.npz.
+
+O QUE FICOU PRONTO HOJE (itens 70-89)
+  - Painel de impedancia (70/71); video de priming e aviso (72/73).
+  - Diagnostico da palma por 4 poses - tecla D (76) + protocolo corrigido (77)
+    + evidencia crua no CSV (78) + o SINAL da normal do Kinect corrigido para
+    ANATOMICO por mao (79) - item de ouro: era o nz<0 forcado que invertia a
+    normal fora da pose da tecla O.
+  - Calibracao estereo: diagnostico de onde erra (80); recalibrada pelo usuario,
+    overlay de 22/9 px para ~1 px (82); exposição/ganho POR CAMERA e metricas de
+    desempenho (81) -- cameras dão 30 fps; o gargalo do lag e' o laco do tool
+    (2 auxiliares = 62 ms de MediaPipe -> 11-13 fps; 1 auxiliar = 22 fps).
+  - IMU: yaw do firmware era `yaw += gz*dt` (eixo do corpo, erro dependente do
+    caminho; MESMA pose saia com yaw diferente por 61 graus) -> corrigido para
+    QUATERNION + Mahony 6 eixos nos dois firmwares (83); peripecias de gravacao
+    do ESP32 (84/85/86/87/88) e finalmente gravado.
+  - VALIDACAO DO FIRMWARE (89): refit do D fechou em 14.42/10.64 graus (era
+    37.9/28.6); a correcao de yaw por fase agora melhora so' 1.7/1.4 (era
+    28/16); O com residuo 6.14/7.69. A O ainda "decora" um pouco (f_body 32-45
+    graus diferente do refit do D) -> gravado o T/f do REFIT (right 14.42,
+    left 10.64) e o erro esperado da seta caiu para 1.7-13.0 graus.
+
+ESTADO PARA A PROXIMA SESSAO
+  - Tool carrega no boot o alinhamento do refit (verificar no inicio: [status]
+    "alinhamento O: R SIM / L SIM" + erro da palma ~<=13 graus no D).
+  - Hotspot "EDUARDO-PC 9049" precisa estar LIGADO (o reboot desliga).
+  - PENDENTE: Cline revisar o diff de firmware/ (itens 83/84) e os READMEs.
+  - PENDENTE (o proximo grande passo): TRIAL REAL com g.Nautilus + validacao
+    dos 5 itens do item 65 (painel de impedancia na preparacao, slides,
+    pratica, KT_onset na ESQUERDA, mi_desenho) e casamento groundtruth x EEG
+    (tools/casamento_eeg_groundtruth.py).
+  - MELHORIAS futuras (nao bloqueiam): refit usando MAIS de uma sessao D;
+    refazer a O com rotacao mais lenta; subir Kp (2->4) ou adicionar Ki no
+    AttitudeMahony se quiser apertar o yaw ainda mais.
+
