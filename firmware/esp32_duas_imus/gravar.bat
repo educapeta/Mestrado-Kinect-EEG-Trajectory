@@ -30,12 +30,17 @@ echo   GRAVAR ESP32 COM 2 MPU6050    (UDP 4210=direita 4211=esquerda)
 echo   Porta serial: %PORT%   Tentativas: %TENTATIVAS% (auto-retry)
 echo   Wi-Fi do firmware: hotspot EDUARDO-PC 9049 -^> unicast 192.168.137.1
 echo.
-echo   COMO GRAVAR (NAO use o botao EN/RST):
-echo     1) TECLE QUALQUER TECLA abaixo para comecar.
-echo     2) SEGURE o BOOT quando aparecer "Connecting........"
-echo        (segurar desde ja' tambem e' valido -- e' o mais seguro).
-echo     3) Continue segurando ate' "Writing at 0x000...".
-echo     4) SOLTE o BOOT; ao final, desligue/religue o USB da placa.
+echo   COMO GRAVAR (MODO MANUAL -- ver platformio.ini, --before=no_reset):
+echo     O auto-reset desta placa NAO funciona e o pulso DTR/RTS derrubava a
+echo     porta do CP210x ("dispositivo nao esta funcionando"). Agora o esptool
+echo     NAO mexe em DTR/RTS, entao a placa entra em download mode NA MAO:
+echo     1) SEGURE o BOOT
+echo     2) aperte e SOLTE o EN (RST), ainda segurando o BOOT
+echo     3) solte o BOOT
+echo     4) TECLE QUALQUER TECLA abaixo para comecar.
+echo     Se falhar, repita 1-3 e rode de novo (o download mode se mantem
+echo     ate' gravar ou ate' um reset/religar).
+echo     Ao final (SUCESSO), desligue e religue o USB da placa.
 echo.
 echo   O script repete sozinho ate' achar o BOOT; se esgotar as
 echo   tentativas, e' so' rodar de novo.

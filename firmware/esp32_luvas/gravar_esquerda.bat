@@ -16,11 +16,14 @@ echo   Wi-Fi: hotspot EDUARDO-PC 9049 (PSK) -> unicast 192.168.137.1
 echo   (eduroam DESLIGADA no firmware: client isolation derruba o UDP)
 echo ============================================================
 echo.
-echo   COMO GRAVAR (NAO use o botao EN/RST):
-echo     1) Acompanhe o terminal.
-echo     2) Quando aparecer "Connecting........", SEGURE o BOOT.
-echo     3) Continue segurando ate aparecer "Writing at 0x000...".
-echo     4) Solte o BOOT.
+echo   COMO GRAVAR (MODO MANUAL -- ver platformio.ini, --before=no_reset):
+echo     O auto-reset nao funciona e o pulso DTR/RTS derruba o CP210x. Com
+echo     --before=no_reset o esptool NAO mexe em DTR/RTS: coloque a placa em
+echo     download mode NA MAO antes:
+echo     1) SEGURE o BOOT
+echo     2) aperte e SOLTE o EN (RST), ainda segurando o BOOT
+echo     3) solte o BOOT
+echo     4) acompanhe o terminal (a gravacao ja' comeca).
 echo.
 echo   Uso:  gravar_esquerda.bat [COMx]    (padrao: COM6)
 echo.

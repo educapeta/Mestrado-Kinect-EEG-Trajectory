@@ -5496,3 +5496,73 @@ DEPOIS DE GRAVAR (roteiro de validacao; eu analiso os arquivos)
 PENDENCIA: Cline revisar o diff de firmware/ (git show <commit> -- firmware/)
   e, se quiser, ajustar KP/Ki. A logica/diagnostico esta nos itens 78-83.
 
+
+================================================================================
+ITEM 84 (19/10/2026) - GRAVACAO DO ESP32 FALHANDO (PermissionError 13):
+    pulso de reset DTR/RTS derrubava o CP210x -- gravacao manual configurada
+================================================================================
+SINTOMA (usuario, apos a correcao do item 83): mesmo segurando o BOOT, o upload
+nao ia. O log do PlatformIO:
+    Serial port COM4
+    Connecting......
+    A serial exception error occurred: Cannot configure port ... PermissionError
+    (13, 'Um dispositivo conectado ao sistema nao esta funcionando', None, 31)
+Note: NAO e' "porta ocupada"/"acesso negado": e' o DRIVER da porta caindo na
+CONFIGURACAO, no momento em que o esptool alterna DTR/RTS para resetar a placa.
+
+MEDIDO
+  - COM4 = Silicon Labs CP210x USB to UART Bridge (a placa esta' ENUMERADA; o
+    problema NAO e' cabo/placa ausente).
+  - Driver CP210x **6.7.4.261 de 18/09/2016** (muito antigo).
+  - `DeviceSelectiveSuspended = 1` no registro do dispositivo (USB selective
+    suspend ativo; timeout 10 s).
+  - Reproducao: `pio run -t upload` falha em ~4 s com o MESMO PermissionError,
+    SEMPRE.
+  - Teste controlado: abrir COM4 a 115200/460800 e alternar DTR/RTS pelo .NET
+    funciona -> o problema e' o PULSO de reset do esptool + estado do bridge.
+  - PROVA DA CAUSA: `esptool.py --before=no_reset chip_id` NAO da'
+    PermissionError (para em "No serial data received" porque a placa nao esta'
+    em download mode). Ou seja: sem DTR/RTS a porta nao cai.
+  - Detalhe do PlatformIO: `upload_flags = --before=no_reset` NAO funciona --
+    o builder do espressif32 monta o comando com "--before default_reset"
+    DEPOIS do upload_flags e o ultimo vence (visto com -v). A opcao correta e'
+    de BOARD: `board_upload.before_reset = no_reset`.
+
+CONFIG APLICADA (firmware/, revisar com o Cline)
+  firmware/esp32_duas_imus/platformio.ini e firmware/esp32_luvas/platformio.ini:
+    upload_speed = 115200
+    board_upload.before_reset = no_reset
+    board_upload.after_reset = hard_reset
+  Com isso o comando final (verificado com pio -v) e':
+    esptool.py --chip esp32 --port COM4 --baud 115200 --before no_reset
+      --after hard_reset write_flash ...
+  e o esptool NAO toca em DTR/RTS: a placa precisa ser colocada em DOWNLOAD
+  MODE NA MAO antes de gravar.
+  gravar.bat (esp32_duas_imus) e gravar_direita/esquerda.bat (esp32_luvas):
+  instrucoes trocadas para o modo manual:
+    1) SEGURE o BOOT; 2) aperte e SOLTE o EN (RST) ainda segurando o BOOT;
+    3) solte o BOOT; 4) rode o script (a gravacao ja' comeca).
+  O download mode se mantem ate' gravar ou ate' um reset/religar o USB.
+  (Depois de gravar: desligar/religar o USB.)
+
+VALIDACAO FEITA AQUI
+  - Sem a placa em download mode o upload agora falha LIMPO: "Failed to connect
+    to ESP32: No serial data received" (20 s) -- e NUNCA mais o
+    PermissionError 13. Com BOOT+EN a conexao deve sincronizar e gravar.
+  - test_firmware_luvas 5/5 continua verde (as mudancas sao de upload/instrucoes).
+
+RECOMENDADO TAMBEM (robustez do bridge; nao bloqueia o trabalho atual)
+  1) Atualizar o driver CP210x para o "CP210x Universal Windows Driver" (v11.x,
+     Silicon Labs, 2023+) -- o de 2016 e' anterior ao Windows 11.
+  2) Desligar USB selective suspend: Opcoes de energia -> Configuracoes
+     adicionais -> USB -> "Suspensao seletiva USB" = Desativado; e, no Gerenciador
+     de Dispositivos, CP210x -> Gerenciamento de energia -> desmarcar "Permitir
+     que o computador desligue este dispositivo".
+  3) Usar porta USB traseira direto na placa-mae (sem hub) e cabo de dados
+     conhecido; se possivel USB 2.0.
+  Se o PermissionError voltar mesmo em modo manual: fazer 1-3 acima.
+
+PROXIMO: usuario entra em download mode e roda `firmware\esp32_duas_imus\
+gravar.bat COM4` (ou o Upload do VS Code) -> grava o firmware do item 83 ->
+religar USB -> rodar o tool -> refazer O -> D -> analiso.
+
