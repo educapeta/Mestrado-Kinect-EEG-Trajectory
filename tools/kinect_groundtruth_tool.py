@@ -116,7 +116,8 @@ globals().update({nome: valor for nome, valor in vars(_gt).items()
 # camera_names.py e' deliberadamente "sem cv2"; camera_uvc.py e' o espelho
 # enxuto dele -- la' esta' medido que o bruto cai a 8-10 fps, o MJPEG da 30 e
 # que a ORDEM dos set's decide se a stream fica MJPG ou volta pra YUY2).
-from camera_uvc import define_modo, le_fourcc, trava_exposicao  # noqa: E402
+from camera_uvc import (define_modo, le_fourcc, parse_controle_por_camera,  # noqa: E402
+                           trava_exposicao, valor_por_camera)
 
 #: Landmark do MediaPipe Hands usado como POSICAO DA MAO (9 = centro da palma,
 #: conforme a metodologia; 0 = pulso). Mesmo valor do paradigma
@@ -1122,15 +1123,25 @@ def parse_cli():
               "mao (offset grotesco em alguma posicao)."),
     )
     parser.add_argument(
-        "--exposicao", type=float, default=None, metavar="N",
+        "--exposicao", type=str, default=None,
+        metavar='"N" ou "i:N,i:N"',
         help=("FIXA o tempo de exposicao das webcams em unidades do DRIVER (o "
               "que cv2.CAP_PROP_EXPOSURE le; no DirectShow costuma ser log2 de "
-              "segundos: -7 ~ 1/128 s -- a linha '[exposicao ...]' mostra o "
-              "atual com a heuristica). Sem este flag a camera SO' e' congelada "
-              "na exposicao atual (para de variar); com ele voce ENCURTA o "
-              "tempo, que e' o que mata o borrado no movimento rapido -- exige "
-              "mais LUZ (LED difuso). Direto na camera (fisico): ok, so' "
-              "reporta."),
+              "segundos: -7 ~ 1/128 s). POR CAMERA: aceita um valor unico ('-6' "
+              "= todas) ou por indice ('0:-6,1:-4'). Por que: medido 19/10/2026 "
+              "que as duas webcams pedem valores DIFERENTES na mesma cena (no -7 "
+              "a Trust ficou 46 por cento escura e a SIGMA boa). Sem este flag a camera "
+              "so' e' congelada na exposicao atual; com ele voce ENCURTA o tempo "
+              "(mata o borrado no movimento) -- exige mais LUZ."),
+    )
+    parser.add_argument(
+        "--ganho-cam", type=str, default=None,
+        metavar='"N" ou "i:N,i:N"',
+        help=("ganho das webcams em unidades do DRIVER, mesma sintaxe do "
+              "--exposicao (valor unico ou '0:N,1:N'). Medido na bancada: o "
+              "driver da SIGMA aceita o valor mas QUASE NAO muda a imagem -- o "
+              "que resolve luz baixa e' exposicao + luz fisica; fica aqui para "
+              "as cameras cujo ganho funciona."),
     )
     parser.add_argument(
         "--fps-cam", type=int, default=None, metavar="N",
@@ -1331,8 +1342,14 @@ def estado_lateralidade(relatorio):
             for indice, info in (relatorio or {}).items()}
 
 
+def _ema(anterior, novo, alfa=0.2):
+    """Media movel exponencial das metricas de desempenho (None = primeira)."""
+    return (float(novo) if anterior is None
+            else (1.0 - alfa) * float(anterior) + alfa * float(novo))
+
+
 def abre_camera_auxiliar(indice, tamanho, exposicao=None, fps=None,
-                         trava_expo=True):
+                         trava_expo=True, ganho=None):
     """Abre a webcam auxiliar no MESMO backend que a calibracao usou.
 
     O DSHOW vem primeiro: `stereo_calibration.py` calibra por ele (AUX_BACKENDS)
@@ -1361,8 +1378,8 @@ def abre_camera_auxiliar(indice, tamanho, exposicao=None, fps=None,
             define_modo(captura, tamanho[0], tamanho[1], mjpeg=mjpeg)
             captura.set(cv2.CAP_PROP_BUFFERSIZE, 1)
             if trava_expo:
-                trava_exposicao(captura, exposicao=exposicao, fps=fps,
-                                rotulo=f"aux {indice}")
+                trava_exposicao(captura, exposicao=exposicao, ganho=ganho,
+                                fps=fps, rotulo=f"aux {indice}")
             for _ in range(4):
                 captura.read()
             ok, quadro = captura.read()
@@ -1753,13 +1770,21 @@ def main():
     # de cada uma) -- e', ao mesmo tempo, o teste visual da calibracao de cada
     # camera e a base do par que substitui o Kinect quando ele perde a mao.
     requested_size = alignment.calibrated_auxiliary_size or (1280, 720)
+    # Exposicao/ganho POR CAMERA (medido 19/10/2026: as duas webcams pedem
+    # valores DIFERENTES na mesma cena -- no -7 a Trust ficava 46% escura e a
+    # SIGMA boa; um valor unico escurece uma delas). Sintaxe: "N" ou
+    # "indice:N,indice:N" (ex.: --exposicao "0:-6,1:-4").
+    exposicoes_aux = parse_controle_por_camera(args.exposicao)
+    ganhos_aux = parse_controle_por_camera(args.ganho_cam)
     auxiliares = {}
     for indice in aux_indices:
         try:
             captura = abre_camera_auxiliar(
                 indice, requested_size,
-                exposicao=args.exposicao, fps=args.fps_cam,
-                trava_expo=not args.sem_trava_exposicao)
+                exposicao=valor_por_camera(exposicoes_aux, indice),
+                fps=args.fps_cam,
+                trava_expo=not args.sem_trava_exposicao,
+                ganho=valor_por_camera(ganhos_aux, indice))
         except RuntimeError as exc:                 # nao abriu: avisa e segue
             print(f"AVISO: webcam auxiliar {indice} nao abriu ({exc})")
             continue
@@ -1916,15 +1941,28 @@ def main():
     writer.writerow(["pc_time_s", "hand_side", "imu_timestamp_us", "kinect_x_m", "kinect_y_m", "kinect_z_m", "fused_x_m", "fused_y_m", "fused_z_m", "roll_deg", "pitch_deg", "yaw_deg", "elbow_angle_deg", "hand_source", "aux_pair_x_m", "aux_pair_y_m", "aux_pair_z_m", "palm_err_deg"])
 
 
+    #: Metricas de DESEMPENHO do laco: o terminal dizia so' a taxa do IMU. Sem o
+    #: fps do laco nao da' para separar "camera lenta" de "processamento lento".
+    #: MEDIDO nas cameras (19/10/2026): 30 fps cada uma e 30 fps ATE' COM AS DUAS
+    #: juntas em 720p MJPG -- o atraso que se VE e' este laco (Kinect + 2x
+    #: MediaPipe + desenho). Medias moveis de tempo em ms.
+    desempenho = {"t_anterior": None, "loop_ms": None, "kinect_ms": None,
+                  "aux_ms": None}
     try:
         while True:
             now = time.monotonic()
+            if desempenho["t_anterior"] is not None:
+                desempenho["loop_ms"] = _ema(
+                    desempenho["loop_ms"],
+                    (now - desempenho["t_anterior"]) * 1000.0)
+            desempenho["t_anterior"] = now
             color, depth = tracker.frames()
             # --- TODAS as auxiliares: le, casa a resolucao e detecta POR CAMERA --
             # Cada camera tem o seu detector/timestamp (VideoMode do MediaPipe) e
             # o seu tamanho de frame; a camera ATIVA e' restaurada no fim do laco
             # porque os campos vivos do alignment (e as teclas K/L/H) sao dela.
             aux_frames, aux_por_camera = {}, {}
+            t_aux = time.monotonic()
             for indice, captura in auxiliares.items():
                 ok_lido, quadro = captura.read()
                 if not ok_lido or quadro is None:
@@ -1936,13 +1974,18 @@ def main():
                 aux_frames[indice] = quadro
                 aux_por_camera[indice] = tracker.detect_auxiliary_hands_sides(
                     quadro, aux_index=indice)
+            desempenho["aux_ms"] = _ema(
+                desempenho["aux_ms"], (time.monotonic() - t_aux) * 1000.0)
             alignment.set_active_aux(int(AUX_CAMERA_INDEX))
             auxiliary_frame = aux_frames.get(int(AUX_CAMERA_INDEX))
             auxiliary_ok = auxiliary_frame is not None
             auxiliary_for_calibration = (None if not auxiliary_ok
                                          else auxiliary_frame.copy())
             color_for_calibration = None if color is None else color.copy()
+            t_kinect = time.monotonic()
             display, kinect_hands = tracker.detect_hands_all(color, depth)
+            desempenho["kinect_ms"] = _ema(
+                desempenho["kinect_ms"], (time.monotonic() - t_kinect) * 1000.0)
             # --- LATERALIDADE: a GEOMETRIA manda, o rotulo e' palpite ----------
             # Roda DEPOIS do Kinect (a verdade geometrica -- punho em 3D -- vem
             # dele) e ANTES de tudo que casa as maos por lado. Motivo: o rotulo
@@ -3012,6 +3055,13 @@ def main():
                       f"erro palma: {' | '.join(erros_palma)}"
                       + (" | SEM ALINHAMENTO -- aperte O (14 s girando a mao)"
                          if falta_o else ""),
+                      flush=True)
+                loop_ms = desempenho["loop_ms"] or float("nan")
+                print("[desempenho] loop %.1f fps (%.0f ms) | "
+                      "Kinect+MediaPipe %.0f ms | auxiliares+MediaPipe %.0f ms"
+                      % ((1000.0 / loop_ms) if loop_ms else float("nan"),
+                         loop_ms, desempenho["kinect_ms"] or float("nan"),
+                         desempenho["aux_ms"] or float("nan")),
                       flush=True)
                 status_log_em = now
                 status_log_t0 = now

@@ -5259,3 +5259,83 @@ PENDENTE (opcional): tools/analyze_overlay_log.py tem caminho de log
 HARDCODED de outra maquina (C:\Users\elgut\OneDrive\...) -- aceitar argv para
 virar ferramenta util de medicao de vies do overlay.
 
+
+================================================================================
+ITEM 81 (19/10/2026) - LUZ/FPS DAS WEBCAMS: as cameras estao em 30 fps (o
+    gargalo e' o LACO DO TOOL) e a exposicao precisa ser POR CAMERA
+================================================================================
+Pedido do usuario (antes de recalibrar): "o ganho de luz da camera SIGMA esta'
+muito baixo e o FPS das cameras esta' baixo e meio lagado". MEDIDO, nao chutado.
+
+1) FPS: AS CAMERAS ESTAO OTIMAS -- o gargalo e' o laco do tool.
+   Medicao isolada (DSHOW, 720p MJPG, sem processamento):
+     SIGMA sozinha ................ 29.9 fps
+     Trust sozinha ................ 29.8 fps
+     AS DUAS AO MESMO TEMPO ....... 30.5 e 30.1 fps  (sem saturacao de USB)
+   640x480 tambem 30 fps. Ou seja: NAO e' banda USB nem fps de camera.
+   Medicao do LACO REAL do tool (instrumentado neste commit, linha
+   "[desempenho]" a cada 5 s):
+     2 cameras auxiliares: Kinect+MediaPipe ~16-20 ms | auxiliares (2x
+       read/decode MJPEG + 2x MediaPipe) ~62 ms -> laco ~11-13 fps
+     1 camera auxiliar ....: auxiliares ~15-16 ms -> laco 22-23 fps (44-46 ms)
+     IMU chegando a 54-55 Hz nos dois lados.
+   Ou seja: cada camera auxiliar custa ~30 ms/frame (decode + MediaPipe) e o
+   laco roda a 10-13 fps com as duas. O "lag" que se VE e' isso, nao a camera.
+   CONSEQUENCIA para o dataset: as linhas do CSV principal saem no ritmo do laco
+   (~11-13 Hz com 2 auxiliares; 22 Hz com 1) -- importa para a trajetoria.
+   OPCOES: (a) usar --aux-cameras 0 (1 auxiliar) nas sessoes de palma/O/D (22
+   fps; o par de auxiliares so' e' preciso para o fallback de oclusao do trial);
+   (b) para o trial com as DUAS: mover a deteccao das auxiliares para uma THREAD
+   (proximo passo) ou aceitar ~12 fps sabendo que o CSV fica nesse ritmo.
+
+2) LUZ/EXPOSICAO: quem esta' escura e' a TRUST, nao a SIGMA.
+   Nas unidades do driver (DSHOW log2), com a exposicao -7 que estava gravada:
+     SIGMA: media 138 (p50 139) | 12% saturado | 9% escuro  -> OK
+     Trust: media  41 (p50  35) | 46% dos pixels < 30        -> ESCURA
+   Varredura de brilho (media da imagem):
+     SIGMA: -3=126 | -4=121 | -5=115 | -6=108 | -7=101 | -8=93
+     Trust: -3=197 | -4=149 | -5=102 | -6=77  | -7=41  | -8=12
+   Ganho: o driver da SIGMA ACEITA 0..128 mas a imagem NAO muda (medido) --
+   ganho nao resolve; luz baixa pede exposicao + LUZ FISICA.
+   Valores recomendados: SIGMA -5/-6 e TRUST -4. Para menos borrao: -7 nas duas
+   COM mais luz (LED difuso); a SIGMA e' bem menos sensivel a exposicao que a
+   Trust, entao o valor -7 que serve nas duas nao existe -- tem de ser POR
+   CAMERA (um valor unico escurece uma delas).
+
+IMPLEMENTADO NESTE COMMIT
+  - camera_uvc.parse_controle_por_camera/valor_por_camera: sintaxe "N" (todas)
+    ou "i:N,i:N" (por indice). test_camera_uvc caso 10 (10/10).
+  - tool --exposicao e NOVO --ganho-cam aceitam "N" ou "0:-6,1:-4" e aplicam
+    POR CAMERA na abertura (a linha [exposicao aux N] mostra o que pegou);
+    medido no tool: aux 0 ficou -6 e aux 1 ficou -4, como pedido.
+  - stereo_calibration.py ganhou --exposicao/--ganho com a MESMA sintaxe (a
+    calibracao congela auto-exposicao na abertura: sem os flags ela congela o
+    que o driver tinha, que para a Trust pode ser escuro). Ex.:
+      python stereo_calibration.py --aux-index 0 1 --exposicao "0:-6,1:-4"
+  - tool: metricas de DESEMPENHO no terminal a cada 5 s ("[desempenho] loop
+    X fps | Kinect+MediaPipe Y ms | auxiliares+MediaPipe Z ms").
+
+RESSALVAS MEDIDAS
+  - Autofoco da SIGMA NAO desliga por CAP_PROP_AUTOFOCUS (leu 2 -> IGNORADO);
+    o da Trust desliga. Para a CALIBRACAO: se a SIGMA "respirar" o foco, o
+    tabuleiro pode sair mole em algumas poses -- confira as imagens salvas e,
+    se for o caso, ilumine melhor (o foco costuma fechar em cena clara).
+  - A medicao do tool foi feita SEM maos no quadro: com maos o custo do
+    MediaPipe sobe (palma+21 landmarks), entao 11-13 fps e' o TETO otimista
+    com 2 auxiliares.
+  - Durante a medicao o CSV principal foi salvo/restaurado (backup) -- nenhum
+    dado de aquisicao perdido.
+
+VALIDACAO: py_compile ok; test_camera_uvc 10/10; test_cameras_multi 12/12;
+  test_deteccao_cascata, test_janelas_grade 5/5, test_overlay_auxiliares 8/8,
+  test_diagnostico_calibracao 6/6, test_diagnostico_palma 5/5,
+  test_palm_alignment 9/9; --help dos dois programas ok (o '%' literal no texto
+  de ajuda quebrava o argparse -- corrigido).
+
+PROXIMO
+  1) Calibrar com luz: --exposicao "0:-6,1:-4" (SIGMA/Trust) e tecla T para
+     validar; se o T reprovar de novo, seguir a receita do item 80 (congelar
+     modelo do Kinect -> recalibrar cada auxiliar -> T -> trim K).
+  2) Para o trial: decidir auxiliar 1 x 2 (fps x fallback de oclusao) e, se
+     precisar das duas, mover a deteccao para thread (item futuro).
+

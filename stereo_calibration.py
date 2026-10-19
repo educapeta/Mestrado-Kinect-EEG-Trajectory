@@ -95,7 +95,8 @@ import numpy as np
 
 # Trava de exposicao/foco das webcams (camera_names.py e' "sem cv2" por
 # design; camera_uvc.py e' o modulo enxuto que precisa dele).
-from camera_uvc import trava_exposicao
+from camera_uvc import (parse_controle_por_camera, trava_exposicao,
+                        valor_por_camera)
 
 import kinect_compat      # pykinect2 64 bits: ANTES do import do pykinect2
 
@@ -132,6 +133,15 @@ AUX_REQUEST_SIZE = (1280, 720)  # (width, height)
 #: abrir em ~1 s (contra os 20-40 s do MSMF) e enfileira MENOS frames -- as
 #: duas coisas aparecem como "video lento/atrasado" quando erradas.
 AUX_BACKENDS = ((cv2.CAP_DSHOW, "DSHOW"), (cv2.CAP_MSMF, "MSMF"))
+
+#: Exposicao/ganho POR CAMERA da sessao de calibracao (setados pelo `main` a
+#: partir de --exposicao/--ganho). Medido em 19/10/2026: as duas webcams desta
+#: bancada pedem valores DIFERENTES na mesma cena -- com exposicao -7 a Trust
+#: ficou com media 41 (46% dos pixels abaixo de 30) enquanto a SIGMA entregava
+#: 138. Um valor unico para as duas deixa uma delas escura, e pixel escuro
+#: derruba a deteccao do tabuleiro justamente na sessao de calibracao.
+EXPOSICAO_POR_CAMERA = {"todos": None, "indices": {}}
+GANHO_POR_CAMERA = {"todos": None, "indices": {}}
 #: Frames descartados logo apos abrir: o driver entrega imagem instavel/escura
 #: enquanto a exposicao automatica estabiliza.
 AUX_DESCARTE = 5
@@ -410,6 +420,20 @@ def parse_args():
                               .format(span=KINECT_INTRINSICS_MIN_SPAN * 100,
                                       poses=KINECT_INTRINSICS_MIN_POSES,
                                       rms=KINECT_INTRINSICS_MAX_RMS))
+    parser.add_argument(
+        "--exposicao", type=str, default=None, metavar='"N" ou "i:N,i:N"',
+        help=("FIXA a exposicao das webcams em unidades do DRIVER (DirectShow: "
+              "log2 de segundos, -7 ~ 1/128 s). POR CAMERA: um valor unico "
+              "('N') ou por indice ('0:-6,1:-4'). Por que: as duas webcams "
+              "desta bancada pedem valores diferentes na MESMA cena (medido "
+              "19/10/2026: no -7 a Trust ficou 46 por cento escura e a SIGMA boa) e "
+              "imagem escura derruba a deteccao do tabuleiro. Ex.: "
+              "--exposicao \"0:-5,1:-4\". Sem o flag, congela a exposicao atual."))
+    parser.add_argument(
+        "--ganho", type=str, default=None, metavar='"N" ou "i:N,i:N"',
+        help="ganho das webcams (mesma sintaxe do --exposicao); quase nao muda a "
+             "imagem na SIGMA nesta bancada -- luz baixa pede exposicao + luz "
+             "fisica.")
     return parser.parse_args()
 
 
@@ -1545,7 +1569,7 @@ def reduzir_janela(frame):
                       interpolation=cv2.INTER_AREA)
 
 
-def abre_auxiliar(indice):
+def abre_auxiliar(indice, exposicao=None, ganho=None):
     """Abre a webcam auxiliar pelo backend de MENOR ATRASO, com fallback.
 
     O problema que isto resolve: por padrao os backends do OpenCV ENFILEIRAM
@@ -1566,7 +1590,8 @@ def abre_auxiliar(indice):
         aceitou_buffer = captura.set(cv2.CAP_PROP_BUFFERSIZE, 1)
         #: Congela auto-exposicao/autofocus: luz e foco CONSTANTES em
         #: todas as capturas (relatorio do que a camera obedeu vs ignorou).
-        trava_exposicao(captura, rotulo=f"aux {indice}")
+        trava_exposicao(captura, exposicao=exposicao, ganho=ganho,
+                        rotulo=f"aux {indice}")
         for _ in range(AUX_DESCARTE):
             captura.read()
         ok, quadro = captura.read()
@@ -1705,7 +1730,10 @@ def calibrate_one(aux_index, ref_kinect=None, salvar_intrinsecas=False):
             AUX_CAMERA_INDEX, "webcam do par estereo com o Kinect"))
     print_capture_guidance()
     kinect = abre_kinect()
-    auxiliary = abre_auxiliar(AUX_CAMERA_INDEX)
+    auxiliary = abre_auxiliar(
+        AUX_CAMERA_INDEX,
+        exposicao=valor_por_camera(EXPOSICAO_POR_CAMERA, AUX_CAMERA_INDEX),
+        ganho=valor_por_camera(GANHO_POR_CAMERA, AUX_CAMERA_INDEX))
     aux_width = int(auxiliary.get(cv2.CAP_PROP_FRAME_WIDTH))
     aux_height = int(auxiliary.get(cv2.CAP_PROP_FRAME_HEIGHT))
     kinect_width = kinect.color_frame_desc.Width
@@ -2002,7 +2030,15 @@ def calibrate_one(aux_index, ref_kinect=None, salvar_intrinsecas=False):
 def main():
     """Calibra cada camera auxiliar pedida, uma sessao de captura de cada vez."""
     global DETECTION_WIDTHS, DETECTION_CLAHE_CLIP, DETECTION_SB_FLAGS
+    global EXPOSICAO_POR_CAMERA, GANHO_POR_CAMERA
     args = parse_args()
+    EXPOSICAO_POR_CAMERA = parse_controle_por_camera(args.exposicao)
+    GANHO_POR_CAMERA = parse_controle_por_camera(args.ganho)
+    if (EXPOSICAO_POR_CAMERA["todos"] is not None
+            or EXPOSICAO_POR_CAMERA["indices"]):
+        print(f"Exposicao por camera: {args.exposicao} (unidades do driver)")
+    if GANHO_POR_CAMERA["todos"] is not None or GANHO_POR_CAMERA["indices"]:
+        print(f"Ganho por camera: {args.ganho}")
     pronto, mensagem = aplica_tabuleiro(args.checkerboard, args.quadrado)
     if not pronto:
         print(f"ERRO: {mensagem}.")
