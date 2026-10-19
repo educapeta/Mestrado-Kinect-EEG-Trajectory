@@ -5566,3 +5566,50 @@ PROXIMO: usuario entra em download mode e roda `firmware\esp32_duas_imus\
 gravar.bat COM4` (ou o Upload do VS Code) -> grava o firmware do item 83 ->
 religar USB -> rodar o tool -> refazer O -> D -> analiso.
 
+
+================================================================================
+ITEM 85 (19/10/2026) - GRAVACAO ASSISTIDA: pulso de RESET pela SERIAL (usuario
+    so' segura o BOOT) -- resolve o "nao consigo entrar em download mode"
+================================================================================
+SINTOMA: depois do item 84 (upload com --before=no_reset), o usuario nao
+conseguia entrar em download mode no tempo certo dos DOIS botoes
+(BOOT + EN); sem isso o upload para em "No serial data received".
+
+CAUSA DO IMPASSE: com o auto-reset fora de jogo, o download mode depende de
+acertar a sequencia manual "segura BOOT -> aperta/solta EN -> solta BOOT".
+E' chato de acertar e o gravar.bat so' dava instrucoes.
+
+SOLUCAO IMPLEMENTADA (assistencia de boot):
+  - tools/gravar_esp32_com_boot.py: pede para SEGURAR o BOOT, da' o PULSO DE
+    RESET pela serial (RTS = EN; DTR fica alto para nao forcar o GPIO0) e chama
+    o upload do PlatformIO (que ja' usa board_upload.before_reset=no_reset e
+    115200, item 84). O usuario so' precisa de UM botao.
+  - GRAVAR_ESP32.bat (raiz): atalho -- GRAVAR_ESP32.bat [COMx] [--sem-pulso].
+  - Plano B documentado (--sem-pulso): segurar o BOOT ENQUANTO pluga o USB
+    (download mode garantido no power-on) e rodar o script com --sem-pulso.
+
+VALIDACAO AQUI
+  - pyserial 3.5 abre COM4 e pulsa RTS/DTR SEM PermissionError (a queda do
+    CP210x e' do pulso do ESPTOOL, nao do bridge em si).
+  - Fluxo completo rodado SEM o BOOT apertado: pulso OK -> upload -> falha
+    LIMPA "Failed to connect: No serial data received" (e nunca o
+    PermissionError). Ou seja: com o BOOT apertado a sincronizacao e' o unico
+    passo que falta.
+  - Comando do PlatformIO conferido com -v: "--before no_reset --after
+    hard_reset --baud 115200" + write_flash dos 4 binarios.
+
+COMO USAR
+  1) Feche monitor serial / PlatformIO Monitor / Arduino IDE que segurem a COM4.
+  2) Rode na raiz:   GRAVAR_ESP32.bat COM4
+  3) SEGURE o BOOT e tecle ENTER; pode SOLTAR o BOOT quando aparecer
+     "Connecting...".
+  4) Sucesso -> desligar/religar o USB da placa.
+  Se der "No serial data received": repita (segure BOOT -> ENTER) ou plano B:
+     segure o BOOT, plugue o USB, espere 2 s, solte e rode
+     GRAVAR_ESP32.bat COM4 --sem-pulso
+  Se voltar PermissionError: aplicar as recomendacoes de hardware do item 84
+  (driver CP210x v11.x + desligar selective suspend + porta USB traseira).
+
+PROXIMO: gravar (firmware do item 83) -> religar USB -> tool -> O -> D ->
+analisar (alvos no item 83).
+
