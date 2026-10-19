@@ -5664,3 +5664,47 @@ PROXIMO (usuario)
   5) Para o tool depois: ligar de novo o hotspot "EDUARDO-PC 9049" (o reboot
      desligou) -- sem ele o IMU/UDP nao chega.
 
+
+================================================================================
+ITEM 87 (19/10/2026) - A PLACA ESTA' VIVA (serial OK) -- falta SO' entrar em
+    DOWNLOAD MODE; como VERIFICAR pelo monitor antes de tentar o upload
+================================================================================
+Novo dado do usuario (monitor_serial_esp32.py no COM4): apareceu texto na
+serial e a placa CONECTOU AO HOTSPOT quando ele ligou o hotspot. Ou seja:
+  - a PLACA CENTRAL e' a que esta' no COM4 (confirmado pelo usuario);
+  - a serial TX da placa funciona (o item 86 falava "muda" porque a escuta
+    aconteceu em condicoes em que ela nao falou);
+  - o firmware antigo esta' rodando normal.
+Logo o "No serial data received" do esptool NAO e' placa morta/cabo: e' a placa
+NAO ESTAR EM DOWNLOAD MODE na hora da conexao (--before=no_reset exige isso).
+
+Situacao dos botoes: o usuario nao consegue entrar em download mode segurando
+BOOT + apertando EN; o pulso assistido por RTS (item 85) tambem nao colocou a
+placa em download mode (o auto-reset desta placa e' defeituoso -- RTS/DTR nao
+chegam no EN/GPIO0). Continuam candidatos: ordem/tempo dos botoes errada, EN
+sem contato, ou BOOT sem contato.
+
+COMO VERIFICAR SE ENTROU EM DOWNLOAD MODE (sem chute):
+  1) rode `.venv\Scripts\python.exe tools\monitor_serial_esp32.py COM4`
+     (20 s de escuta);
+  2) SEGURE o BOOT, aperte e solte o EN, solte o BOOT;
+  3) olhe o monitor:
+     - se aparecerem linhas de boot -> NAO entrou em download mode (o chip
+       reiniciou rodando o firmware);
+     - se NAO aparecer NADA -> entrou em download mode (o chip fica mudo);
+  4) entrando em download mode, rode IMEDIATAMENTE (ele persiste ate' gravar ou
+     ate' um reset/religar):
+        GRAVAR_ESP32.bat COM4 --sem-pulso
+Alternativa que NAO depende do EN nem do motor de reset: segurar o BOOT
+ENQUANTO pluga o USB (reset de power-on) e rodar o --sem-pulso; ou, se o BOOT
+nao funcionar, fechar GPIO0 (pino IO0/GPIO0) no GND, plugar o USB, soltar o
+GND e rodar --sem-pulso.
+
+DICA PARA ACHAR OS BOTOES: com o monitor aberto, aperte cada botao UMA vez: o
+que fizer aparecer texto de boot e' o EN (reset); o outro e' o BOOT.
+
+INDICIO NOVO A PEDIR AO USUARIO: se NENHUM dos dois botoes produz texto no
+monitor, o problema e' o proprio botao/rotina de reset (ou o cabo de dados nao
+leva o pulso). Nesse caso: GPIO0 no GND + power-on resolve a entrada em
+download mode.
+
