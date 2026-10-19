@@ -5339,3 +5339,79 @@ PROXIMO
   2) Para o trial: decidir auxiliar 1 x 2 (fps x fallback de oclusao) e, se
      precisar das duas, mover a deteccao para thread (item futuro).
 
+
+================================================================================
+ITEM 82 (19/10/2026) - SESSAO BOA (calibracao/T aprovados, O dentro do limite):
+    o yaw do IMU e' o UNICO bloqueio restante -- provado com correcao por fase
+================================================================================
+Contexto: usuario recalibrou o estereo (T aprovou), rodou a tecla O (algumas
+tentativas; gravou 16:47:19) e duas sessoes de D (16:47:34 e 16:47:57).
+
+1) CALIBRACAO ESTEREO: RESOLVIDA -- confirmada por medicao, nao por "parece bom"
+   O overlay_deviation_log.csv da sessao (6035 frames) caiu de 22 px (direita) /
+   9 px (esquerda) com offset sistematico dy +22/+9 -- medido ANTES, no item 80 --
+   para:
+     direita : mediana 1 px | p90 3 | dx +0 dy -0 (parado)
+     esquerda: mediana 1 px | p90 3 | dx +0 dy -1 (parado)
+   Ou seja: ~1 px de desvio, sem viés. A recalibracao (stereo_calibration.npz
+   16:38:32 e stereo_calibration_aux1.npz 16:41:18) e o T aprovando estao
+   coerentes com a medida. FIM do item 80 na pratica.
+
+2) TE CLA O: residuo DENTRO do limite -- mas NAO GENERALIZA
+   Arquivos gravados: right residuo 11.76 graus | left 9.60 (limite 15).
+   Nos dados do D a MESMA calibracao da':
+     sessao 16:47:34: right erro mediana 42.2 / p90 153.8 | left 14.9 / p90 44.0
+     sessao 16:47:57: right 58.4 / p90 167.9 | left 42.2 / p90 72.9
+   E o `f_body` dela difere do refit dos dados em 90.5 / 69.5 / 80.3 / 21.0
+   graus (T difere 51-77). CONCLUSAO: a O ajustou os dados DA PROPRIA CAPTURA
+   (que estava contaminada pelo yaw) -- residuo baixo NAO garante generalizar.
+   Nao adianta repetir a O: e' o mesmo "DECORA a pose da O" de antes.
+
+3) TESTE DECISIVO: o modelo fecha se a ATITUDE tiver um YAW por fase
+   Nas duas sessoes, o refit com T/f unicos (e com MULTISTART, provando que nao
+   e' minimo local) deu:
+     sessao 16:47:34: right 36.8 (multistart 38.2) | left 17.6 (19.4)
+     sessao 16:47:57: right 38.4 (multistart 38.8) | left 24.0 (23.0)
+   Permitindo UM offset de yaw por fase (rotacao em torno do Z do MUNDO do IMU):
+     sessao 16:47:34: right 36.8 -> 13.7 graus (deltas -10/+56/-80/+44)
+                      left  17.6 -> 11.6 (deltas +26/-10/+12/-30)
+     sessao 16:47:57: right 38.4 -> 10.5 graus (deltas +84/+108/-44/+72)
+                      left  24.0 ->  7.6 (deltas -20/+74/+42/-42)
+   O deltas de DEZENAS DE GRAUS explicam o residuo, e a familia de correcao que
+   fecha e' exatamente "yaw no referencial do mundo" -- assinatura do firmware
+   que integra `yaw += gz*dt` (giroscopio no eixo Z do CORPO; item 78/79). Se
+   fosse a luva escorregando na mao, a correcao nao seria so' em Z do mundo.
+   CONCLUSAO: o bloqueio restante da seta da palma e' O YAW DO IMU. Nem O, nem
+   D, nem camera: e' firmware.
+
+4) O QUE NAO E' PROBLEMA (medido nestas sessoes)
+   - Kinect: MESA com dispersao 1 grau, PREPARO/KINECT 1-5; checagem FISICA das
+     4 poses passou (MESA entre as maos 1.8-6.0 graus = 2 palmas para baixo;
+     REZANDO 135-136 = opostas; KINECT 37-38 = iguais dentro da tolerancia).
+   - Estereo: overlay 1 px (item 1).
+   - IMU taxa: 54-57 Hz nas duas portas.
+   - Gloves/portas: nada indicou troca (as duas falham de forma parecida e o
+     residuo cai com a correcao de YAW, nao com troca).
+
+5) CAMINHOS PARA RESOLVER (decidir com o usuario; firmware e' do CLINE)
+   A) FIRMWARE (correto): trocar `yaw += gz*dt` por atitude propria (quaternion/
+      Mahony) ou, no minimo, integrar a taxa de yaw que usa os 3 eixos:
+        roll_dot  = gx + (gy sin(roll) + gz cos(roll)) tan(pitch)
+        pitch_dot = gy cos(roll) - gz sin(roll)
+        yaw_dot   = (gy sin(roll) + gz cos(roll)) / cos(pitch)   [cuidado perto
+      de pitch +-90, que e' proximo das poses desta bancada: ideal quaternion]
+      Exige regravar o ESP32 (gravar.bat) e o Cline edita firmware/.
+   B) FILTRO NO PC: reconstruir a atitude com accel+giro a 55 Hz DENTRO do
+      ImuReceiver (processa todo pacote; hoje o receiver guarda so' o ultimo).
+      Filtro 6 eixos (integracao no corpo + correcao de inclinacao pelo accel)
+      ja' foi prototipado offline nos dados de 20 Hz e NAO melhorou o refit
+      (item 79) -- com 55 Hz e o sinal ANATOMICO corrigido vale re-testar; exige
+      logar as amostras cruas em 55 Hz para validar (pequena opcao nova).
+   RECOMENDACAO: A (corrige a raiz, uma vez, e beneficia paradigma/dataset);
+   depois refazer a O UMA vez (residuo deve cair para ~5 graus e GENERALIZAR no
+   D: erro ao vivo <= ~10 graus). B fica como plano se o Cline nao puder agora.
+
+PROXIMO: usuario decide A x B; se A, passar a nota tecnica acima para o Cline;
+depois: O -> D de conferencia -> trial real + 5 itens do item 65 + casamento
+EEG x groundtruth.
+
