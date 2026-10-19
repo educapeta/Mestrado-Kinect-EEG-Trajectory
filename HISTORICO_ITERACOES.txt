@@ -5613,3 +5613,54 @@ COMO USAR
 PROXIMO: gravar (firmware do item 83) -> religar USB -> tool -> O -> D ->
 analisar (alvos no item 83).
 
+
+================================================================================
+ITEM 86 (19/10/2026) - UPLOAD AINDA IMPOSSIVEL: a COM4 (CP210x) esta' MUDA --
+    o problema agora e' a PLACA/POWER, nao mais o driver/esptool
+================================================================================
+Depois do reboot + porta USB traseira (item 85 nao resolveu), medido:
+  - COM4 = CP210x da PLACA (historico: "esp32_duas_imus no COM4"); o registro
+    do dispositivo mostra LastArrivalDate 19/10/2026 17:36 (ou seja, o que esta'
+    enumerado e' o cabo que o usuario plugou). Local: Port_#0001.Hub_#0001.
+  - A PORTA esta' ESTAVEL: 25 ciclos de abrir/fechar a 115200 com DTR/RTS = 0
+    falhas; `esptool --before=default_reset chip_id` NAO da' mais
+    PermissionError (so' "No serial data received").
+  - SUSPENSAO SELETIVA JA' ESTA' DESLIGADA (powercfg: CA=0x0 CC=0x0).
+  - Driver CP210x continua 6.7.4.261 (2016) -- candidato a robustez, mas NAO e'
+    mais o bloqueio imediato (a porta abre e configura).
+  - A SERIAL ESTA' 100% MUDA: nenhum byte nem depois de pulsar RTS/DTR (reset
+    por software), nem lendo 74880 (boot do ROM). Sem boot, sem sync.
+  - UDP silencioso: explicado pelo REBOOT -- o hotspot/ICS sumiu (nao ha
+    adaptador 192.168.137.x); o ESP32 fica sem WiFi e sem UDP. NAO e' prova de
+    placa morta, mas o serial mudo e'.
+
+LEITURA: o ESP32 (a metade "chip") nao esta' respondendo. Duas causas
+plausiveis: (a) o chip nao esta' rodando -- sem energia (chave ON/OFF ou
+BAT/USB, se a placa tiver), EN preso/defeituoso (o auto-reset desta placa ja'
+era conhecido por nao funcionar), ou modulo danificado; (b) o circuito de
+auto-reset do CP210x nao controla o EN desta placa ATUAL -- entao pulsar
+RTS/DTR nao reinicia o chip e o BOOT+EN manual continua sem efeito se o EN
+nao funcionar. Como o caminho "BOOT segurado ENQUANTO pluga o USB" nao depende
+de EN nenhum (reset e' o power-on), ele e' o teste de download mode mais
+confiavel.
+
+FERRAMENTA NOVA: tools/monitor_serial_esp32.py
+  Escuta a COMx a 115200 (e depois 74880) e diz se a PLACA transmite. Instrui a
+  apertar EN/BOOT e a religar o USB durante a escuta. Resultado:
+    - apareceram bytes -> placa viva e serial OK: o problema e' so' entrar em
+      download mode (BOOT + power-on ou BOOT+EN);
+    - ZERO bytes -> placa sem energia/defeito ou COMx de outro dispositivo
+      (teste do "desplugue e veja se o COMx desaparece").
+
+PROXIMO (usuario)
+  1) .venv\Scripts\python.exe tools\monitor_serial_esp32.py COM4  e, DURANTE,
+     desligar/religar o USB e apertar EN/BOOT. Reportar se apareceram bytes.
+  2) Plano B de gravacao (nao precisa de EN): desligar USB -> segurar BOOT ->
+     plugar USB -> esperar ~3 s -> soltar -> `GRAVAR_ESP32.bat COM4 --sem-pulso`.
+  3) Conferir fisico: LED de energia aceso? chave ON/OFF ou BAT/USB? EN preso?
+     Cabo de dados? 3V3 do modulo com multimetro (3,3 V?).
+  4) Se nada: testar outro ESP32 (pelo menos um das luvas) com o mesmo cabo/PC
+     para separar "placa defeituosa" de "cabo/PC".
+  5) Para o tool depois: ligar de novo o hotspot "EDUARDO-PC 9049" (o reboot
+     desligou) -- sem ele o IMU/UDP nao chega.
+
