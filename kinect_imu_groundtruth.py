@@ -703,19 +703,21 @@ def unit_vector(vector, eps=1e-9):
     return vector / norm
 
 
-def palm_frame(wrist, index_mcp, pinky_mcp, middle_mcp):
+def palm_frame(wrist, index_mcp, pinky_mcp, middle_mcp, lado=None):
     """Frame ortonormal do plano da palma a partir de 4 pontos 3D (m).
 
     Devolve (normal, direcao_dedos), ambas unitarias, ou (None, None):
-      - normal: perpendicular ao plano punho/indicador/minimo, com sinal
-        fixado apontando para a CAMERA (nz < 0) -> comparavel entre frames;
+      - normal: perpendicular ao plano punho/indicador/minimo. COM `lado`
+        ('right'/'left') o sinal e' ANATOMICO (aponta para fora da PALMA em
+        qualquer pose -- ver `palm_normal_from_points`); SEM `lado` mantem o
+        comportamento antigo (sinal forcado para a CAMERA, nz < 0);
       - direcao_dedos: punho -> MCP do dedo medio, ortogonalizada em relacao
         a normal (fica exatamente no plano da palma).
     """
     normal = None
     if index_mcp is not None and pinky_mcp is not None and wrist is not None:
         normal = KinectHandTracker.palm_normal_from_points(
-            wrist, index_mcp, pinky_mcp)
+            wrist, index_mcp, pinky_mcp, lado=lado)
     direction = None
     if normal is not None and middle_mcp is not None and wrist is not None:
         fingers = unit_vector(np.asarray(middle_mcp, np.float64)
@@ -2770,12 +2772,27 @@ class KinectHandTracker:
         return np.array([camera_point.x, camera_point.y, camera_point.z], dtype=float)
 
     @staticmethod
-    def palm_normal_from_points(wrist, index_mcp, pinky_mcp, eps=1e-9):
+    def palm_normal_from_points(wrist, index_mcp, pinky_mcp, eps=1e-9,
+                                lado=None):
         """Normal unitaria do plano da palma a partir de 3 pontos 3D (m).
 
-        Usa punho (0), MCP do indicador (5) e MCP do dedo minimo (17). O sinal
-        e fixado apontando para a CAMERA (nz < 0), o que torna a orientacao
-        comparavel entre frames: palma vs. dorso virado para a camera.
+        COM `lado` ('right'/'left'): orientacao ANATOMICA -- aponta para FORA da
+        PALMA em QUALQUER pose (item 79 do historico). Medido na bancada
+        (19/10/2026, sessao 16:07:43, com os pontos 3D crus): nesta camera o
+        produto vetorial `(index_mcp-punho) x (pinky_mcp-punho)` sai do lado da
+        PALMA na mao DIREITA e do lado do DORSO na ESQUERDA (as maos sao
+        espelhadas), logo o sinal e' +1 para 'right' e -1 para 'left'.
+        Validacao fisica INDEPENDENTE (nao depende de saber a montagem da
+        camera): com esse sinal as normais das DUAS maos ficam a 11 graus na
+        fase MESA (as duas palmas para baixo -> normais iguais), a 28-30 graus
+        em PREPARO/KINECT (as duas palmas para o sensor) e a 153 graus em
+        REZANDO (palmas uma contra a outra -> normais opostas) -- exatamente o
+        que a pose exige. Com o sinal antigo (nz<0 forcado) davam 169/151/27
+        graus, ou seja, INVERTIDAS.
+
+        SEM `lado` (None): comportamento ANTIGO (sinal forcado para nz < 0), que
+        so' e' a palma na pose "palma virada para o Kinect"; mantido para nao
+        mudar os chamadores antigos (ex.: o log de angulos do paradigma).
         """
         normal = np.cross(
             np.asarray(index_mcp, np.float64) - np.asarray(wrist, np.float64),
@@ -2785,22 +2802,34 @@ class KinectHandTracker:
         if length < eps:
             return None
         normal = normal / length
+        if lado == "right":
+            return normal
+        if lado == "left":
+            return -normal
         if normal[2] > 0:
             normal = -normal
         return normal
 
-    def palm_normal_camera(self, landmarks):
+    def palm_normal_camera(self, landmarks, lado=None):
         """Normal da palma medida pelo Kinect (um lookup de profundidade por
-        landmark; mais caro que a versao sobre a triangulacao)."""
+        landmark; mais caro que a versao sobre a triangulacao).
+
+        COM `lado` a normal e' ANATOMICA (palma para fora em qualquer pose --
+        e' a verdade do diagnostico e da calibracao da luva); SEM `lado` mantem
+        o comportamento antigo (sinal forcado para a camera).
+        """
         wrist = self._landmark_camera_point(landmarks[0])
         index_mcp = self._landmark_camera_point(landmarks[5])
         pinky_mcp = self._landmark_camera_point(landmarks[17])
         if wrist is None or index_mcp is None or pinky_mcp is None:
             return None
-        return self.palm_normal_from_points(wrist, index_mcp, pinky_mcp)
+        return self.palm_normal_from_points(wrist, index_mcp, pinky_mcp,
+                                            lado=lado)
 
-    def palm_orientation_camera(self, landmarks):
+    def palm_orientation_camera(self, landmarks, lado=None):
         """(normal, direcao_dedos) da palma pelo depth do Kinect.
+
+        COM `lado` a normal e' ANATOMICA (ver `palm_normal_from_points`).
 
         Quatro lookups de profundidade (punho 0, MCP medio 9, MCP indicador 5,
         MCP minimo 17). Devolve (None, None) se os tres pontos do plano
@@ -2812,7 +2841,7 @@ class KinectHandTracker:
         index_mcp = self._landmark_camera_point(landmarks[5])
         pinky_mcp = self._landmark_camera_point(landmarks[17])
         middle_mcp = self._landmark_camera_point(landmarks[9])
-        return palm_frame(wrist, index_mcp, pinky_mcp, middle_mcp)
+        return palm_frame(wrist, index_mcp, pinky_mcp, middle_mcp, lado=lado)
 
     @staticmethod
     def _tronco_base_y(joints):

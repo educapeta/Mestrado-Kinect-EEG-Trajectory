@@ -5107,3 +5107,99 @@ PROXIMO (ordem)
      decidir a orientacao anatomica por mao e corrigir `palm_normal_from_points`
      (afeta tambem palm_angles do paradigma; avisar o Cline se mexer na lib).
 
+
+================================================================================
+ITEM 79 (19/10/2026) - SINAL DA NORMAL DA PALMA CORRIGIDO (anatomico por mao)
+    + o yaw do IMU medido: ~30 graus de erro por sessao (bug de firmware segue)
+================================================================================
+SESSAO (palm_diag_20261019_160743.csv, 403 linhas, ja' com a EVIDENCIA CRUA do
+item 78: giroscopio/acelerometro/timestamp do ESP32 + 4 pontos 3D crus).
+
+1) O SINAL DA NORMAL DO KINECT ESTAVA ERRADO -- PROVADO (e CORRIGIDO)
+   `palm_normal_from_points` forcava o sinal para nz<0 ("palma virada para a
+   camera"). Com os pontos 3D crus deu' para testar isso FISICAMENTE, sem saber
+   a montagem da camera: a relacao entre as normais ANATOMICAS das DUAS maos em
+   cada pose (medido nesta sessao, com os pontos crus):
+     MESA    (as 2 palmas para baixo) .......... 8.7-11.4 graus  (iguais)  OK
+     PREPARO/KINECT (as 2 palmas p/ o sensor) .. 28.4-29.8 graus  (iguais)  OK
+     REZANDO (palmas uma contra a outra) ....... 146.6-152.9 graus (opostas) OK
+   Com o sinal ANTIGO (nz<0 forcado) as MESMAS poses davam 168.6 / 151.5 / 27.1
+   -- invertidas. E, por mao: na MESA cada mao saia 180.0 graus oposta a PROPRIA
+   palma; na pose da tecla O ("palma para o Kinect") o hack coincide por
+   construcao (0.0) -- era por isso que ele "parecia" funcionar so' na
+   calibracao. Medido tambem: a normal gravada e' exatamente o plano dos 4
+   pontos crus (|dot| >= 0.9 em 98-100% das amostras), ou seja o CSV era
+   coerente; o problema era o SINAL, nao os pontos.
+   CORRECAO (kinect_imu_groundtruth.py): `palm_normal_from_points`,
+   `palm_frame`, `palm_normal_camera` e `palm_orientation_camera` aceitam
+   `lado` ('right'/'left'). Com lado: orientacao ANATOMICA -- nesta camera
+   `(index_mcp-punho) x (pinky_mcp-punho)` sai do lado da PALMA na mao DIREITA e
+   do DORSO na ESQUERDA (maos espelhadas), entao right = +cru e left = -cru,
+   valido em QUALQUER pose. SEM lado: comportamento antigo (nz<0), preservado
+   para o PARADIGMA (que chama palm_frame/palm_orientation_camera sem lado e
+   nao pode ser tocado por mim -- ver pendencia).
+   O tool passa `lado` no `palm_normal_camera` (normal da verdade usada pelo
+   erro ao vivo, pela captura da tecla O e pelo diagnostico).
+
+2) YAW DO IMU: MEDIDO ~30 GRAUS DE ERRO POR SESSAO (bug de firmware confirmado)
+   Nesta sessao a consistencia de pose repetida (PREPARO x KINECT) PASSOU
+   (IMU 18/11 graus x Kinect 2/4) -- o absurdo da sessao anterior (170/75) era
+   erro de yaw DEPENDENTE DO CAMINHO. Medido diretamente:
+     direita : yaw do firmware variou +25.5 graus | integral de gz*dt +26.2 |
+               integral da taxa de yaw VERDADEIRA -6.9   -> erro ~33 graus
+     esquerda: yaw do firmware variou -28.4 | gz*dt -11.0 | verdadeira -45.6
+                                                        -> erro ~34 graus
+   Confirma o item 78: o firmware integra `yaw += gz*dt` (eixo Z do CORPO). Um
+   filtro 6-eixos PROTOTIPO offline (integracao do gyro no corpo + correcao pelo
+   acelerometro, dt pelo relogio do ESP32) foi testado nos dados crus e NAO
+   melhorou o refit (16.1/14.2 x 16.7/12.2 do firmware) -- a 20 Hz, com o filtro
+   simples, nao da'. A correcao de yaw de referencia (integral da taxa
+   verdadeira) e' a que fecha a conta; a solucao e' FIRMWARE (Cline) ou um
+   filtro melhor com historico completo de amostras no receiver.
+
+3) ANALISADOR OFFLINE: VERDADE ANATOMICA + CHECAGEM FISICA + `--salvar`
+   - `normal_do_csv`: reconstroi a normal VERDADEIRA dos pontos 3D crus com o
+     sinal anatomico por mao (CSV antigo sem pontos cai na coluna gravada). E' a
+     verdade usada no refit e no cluster.
+   - A secao "EXECUCAO DAS POSES" virou FISICA (relacao entre as normais das
+     duas maos -- nao depende da camera; a heuristica antiga supunha camera
+     nivelada e alarmava falso, o Kinect da bancada esta' inclinado p/ baixo).
+   - `--salvar`: grava o T/f do REFIT em imu_palm_alignment_<lado>.json (o tool
+     carrega no proximo boot) com backup do anterior em `.json.bak`. Por que:
+     o refit usa as 4 poses do diagnostico, que cobrem MAIS orientacoes (palma
+     para baixo, lateral, para o sensor) que a captura da tecla O -- o
+     alinhamento salvo pela O estava com erro ao vivo de 40-113 graus.
+   - test_palm_alignment grupo 8 (9/9 agora): usa a GEOMETRIA REAL da bancada e
+     trava as tres relacoes fisicas + "sem lado = legado (nz<0)".
+
+APLICADO NESTA SESSAO (bancada)
+  `analisa_diag_palma.py palm_diag_20261019_160743.csv --salvar`:
+    right: gravado (residuo 22.94 graus, ALTO) -- backup do O anterior
+    left : gravado (residuo 13.45 graus, OK)  -- backup do O anterior
+  Erro ao vivo ESPERADO com esse alinhamento (simulado nos dados da sessao,
+  apos reiniciar o tool): left 5.9-13.3 graus e right 10.4-25.6 graus -- contra
+  40-113 graus do alinhamento antigo. A seta fica UTILIZAVEL; a direita ainda
+  limitada pelo yaw do IMU.
+
+VALIDACAO: py_compile OK; test_palm_alignment 9/9; test_diagnostico_palma 5/5;
+  test_arm_ik 8/8; test_arm_csv 6/6; deteccao_cascata, janelas_grade,
+  overlay_auxiliares 8/8, lateralidade_maos, aux_pair_stereo 7/7 -- 9 suites
+  verdes (a biblioteca mudou, por isso a rodada larga).
+
+PENDENCIAS / PROXIMO
+  1) USUARIO: reiniciar o tool (para carregar o alinhamento novo) e conferir a
+     seta/"Palma R/L"; depois rodar D de novo -- o erro ao vivo deve sair na
+     faixa de 6-26 graus e a secao fisica das poses OK.
+  2) FIRMWARE (Cline; AVISAR ANTES): corrigir a integracao do yaw (nos 3 eixos
+     pela atitude, ou quaternion/Mahony). E' o que falta para a direita cair
+     abaixo de 10 graus e para a tecla O fechar de verdade. O firmware e' do
+     Cline; NAO foi tocado por mim.
+  3) PARADIGMA: `eeg_motor_paradigm.py` chama `palm_frame`/`palm_orientation_
+     camera` sem `lado` -> continua com o sinal LEGADO (nz<0) nas colunas
+     palm_elev/palm_azim do dataset. Com o Cline, passar o lado para o dataset
+     ficar com a normal anatomica (mudaria o significado dessas colunas; fazer
+     ANTES de treinar qualquer modelo e documentar no HISTORICO).
+  4) O captura da tecla O agora usa a normal anatomica: vale repetir a O e
+     comparar o residuo com o do alinhamento do refit (o D agora e' mais
+     confiavel para calibrar).
+

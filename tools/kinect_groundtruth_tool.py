@@ -2777,9 +2777,13 @@ def main():
                 # Normal da palma medida pelo Kinect (depth): e' a referencia do
                 # vetor da palma -- usada para ancorar, para a captura do
                 # alinhamento (tecla O) e para o ERRO AO VIVO (Kinect x IMU).
+                # `lado` liga a orientacao ANATOMICA (item 79): sem ele a lib
+                # forcaria o sinal para a camera (nz<0), o que so' e' a palma na
+                # pose "palma virada para o Kinect" -- nas outras o sinal vira
+                # ruido e corrompe a captura O e o diagnostico.
                 normal_lado = (
                     None if landmarks_lado is None
-                    else tracker.palm_normal_camera(landmarks_lado)
+                    else tracker.palm_normal_camera(landmarks_lado, lado)
                 )
                 mao["palm_normal_kinect"] = normal_lado
                 mao["palm_direction"] = (

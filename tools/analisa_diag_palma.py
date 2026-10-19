@@ -43,6 +43,7 @@ import argparse
 import csv
 import json
 import os
+import shutil
 import sys
 from pathlib import Path
 
@@ -239,6 +240,108 @@ def resumo_por_lado(linhas, coluna="err_raw_deg"):
     return {lado: estatisticas(valores) for lado, valores in grupos.items()}
 
 
+def normal_do_csv(linha):
+    """Normal da palma a ser usada como VERDADE na analise, ou None.
+
+    PREFERENCIA: reconstruida dos 4 pontos 3D CRUS (colunas novas do item 78) com
+    o sinal ANATOMICO por mao (item 79) -- e' o que o tool passou a gravar e o que
+    vale em QUALQUER pose. Medido na bancada (19/10/2026): com esse sinal as duas
+    maos ficam a 9-11 graus na MESA (2 palmas para baixo) e a 153 graus no
+    REZANDO (palmas opostas); com o sinal antigo (nz<0) davam ~168 e ~27, ou
+    seja, INVERTIDAS.
+
+    CSV ANTIGO (sem os pontos) cai na coluna `nx/ny/nz` gravada pelo tool --
+    que era o sinal forcado para a camera. Continua analisavel, mas o sinal pode
+    estar invertido em algumas poses (ver item 79 do historico).
+    """
+    pontos = []
+    for nome in ("wrist", "index", "pinky"):
+        ponto = np.asarray([_numero(linha.get(f"{nome}_{eixo}"))
+                            for eixo in "xyz"], dtype=float)
+        if not np.isfinite(ponto).all():
+            pontos = []
+            break
+        pontos.append(ponto)
+    if len(pontos) == 3:
+        cru = np.cross(pontos[1] - pontos[0], pontos[2] - pontos[0])
+        norma = float(np.linalg.norm(cru))
+        if norma > 1e-9:
+            normal = cru / norma
+            lado = linha.get("lado")
+            if lado == "left":
+                normal = -normal
+            elif lado != "right":
+                normal = None
+            if normal is not None:
+                return normal
+    normal = np.asarray([_numero(linha.get(coluna))
+                         for coluna in ("nx", "ny", "nz")], dtype=float)
+    return normal if np.isfinite(normal).all() else None
+
+
+RELACAO_FISICA_POSES = {
+    # fase: (relacao esperada entre as normais das DUAS maos, limite em graus)
+    "PREPARO": ("iguais", 45.0),
+    "MESA": ("iguais", 30.0),
+    "REZANDO": ("opostas", 120.0),
+    "KINECT": ("iguais", 45.0),
+}
+
+
+def validacao_fisica_poses(linhas, settle=SETTLE_PADRAO_S):
+    """Relacao entre as normais ANATOMICAS das duas maos em cada pose.
+
+    Por que esta checagem substitui a heuristica antiga (que comparava com
+    direcoes fixas supondo a camera nivelada): a orientacao da camera na bancada
+    NAO e' conhecida (a de 19/10/2026 esta' inclinada para baixo), entao "esperar
+    (0,0,-1)" gerava alarme falso. O que a FISICA da pose impoe entre as DUAS
+    maos nao depende da camera:
+      - MESA (as duas palmas para baixo) e PREPARO/KINECT (as duas palmas para o
+        sensor): normais ANATOMICAS ~IGUAIS entre os lados;
+      - REZANDO (palmas uma contra a outra): ~OPOSTAS.
+    Tolerancias medidas na bancada (19/10/2026, normal anatomica): MESA 9-11
+    graus, KINECT 30 (iguais) e REZANDO 153 (opostas). Com o sinal antigo davam
+    168/151/27 -- invertidas, que era o defeito.
+
+    Devolve {fase: {"right": (3,), "left": (3,), "angulo_deg": float,
+    "relacao": str, "ok": bool}}.
+    """
+    grupos = {}
+    for linha in linhas:
+        fase, lado = linha.get("fase_nome"), linha.get("lado")
+        if fase not in RELACAO_FISICA_POSES or lado not in ("right", "left"):
+            continue
+        t_fase = _numero(linha.get("t_fase_s"))
+        if not np.isfinite(t_fase) or t_fase < float(settle):
+            continue
+        normal = normal_do_csv(linha)
+        if normal is None or np.linalg.norm(normal) < 1e-9:
+            continue
+        grupos.setdefault((fase, lado), []).append(normal / np.linalg.norm(normal))
+    saida = {}
+    for fase, (relacao, limite_graus) in RELACAO_FISICA_POSES.items():
+        normais = []
+        for lado in ("right", "left"):
+            vetores = grupos.get((fase, lado))
+            if not vetores:
+                normais = []
+                break
+            media = np.mean(vetores, axis=0)
+            norma = float(np.linalg.norm(media))
+            if norma < 1e-9:
+                normais = []
+                break
+            normais.append(media / norma)
+        if len(normais) != 2:
+            continue
+        angulo = angle_between(normais[0], normais[1])
+        ok = (angulo <= limite_graus if relacao == "iguais"
+              else angulo >= limite_graus)
+        saida[fase] = {"right": normais[0], "left": normais[1],
+                       "angulo_deg": angulo, "relacao": relacao, "ok": ok}
+    return saida
+
+
 def erro_refit_por_fase(linhas, lado, alinhamento, corpo,
                         settle=SETTLE_PADRAO_S):
     """{(fase, lado): estatisticas} do erro com o alinhamento do REFIT.
@@ -259,9 +362,8 @@ def erro_refit_por_fase(linhas, lado, alinhamento, corpo,
         fase = linha.get("fase_nome")
         rpy = [_numero(linha.get(coluna))
                for coluna in ("roll_deg", "pitch_deg", "yaw_deg")]
-        normal = np.array([_numero(linha.get(coluna))
-                           for coluna in ("nx", "ny", "nz")], dtype=float)
-        if not fase or not np.isfinite(rpy).all() or not np.isfinite(normal).all():
+        normal = normal_do_csv(linha)
+        if not fase or not np.isfinite(rpy).all() or normal is None:
             continue
         previsto = alinhamento @ rotation_matrix(*rpy) @ corpo
         norma = np.linalg.norm(previsto)
@@ -300,9 +402,8 @@ def angulo_medio_normal(linhas, settle=SETTLE_PADRAO_S):
         t_fase = _numero(linha.get("t_fase_s"))
         if not np.isfinite(t_fase) or t_fase < float(settle):
             continue
-        normal = np.array([_numero(linha.get(coluna))
-                           for coluna in ("nx", "ny", "nz")], dtype=float)
-        if not np.isfinite(normal).all() or np.linalg.norm(normal) < 1e-9:
+        normal = normal_do_csv(linha)
+        if normal is None or np.linalg.norm(normal) < 1e-9:
             continue
         grupos.setdefault((fase, lado), []).append(normal / np.linalg.norm(normal))
     saida = {}
@@ -353,9 +454,8 @@ def refitar(linhas, lado):
             continue
         rpy = [_numero(linha.get(coluna))
                for coluna in ("roll_deg", "pitch_deg", "yaw_deg")]
-        normal = np.array([_numero(linha.get(coluna))
-                           for coluna in ("nx", "ny", "nz")], dtype=float)
-        if not np.isfinite(rpy).all() or not np.isfinite(normal).all():
+        normal = normal_do_csv(linha)
+        if not np.isfinite(rpy).all() or normal is None:
             continue
         if np.linalg.norm(normal) < 1e-9:
             continue
@@ -519,7 +619,7 @@ def _formata_vetor(vetor):
     return "(" + ", ".join(f"{valor:+.2f}" for valor in np.asarray(vetor)) + ")"
 
 
-def analisar(caminho, settle=None, limite=None):
+def analisar(caminho, settle=None, limite=None, salvar=False):
     """Roda a analise completa e imprime; devolve o codigo de saida."""
     caminho = Path(caminho)
     linhas, meta = carregar(caminho)
@@ -579,21 +679,25 @@ def analisar(caminho, settle=None, limite=None):
                            if dados.get("n")))
 
     # -------------------------------------------------- execucao das poses
-    print()
-    print("EXECUCAO DAS POSES (HEURISTICA, nao verdade absoluta: a normal do "
-          "Kinect E' a referencia)")
-    for lado in ("right", "left"):
+    fisica = validacao_fisica_poses(linhas, settle)
+    if fisica:
+        print()
+        print("EXECUCAO DAS POSES (FISICA: relacao entre as normais ANATOMICAS "
+              "das duas maos -- nao depende da camera)")
         for fase in ORDEM_FASES:
-            dados = cluster.get((fase, lado))
+            dados = fisica.get(fase)
             if dados is None:
                 continue
-            angulo_txt = ("" if dados["esperado_deg"] is None else
-                          f" (angulo {dados['esperado_deg']:.0f} graus)")
-            print(f"  {lado:5s} {fase:8s} normal media "
-                  f"{_formata_vetor(dados['media'])} | dispersao "
-                  f"{dados['dispersao_deg']:.1f} graus | esperado: "
-                  f"{dados['esperado']}{angulo_txt}"
-                  + (f" | {dados['nota']}" if dados["nota"] else ""))
+            dispersao = []
+            for lado in ("right", "left"):
+                info = cluster.get((fase, lado))
+                dispersao.append("-" if info is None
+                                 else f"{info['dispersao_deg']:.0f}")
+            print(f"  {fase:8s} R {_formata_vetor(dados['right'])} x "
+                  f"L {_formata_vetor(dados['left'])} | entre as maos "
+                  f"{dados['angulo_deg']:5.1f} graus ({dados['relacao']}) -> "
+                  + ("OK" if dados["ok"] else "ATENCAO: confira a pose")
+                  + f" | dispersao R/L {dispersao[0]}/{dispersao[1]} graus")
 
     # -------------------------------------------------------------- modelo
     print()
@@ -621,6 +725,48 @@ def analisar(caminho, settle=None, limite=None):
                                f"{novo['mediana']:.1f}")
         if comparacoes:
             print(f"    {lado}: " + " | ".join(comparacoes) + " (mediana, graus)")
+
+    # ------------------------------------ gravar o alinhamento do REFIT
+    if salvar:
+        print()
+        print("ALINHAMENTO DO REFIT (o T/f que MELHOR explica as poses desta "
+              "sessao)")
+        tem_pontos = any(np.isfinite(_numero(linha.get("wrist_x")))
+                         for linha in linhas)
+        if not tem_pontos:
+            print("  AVISO: CSV sem os pontos 3D crus (formato antigo): o refit "
+                  "usou a normal LEGADA (nz<0), que pode estar invertida em "
+                  "algumas poses. Gere uma sessao nova da tecla D antes de "
+                  "confiar neste alinhamento.")
+        for lado in ("right", "left"):
+            resolvido = refits.get(lado)
+            if resolvido is None:
+                print(f"  {lado}: sem refit -- nada gravado")
+                continue
+            alinhamento_refit, corpo_refit, residuo_refit = resolvido
+            destino = Path(f"imu_palm_alignment_{lado}.json")
+            if destino.exists():
+                backup = destino.with_suffix(".json.bak")
+                try:
+                    shutil.copyfile(destino, backup)
+                    print(f"  {lado}: backup do anterior em {backup.name}")
+                except OSError as exc:
+                    print(f"  {lado}: AVISO backup falhou ({exc})")
+            dados = {"rotation": np.asarray(alinhamento_refit, np.float64).tolist(),
+                     "body": np.asarray(corpo_refit, np.float64).tolist(),
+                     "residual_deg": float(residuo_refit)}
+            try:
+                destino.write_text(json.dumps(dados, indent=2),
+                                   encoding="utf-8")
+            except OSError as exc:
+                print(f"  {lado}: FALHOU gravar {destino.name} ({exc})")
+                continue
+            situacao = ("OK" if residuo_refit <= limite else "RESIDUO ALTO")
+            print(f"  {lado}: gravado {destino.name} (residuo {residuo_refit:.2f}"
+                  f" graus, {situacao}) -- o tool carrega no proximo inicio")
+        print("  Reinicie o tool e rode a tecla D de novo para conferir; a tecla "
+              "O continua valendo e deve fechar <= limite com a normal "
+              "anatomica.")
 
     # ------------------------------------ consistencia da ATITUDE do IMU
     repetida = consistencia_pose_repetida(linhas, settle=settle)
@@ -711,6 +857,13 @@ def main(argv=None):
     parser.add_argument("--limite", type=float, default=None,
                         help=f"limite (graus) da mediana por fase "
                              f"(padrao {PALM_ALIGNMENT_MAX_RESIDUAL_DEG:g})")
+    parser.add_argument("--salvar", action="store_true",
+                        help=("grava o alinhamento resolvido pelo REFIT desta "
+                              "sessao em imu_palm_alignment_<lado>.json (o tool "
+                              "carrega no proximo inicio). O arquivo anterior "
+                              "vira .json.bak. NAO e' a tecla O: o refit usa as "
+                              "4 poses do diagnostico, que cobrem mais orientacoes "
+                              "que a captura da O."))
     args = parser.parse_args(argv)
     caminho = None
     if args.csv:
@@ -726,7 +879,8 @@ def main(argv=None):
                   "volte com o CSV -- ou passe o caminho na linha de comando.")
             return 2
         print(f"(sem argumento: usando o mais recente da pasta -- {caminho.name})")
-    return analisar(caminho, settle=args.settle, limite=args.limite)
+    return analisar(caminho, settle=args.settle, limite=args.limite,
+                    salvar=args.salvar)
 
 
 if __name__ == "__main__":

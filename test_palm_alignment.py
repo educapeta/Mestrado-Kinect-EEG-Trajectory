@@ -361,9 +361,89 @@ assert not os.path.exists("_test_palm_right.json")
 print("7c) OK: save/load do alinhamento por luva (JSON; arquivo ilegivel avisa "
       "e e' recusado; nada a gravar -> False)")
 
-print("PALM_ALIGNMENT_OK: 8/8 grupos (Kabsch, montagem por luva, recusas, bug "
+# =============================================================================
+# 8) Normal ANATOMICA por mao (item 79): o sinal "nz<0" e' PROVADAMENTE errado
+# =============================================================================
+# Geometria REAL medida na bancada (sessao palm_diag_20261019_160743), pontos do
+# frame da palma em camera space: [punho, MCP indicador, MCP minimo, MCP medio].
+# Trava a regra do sinal sem depender de hardware.
+_PONTOS_REAIS = {
+    ("right", "KINECT"): np.array([
+        [0.2720, 0.2278, 1.1601],
+        [0.2459, 0.3019, 1.1187],
+        [0.2963, 0.2698, 1.1055],
+        [0.2642, 0.2978, 1.1070],
+    ]),
+    ("left", "KINECT"): np.array([
+        [0.0288, 0.2960, 1.2645],
+        [0.0746, 0.3415, 1.1647],
+        [0.0137, 0.3469, 1.1757],
+        [0.0548, 0.3491, 1.1593],
+    ]),
+    ("right", "MESA"): np.array([
+        [0.3084, 0.2425, 1.3178],
+        [0.2498, 0.2217, 1.3154],
+        [0.3051, 0.1892, 1.3012],
+        [0.2665, 0.2082, 1.3022],
+    ]),
+    ("left", "MESA"): np.array([
+        [0.0159, 0.3348, 1.3815],
+        [0.0328, 0.2940, 1.3592],
+        [-0.0230, 0.3072, 1.3710],
+        [0.0100, 0.2959, 1.3550],
+    ]),
+}
+
+
+def _normal_do_plano(pontos, lado=None):
+    return tool.KinectHandTracker.palm_normal_from_points(
+        pontos[0], pontos[1], pontos[2], lado=lado)
+
+
+anat = {chave: _normal_do_plano(pontos, chave[0])
+        for chave, pontos in _PONTOS_REAIS.items()}
+legado = {chave: _normal_do_plano(pontos, None)
+          for chave, pontos in _PONTOS_REAIS.items()}
+# MESA = as DUAS palmas para BAIXO: as normais anatomicas tem de ser ~iguais...
+assert angle_between(anat[("right", "MESA")],
+                     anat[("left", "MESA")]) < 25.0
+# ...e PREPARO/KINECT = as duas palmas para o sensor: tambem ~iguais.
+assert angle_between(anat[("right", "KINECT")],
+                     anat[("left", "KINECT")]) < 40.0
+# O sinal ANTIGO (nz<0 forcado) e' o bug: na MESA cada mao sai 180 graus oposta
+# a PROPRIA palma (medido: 180.0 nas duas), enquanto na pose da tecla O ("palma
+# para o Kinect") ele coincide por construcao (0.0) -- era por isso que o hack
+# parecia funcionar SO' na calibracao.
+for lado in ("right", "left"):
+    assert angle_between(anat[(lado, "MESA")],
+                         legado[(lado, "MESA")]) > 170.0
+    assert angle_between(anat[(lado, "KINECT")],
+                         legado[(lado, "KINECT")]) < 1.0
+for chave, normal in anat.items():
+    assert abs(np.linalg.norm(normal) - 1.0) < 1e-9
+    pontos = _PONTOS_REAIS[chave]
+    assert abs(np.dot(normal, pontos[1] - pontos[0])) < 1e-9
+    assert abs(np.dot(normal, pontos[2] - pontos[0])) < 1e-9
+# com lado='right' e lado='left' na MESMA geometria o sinal e' oposto (espelho)
+for chave, pontos in _PONTOS_REAIS.items():
+    assert np.allclose(_normal_do_plano(pontos, "right"),
+                       -_normal_do_plano(pontos, "left"))
+# sem lado = comportamento antigo: nz < 0 (nao quebra o paradigma)
+for chave, normal in legado.items():
+    assert normal[2] < 0, (chave, normal)
+# palm_frame repassa o lado (frame completo, com a direcao dos dedos)
+_pontos_mesa = _PONTOS_REAIS[("right", "MESA")]
+normal_frame, direcao_frame = tool.palm_frame(
+    _pontos_mesa[0], _pontos_mesa[1], _pontos_mesa[2], _pontos_mesa[3],
+    lado="right")
+assert normal_frame is not None and direcao_frame is not None
+assert abs(float(np.dot(normal_frame, direcao_frame))) < 1e-9
+print("8) OK: normal ANATOMICA por mao -- MESA iguais e antigo oposto; "
+      "unitarias/perpendiculares; palm_frame repassa o lado; sem lado = legado")
+
+print("PALM_ALIGNMENT_OK: 9/9 grupos (Kabsch, montagem por luva, recusas, bug "
       "demonstrado e corrigido, PositionFusion, retrocompatibilidade, JSON, "
-      "captura da ferramenta)")
+      "captura da ferramenta, normal anatomica por mao)")
 sys.exit(0)
 
 print("PALM_ALIGNMENT_OK: 7/7 grupos (Kabsch, montagem por luva, recusas, bug "
