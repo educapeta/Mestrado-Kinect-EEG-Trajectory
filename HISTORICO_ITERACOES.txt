@@ -4727,3 +4727,41 @@ RECEITA (para a seta ficar boa):
 VALIDACAO: py_compile OK; 6/6 testes que importam o tool verdes
   (deteccao_cascata, diagnostico_calibracao, janelas_grade,
   lateralidade_maos, overlay_auxiliares, palm_alignment 8/8 grupos).
+
+================================================================================
+ITEM 75 (19/10/2026) - TERMINAL DO TOOL INUNDADO (89% lateralidade/gate-tri)
++ linha [status] UNICA com a saude do IMU
+================================================================================
+SINTOMA
+  Usuario: "o log do terminal ta confuso, imprimindo um monte de lateralidade;
+  a orientacao dos IMU ainda esta confusa e errada". Medido no log: 193 de 218
+  linhas (89%) eram [lateralidade] x122 + [gate-tri] x71 -- ~1 linha a cada
+  2 s cada fonte, e o que importava (TECLAS/foco, bootstrap, instrucao do O)
+  afogava.
+
+CAUSA-RAIZ (medida, nao hipotese):
+  1) INTERVALO_LOG_LATERALIDADE_S = 2.0 s curto E o veredito REAL alterna
+     frame a frame durante o movimento (indecisa <-> GEOMETRIA): o pendente
+     rearmava a cada virada, entao o dedup (que FUNCIONA -- `_sem_numeros`,
+     grupo 13 do teste) nunca pegava contra o flicker de verdade.
+  2) Nao havia NENHUMA linha unica com a saude do IMU: sem taxa por porta,
+     sem dizer se o alinhamento O existe e sem o erro da palma ao vivo, o
+     usuario so' via ruido + seta errada (item 74: O nunca tinha rodado).
+
+CONCERTOS:
+  - tools/kinect_groundtruth_tool.py: intervalo 2 -> 10 s; nova regra
+    ESTABILIDADE_LOG_LATERALIDADE_S = 3 s (estado novo so' arma impressao
+    depois de PEGAR sem piscar -- mata o flicker indecisa<->geometria sem
+    esconder mudanca que pega); pendente removido (arming direto na condicao).
+  - Nova linha [status] a cada STATUS_LOG_INTERVALO_S = 5 s:
+    `[status] IMU R 55 Hz | L 55 Hz | alinhamento O: R NAO / L NAO | erro
+    palma: R 8.2 graus | L -- | SEM ALINHAMENTO -- aperte O (14 s girando)`
+    (alinhamento SIM = residual do solve do O carregado/recem-feito;
+    bootstrap de 1 amostra NAO conta).
+  - imu.py: ImuReceiver.count (contador de datagramas validos, sob lock) --
+    fonte da taxa Hz; aditivo, sem mudar comportamento.
+
+VALIDACAO: py_compile OK; 12/12 suites (as 6 do tool + 6 so de imu/firmware/
+  bridge) verdes. Relance PID 11532: 28 linhas em 20 s (antes 218 em minutos),
+  lateralidade 4 (so' transicoes reais de estado), gate-tri 0, status 2 com
+  55 Hz / 55 Hz medido.

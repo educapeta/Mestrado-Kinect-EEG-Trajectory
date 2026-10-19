@@ -129,6 +129,57 @@ PALM_ALIGNMENT_SAMPLE_INTERVAL = 0.10
 #: a captura aceita 100 amostras paradas (postura constante nao informa nada).
 PALM_ALIGNMENT_MIN_STEP_DEG = 4.0
 
+# --- DIAGNOSTICO DA PALMA por MOVIMENTO PROGRAMADO (tecla D) -----------------
+#: Fases do diagnostico: (nome, segundos, instrucao), NESTA ordem.
+#:
+#: Por que POSES CONHECIDAS e nao "gire a mao como quiser" (tecla O): o erro ao
+#: vivo (`palm_err_deg`) diz QUE a seta esta' errada, nunca POR QUE -- era o
+#: buraco do item 74 ("a calibracao da palma esta' dando ruim"). Com tres poses
+#: fixas o erro vira um TESTE que separa as duas causas possiveis:
+#:
+#:   - erro parecido nas TRES poses -> problema SISTEMATICO: `T`/`f` errados,
+#:     arquivo `imu_palm_alignment_<lado>.json` de outra luva, ou normal do
+#:     Kinect com plano/sinal trocados (nesse caso a seta erra sempre igual);
+#:   - erro que cresce quando a mao gira (MESA/REZANDO) e fecha em KINECT ->
+#:     o alinhamento DECORA a pose da tecla O (que e' "palma para o Kinect"),
+#:     ou seja, o modelo/captura estao ruins;
+#:   - PREPARO (mesma pose de KINECT, no inicio) mede o RUIDO da normal antes de
+#:     qualquer expectativa: se PREPARO e KINECT divergem, a mao nao ficou
+#:     parada (ou o Kinect esta' ruidoso) e o resto do numero nao vale.
+#:
+#: A mao tem de ficar DENTRO do quadro do Kinect nas quatro fases: a verdade e'
+#: a normal medida pelo depth, e fora do quadro nao ha' linha nenhuma.
+PALM_DIAG_PHASES = (
+    ("PREPARO", 3.0,
+     "Maos na frente do corpo, palmas viradas para o Kinect, dedos para cima, "
+     "PARADO."),
+    ("MESA", 6.0,
+     "Apoie as DUAS palmas na mesa, dedos para frente, palma para BAIXO (dorso "
+     "para o Kinect), sem mexer."),
+    ("REZANDO", 6.0,
+     "Maos juntas na frente do peito, dedos para cima, palmas uma contra a "
+     "outra, sem mexer."),
+    ("KINECT", 6.0,
+     "Palmas abertas viradas para o Kinect, dedos para cima, sem mexer."),
+)
+#: Amostras do INICIO de cada fase ficam FORA do resumo (elas entram no CSV):
+#: o experimentador leva ~1 s para CHEGAR na pose e as primeiras amostras de uma
+#: transicao (mao ainda girando) envenenariam a mediana da fase.
+PALM_DIAG_SETTLE_S = 1.5
+#: Limite (graus) da mediana por fase. E' o MESMO criterio do residuo do
+#: alinhamento (PALM_ALIGNMENT_MAX_RESIDUAL_DEG): acima disso a pose nao fecha.
+PALM_DIAG_MAX_ERR_DEG = PALM_ALIGNMENT_MAX_RESIDUAL_DEG
+#: Prefixo dos arquivos do diagnostico: palm_diag_<data>_<hora>.csv (+ _meta.json
+#: e <csv>_resumo.txt).
+PALM_DIAG_CSV_PREFIX = "palm_diag_"
+#: Intervalo minimo entre linhas do CSV, POR LADO (20 Hz). O laco roda a ~30 fps
+#: e quatro fases em 21 s nao precisam de 600 linhas por lado para descrever uma
+#: pose PARADA (o CSV principal ja' grava todo frame).
+PALM_DIAG_SAMPLE_INTERVAL = 0.05
+#: Abaixo disto numa fase o veredito avisa "a mao saiu do quadro" em vez de
+#: fingir que a estatistica daquela pose vale.
+PALM_DIAG_MIN_SAMPLES_FASE = 10
+
 
 def palm_alignment_path(lado):
     """Caminho do JSON do alinhamento da luva `lado` ('right'/'left')."""
@@ -543,7 +594,17 @@ def _sem_numeros(texto):
 #: Intervalo minimo (s) entre duas impressoes do veredito de lateralidade. Sem
 #: ele, um motivo que oscila (margem pequena <-> projecao longe) imprimia duas
 #: linhas por frame durante toda a sessao.
-INTERVALO_LOG_LATERALIDADE_S = 2.0
+#: 2 s era inundacao (item 75): o veredito REAL alterna frame a frame
+#: (indecisa <-> geometria) durante o movimento e o pendente rearmava a cada
+#: virada -- 122 linhas [lateralidade] + 71 [gate-tri] em minutos de uso.
+#: 10 s entre reemissoes + ESTABILIDADE (abaixo) para o estado PEGAR antes.
+INTERVALO_LOG_LATERALIDADE_S = 10.0
+#: Um estado novo so' arma impressao depois de persistir isto sem piscar --
+#: mata o flicker indecisa<->geometria sem esconder mudanca que PEGA.
+ESTABILIDADE_LOG_LATERALIDADE_S = 3.0
+#: Uma linha [status] consolidada (taxa IMU por porta, alinhamento O SIM/NAO,
+#: erro da palma ao vivo) -- a saude do IMU num lugar so' no terminal.
+STATUS_LOG_INTERVALO_S = 5.0
 
 #: Arquivo do diagnostico "SEM vermelho" (oclusao 14/10): estado de cada frame
 #: em que a mao EXISTE mas o overlay nao nasce. Escrito em arquivo porque a
@@ -1189,8 +1250,12 @@ def main():
     #: mudanca dentro do intervalo anti-spam sai no proximo instante permitido:
     #: e' lembrada, nunca perdida).
     lateralidade_anterior = {}
-    lateralidade_pendente = None
+    lateralidade_estado_atual = {}
+    lateralidade_desde_em = 0.0
     lateralidade_impressa_em = 0.0
+    status_log_em = 0.0
+    status_log_t0 = 0.0
+    status_counts = {"right": None, "left": None}
     csv_file = open(CSV_PATH, "w", newline="", encoding="utf-8")
     writer = csv.writer(csv_file)
     writer.writerow(["pc_time_s", "hand_side", "imu_timestamp_us", "kinect_x_m", "kinect_y_m", "kinect_z_m", "fused_x_m", "fused_y_m", "fused_z_m", "roll_deg", "pitch_deg", "yaw_deg", "elbow_angle_deg", "hand_source", "aux_pair_x_m", "aux_pair_y_m", "aux_pair_z_m", "palm_err_deg"])
@@ -1238,20 +1303,25 @@ def main():
                 (int(tracker.color_width), int(tracker.color_height)))
             # Imprime quando o veredito de alguma camera MUDA (ela passou a ser
             # medida pela geometria? o rotulo dela estava invertido?): e' assim que
-            # o experimentador ve no terminal o que o arbitro esta' fazendo, sem
-            # inundar a saida a cada frame. Duas protecoes: o estado NAO carrega os
-            # numeros do motivo (a projecao em px muda sempre -- ver
-            # `_sem_numeros`) e ha' um intervalo minimo entre impressoes.
+            # o experimentador ve no terminal o que o arbitro esta' fazendo.
+            # Tres protecoes contra inundacao (item 75): (1) o estado NAO carrega
+            # os numeros do motivo (a projecao em px muda sempre -- ver
+            # `_sem_numeros`); (2) o estado novo precisa PEGAR -- persistir
+            # ESTABILIDADE sem piscar -- antes de valer (no movimento o veredito
+            # real alterna indecisa<->geometria frame a frame); (3) intervalo
+            # minimo entre impressoes.
             agora_lateralidade = estado_lateralidade(relatorio_lateralidade)
-            if agora_lateralidade != lateralidade_anterior:
-                lateralidade_pendente = agora_lateralidade
-            if (lateralidade_pendente is not None
+            if agora_lateralidade != lateralidade_estado_atual:
+                lateralidade_estado_atual = agora_lateralidade
+                lateralidade_desde_em = time.monotonic()
+            if (agora_lateralidade != lateralidade_anterior
+                    and time.monotonic() - lateralidade_desde_em
+                    >= ESTABILIDADE_LOG_LATERALIDADE_S
                     and time.monotonic() - lateralidade_impressa_em
                     >= INTERVALO_LOG_LATERALIDADE_S):
                 for linha in arbitro.resumo(nomes_aux):
                     print("[lateralidade] " + linha, flush=True)
-                lateralidade_anterior = lateralidade_pendente
-                lateralidade_pendente = None
+                lateralidade_anterior = agora_lateralidade
                 lateralidade_impressa_em = time.monotonic()
             aux_entries = aux_por_camera.get(int(AUX_CAMERA_INDEX), [])
             auxiliary_hands = [entrada["landmarks"] for entrada in aux_entries]
@@ -2217,6 +2287,44 @@ def main():
                 calibration_text = ("C origem | B bias | O alinhamento palma | "
                                     "R reset | H cal mao | P limpa | T tabuleiro "
                                     "| ESC sair")
+            # Uma linha [status] a cada STATUS_LOG_INTERVALO_S: a saude do IMU
+            # num lugar so' (taxa por porta, alinhamento O SIM/NAO -- so' conta
+            # com residual do solve, nao o bootstrap -- e erro da palma ao vivo).
+            if now - status_log_em >= STATUS_LOG_INTERVALO_S:
+                taxas = []
+                for lado in ("right", "left"):
+                    recebidas = receivers[lado].count
+                    anterior = status_counts[lado]
+                    if anterior is None or status_log_t0 <= 0.0:
+                        taxas.append("-- Hz")
+                    else:
+                        dt_status = max(now - status_log_t0, 1e-3)
+                        taxas.append(
+                            f"{(recebidas - anterior) / dt_status:.0f} Hz")
+                    status_counts[lado] = recebidas
+                alinhamentos = []
+                erros_palma = []
+                for lado in ("right", "left"):
+                    sigla = lado[0].upper()
+                    estado = fusions[lado].palm_alignment_state()
+                    tem = (estado is not None
+                           and estado.get("residual_deg") is not None)
+                    alinhamentos.append(f"{sigla} {'SIM' if tem else 'NAO'}")
+                    mao_l = resultados_por_lado.get(lado)
+                    erro = (None if mao_l is None
+                            else mao_l.get("palm_error_deg"))
+                    erros_palma.append(
+                        f"{sigla} " + ("--" if erro is None
+                                       else f"{erro:.1f} graus"))
+                falta_o = "NAO" in " ".join(alinhamentos)
+                print(f"[status] IMU R {taxas[0]} | L {taxas[1]} | "
+                      f"alinhamento O: {' / '.join(alinhamentos)} | "
+                      f"erro palma: {' | '.join(erros_palma)}"
+                      + (" | SEM ALINHAMENTO -- aperte O (14 s girando a mao)"
+                         if falta_o else ""),
+                      flush=True)
+                status_log_em = now
+                status_log_t0 = now
             if display is not None:
                 for lado, mao in resultados_por_lado.items():
                     if mao is None:

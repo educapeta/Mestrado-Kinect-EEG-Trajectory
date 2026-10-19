@@ -75,6 +75,9 @@ class ImuReceiver:
         self.port = int(port)
         self.running = False
         self.latest: Optional[ImuSample] = None
+        #: Total de datagramas validos recebidos (o [status] do tool deriva a
+        #: taxa Hz por porta deste contador).
+        self.count = 0
         self.lock = threading.Lock()
         self.socket: Optional[socket.socket] = None
 
@@ -110,6 +113,7 @@ class ImuReceiver:
                 )
                 with self.lock:
                     self.latest = sample
+                    self.count += 1
             except (OSError, UnicodeDecodeError, ValueError):
                 continue
 
