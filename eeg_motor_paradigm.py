@@ -15,7 +15,7 @@ Programa 1 (gravacao offline). Um UNICO processo integra:
          da mao; o participante EXECUTA alcance/preensao)
        PAUSA + VIDEO 2 s (video do proprio movimento em camera lenta 0,5x,
          com a trajetoria 3D desenhada sobre o quadro - priming visual)
-       MI 4 s (IMAGINA o mesmo movimento; o MESMO cue permanece na tela; --mi-desenho pulsa o simbolo e --mi-auto-onset inicia o timer no onset do movimento -- ambos opt-in)
+       MI 4 s (BIPE sonoro no onset + tela neutra "AGORA IMAGINE"; --mi-desenho pulsa o texto e --mi-auto-onset inicia o timer no onset do movimento -- ambos opt-in)
      Condicoes: 3 objetos x 2 maos = 6, balanceadas ao longo da sessao.
   3. Thread de tracking: reutiliza KinectHandTracker/CameraAlignment de
      kinect_imu_groundtruth (triangulacao stereo MediaPipe->3D + cadeia de
@@ -142,6 +142,14 @@ except ImportError:  # fora do Windows
     def _beep(freq=880, ms=250):
         print(f"[beep] {freq} Hz por {ms} ms")
 
+
+def _beep_async(freq=880, ms=250):
+    """Beep numa thread propria -- `winsound.Beep` e' SINCRONO e bloquearia
+    a thread do Qt exatamente no onset da MI (tela e marcadores
+    atrasariam o ms do beep)."""
+    threading.Thread(target=_beep, args=(int(freq), int(ms)),
+                     daemon=True).start()
+
 PORT_IN = gp.Constants.Defaults.PORT_IN
 PORT_OUT = gp.Constants.Defaults.PORT_OUT
 
@@ -171,7 +179,8 @@ TRIALS_PER_CLASS = 16      # (legado) trials por classe do protocolo antigo
 #   [CUE + ME 4 s: imagem do objeto (garrafa/bola/caneta) + lado da mao;
 #    o participante EXECUTA alcance/preensao -> Kinect grava a trajetoria]
 #   [PAUSA + VIDEO 2 s: video do proprio movimento em camera lenta (0,5x)]
-#   [MI 4 s: IMAGINA o mesmo movimento; apenas EEG e' registrado]
+#   [MI 4 s: IMAGINA o mesmo movimento; BIPE no onset + tela "AGORA IMAGINE";
+#    apenas EEG e' registrado]
 HOME_SEC = 2.0
 CUE_ME_SEC = 4.0
 PAUSE_VIDEO_SEC = 2.0
@@ -218,6 +227,12 @@ REST_EYES_CLOSED = BASELINE_EYES_CLOSED_SEC
 COUNTDOWN = 5              # contagem regressiva antes do primeiro trial (s)
 ORIGIN_CAL_SEC = 10.0      # duracao da calibracao de origem (s)
 BEEP_LEAD_SEC = 0.0        # beep antes da cue (protocolo final: sem beep)
+#: MI (19/10/2026): em vez do cue permanecer na tela (olhar para o estimulo
+#: distrai a imaginacao), o ONSET da MI vem de um BIPE e a tela mostra
+#: MI_TEXTO (neutra -- olhar para DENTRO).
+MI_BEEP_FREQ = 880
+MI_BEEP_MS = 250
+MI_TEXTO = "AGORA IMAGINE"
 ITI_MIN_SEC = 0.0          # sem ITI: o repouso do proximo trial e' a pausa
 ITI_MAX_SEC = 0.0
 #: Vigia do link EEG (#15): sem amostras novas por este tempo = link perdido.
@@ -1904,6 +1919,8 @@ class _StimulusCanvas(QWidget):
                    da mao indicada (esquerda/direita);
       video     -> quadro do video do movimento em camera lenta (0,5x);
       message   -> texto grande (instrucoes, pausas, baseline);
+      aviso     -> aviso centralizado de video indisponivel (sem clipe do
+                   Kinect na pausa de video);
       countdown -> numero da contagem regressiva.
     Teclas: ESPACO avisa o controlador (pular pausa) e ESC encerra a sessao.
     """
@@ -1938,6 +1955,20 @@ class _StimulusCanvas(QWidget):
         self.image = None
         self.update()
 
+    def show_mi(self, pulsante=False):
+        """MI: tela NEUTRA com MI_TEXTO (sem simbolo, sem seta, sem video).
+
+        (19/10/2026) O cue permanecia na tela durante a MI inteira e o
+        participante ficava olhando para o ESTIMULO em vez de imaginar;
+        agora a MI mostra apenas o texto e o ONSET vem do bipe sonoro.
+        """
+        self.mode = "mi"
+        self.text = MI_TEXTO
+        self._pulsante = bool(pulsante)
+        self._pulse_t0 = time.monotonic()
+        self.image = None
+        self.update()
+
     def pulse_tick(self):
         """--mi-desenho: repinta para pulsar simbolo+seta durante a MI."""
         if getattr(self, "_pulsante", False):
@@ -1960,6 +1991,18 @@ class _StimulusCanvas(QWidget):
         self.image = image
         self.update()
 
+    def show_video_aviso(self, texto):
+        """Aviso centralizado de video indisponivel (Kinect sem frame).
+
+        Modo `aviso`: o paintEvent desenha `self.text` com o MESMO layout de
+        `_paint_text` em vez da cue. `show_video_frame` normal sobrescreve o
+        aviso quando o clipe chega depois (mode vira "video").
+        """
+        self.mode = "aviso"
+        self.text = texto
+        self.image = None
+        self.update()
+
     # -------------------------------------------------------------- pintura
     def paintEvent(self, _event):
         painter = QPainter(self)
@@ -1971,20 +2014,17 @@ class _StimulusCanvas(QWidget):
             return
         if self.mode == "cue":
             if getattr(self, "_pulsante", False):
-                # --mi-desenho: pulso suave (1.0 <-> 1.08, periodo 1,6 s)
-                # em torno do centro do cue -- ajuda a mentalizacao sem
-                # mover o estimulo (que seria um movimento visual real).
                 geo = geometria_cue(width, height)
-                escala = 1.0 + 0.08 * float(np.sin(
-                    2.0 * np.pi * (time.monotonic()
-                                   - getattr(self, "_pulse_t0",
-                                             time.monotonic())) / 1.6))
-                painter.save()
-                painter.translate(geo["cx"], geo["cy"])
-                painter.scale(escala, escala)
-                painter.translate(-geo["cx"], -geo["cy"])
+                self._aplica_pulso(painter, geo["cx"], geo["cy"])
             self._paint_object(painter, width, height)
             self._paint_arrow(painter, width, height)
+            if getattr(self, "_pulsante", False):
+                painter.restore()
+        elif self.mode == "mi":
+            # --mi-desenho: o MESMO pulso suave, agora em volta do TEXTO.
+            if getattr(self, "_pulsante", False):
+                self._aplica_pulso(painter, width * 0.5, height * 0.5)
+            self._paint_text(painter, width, height)
             if getattr(self, "_pulsante", False):
                 painter.restore()
         elif self.mode == "home":
@@ -1994,7 +2034,22 @@ class _StimulusCanvas(QWidget):
             return
         elif self.mode == "message":
             self._paint_text(painter, width, height)
+        elif self.mode == "aviso":
+            self._paint_text(painter, width, height)
         self._paint_fixation(painter, width, height)
+
+    def _aplica_pulso(self, painter, cx, cy):
+        """--mi-desenho: escala suave (1.0 <-> 1.08, periodo 1,6 s) em volta
+        de (cx, cy) -- ajuda a mentalizacao sem MOVER o estimulo (que seria
+        um movimento visual real)."""
+        escala = 1.0 + 0.08 * float(np.sin(
+            2.0 * np.pi * (time.monotonic()
+                           - getattr(self, "_pulse_t0",
+                                     time.monotonic())) / 1.6))
+        painter.save()
+        painter.translate(cx, cy)
+        painter.scale(escala, escala)
+        painter.translate(-cx, -cy)
 
     def _paint_fixation(self, painter, width, height):
         """Ponto de fixacao central (mantem o olhar no centro da tela)."""
@@ -2222,6 +2277,9 @@ class StimulusWindow(QMainWindow):
     def show_condition(self, object_name, hand, pulsante=False):
         self.canvas.show_condition(object_name, hand, pulsante=pulsante)
 
+    def show_mi(self, pulsante=False):
+        self.canvas.show_mi(pulsante=pulsante)
+
     def pulse_tick(self):
         self.canvas.pulse_tick()
 
@@ -2233,6 +2291,9 @@ class StimulusWindow(QMainWindow):
 
     def show_video_frame(self, image):
         self.canvas.show_video_frame(image)
+
+    def show_video_aviso(self, texto):
+        self.canvas.show_video_aviso(texto)
 
     def show_trial_progress(self, done, total):
         self._progress.setText(f"Trial {done}/{total}")
@@ -2319,7 +2380,8 @@ class _ParadigmController(QObject):
     Sequencia por trial (total ~13,25 s + ITI aleatorio 1-2 s):
       fixacao 3 s (768) -> beep em -1 s -> cue 1.25 s (769/770/771)
       -> ME 4 s (778; seta permanece; execucao do braco + fechar a mao)
-      -> pausa 1 s (779) -> MI 4 s (780; overlay do Kinect na tela de tracking)
+      -> pausa 1 s (779) -> MI 4 s (780; BIPE + tela "AGORA IMAGINE";
+        overlay do Kinect so' na tela de tracking)
       -> fim MI (781) -> ITI 1-2 s -> proximo trial.
     A calibracao de origem (500/501, 10 s, mao apoiada na mesa) acontece uma
     unica vez antes do primeiro trial.
@@ -2343,12 +2405,14 @@ class _ParadigmController(QObject):
         self._trial_index = 0
         self._bloco = 0
         self._video_deadline = 0.0
+        self._video_t0_ini = 0.0
         # Playback do clipe CRONOMETRADO (sem congelar): ancora na 1a chegada
         # de quadro, passo por quadro derivado do relogio e indice ja' mostrado
         # (repinta so' quando o indice muda).
         self._video_t0 = None
         self._video_passo = None
         self._video_idx = -1
+        self._video_aviso_feito = False
         #: True durante a PREPARACAO (tela com o painel de impedancias).
         self._prep_active = False
         #: True depois do ESC/Ctrl+C: o `abort` so' roda UMA vez (dois ESC nao
@@ -2844,9 +2908,11 @@ class _ParadigmController(QObject):
             destino=self._priming_file(self._trial_index))
         print("[paradigma] pausa + video em camera lenta (0,5x)", flush=True)
         self._video_deadline = time.monotonic() + cfg["video_sec"]
+        self._video_t0_ini = self._video_deadline - cfg["video_sec"]
         self._video_t0 = None            # ancora quando o clipe CHEGAR
         self._video_passo = None
         self._video_idx = -1
+        self._video_aviso_feito = False
         self._schedule(int(1000 / SLOWMO_CAPTURE_FPS), self._video_tick)
 
     def _video_tick(self):
@@ -2862,7 +2928,9 @@ class _ParadigmController(QObject):
         clipe cheio (1 s de movimento na pausa de 2 s) o passo da ~0,5x, como
         pede o protocolo; com clipe curto (buffer lento) o mesmo clipe e'
         espacado em vez de acabar cedo. So' repinta quando o indice muda
-        (evita copias de QImage a 30 Hz).
+        (evita copias de QImage a 30 Hz). Sem clipe, mostra um AVISO na tela
+        (metade da pausa) para o operador saber que e' o sensor e nao o
+        paradigma.
         """
         agora = time.monotonic()
         if agora >= self._video_deadline:
@@ -2888,6 +2956,20 @@ class _ParadigmController(QObject):
             if idx != self._video_idx:
                 self._video_idx = idx
                 self._window.show_video_frame(self._to_qimage(quadros[idx]))
+        else:
+            # Clipe NUNCA CHEGOU (Kinect mudo/sem frame): em vez de deixar a
+            # tela presa na cue sem explicacao, avisa o operador uma unica
+            # vez que e' o SENSOR e nao o paradigma. So' depois da metade da
+            # pausa para nao piscar o aviso quando o clipe so' esta atrasado;
+            # se o clipe CHEGAR depois, o show_video_frame normal sobrescreve.
+            fracao = 1.0 - max(self._video_deadline - agora, 0.0) / max(
+                self._video_deadline - self._video_t0_ini, 1e-3)
+            if not self._video_aviso_feito and fracao >= 0.5:
+                self._video_aviso_feito = True
+                self._window.show_video_aviso(
+                    "VIDEO INDISPONIVEL\n(Kinect sem frame)")
+                print("[video] AVISO: clipe de priming nao chegou "
+                      "(Kinect sem frame?); pausa segue sem video", flush=True)
         self._schedule(int(1000 / SLOWMO_CAPTURE_FPS), self._video_tick)
 
     @staticmethod
@@ -2903,32 +2985,42 @@ class _ParadigmController(QObject):
         return image.copy()
 
     def _start_mi(self):
-        """MI: o MESMO cue permanece na tela; sem video/overlay (imaginacao).
+        """MI: BIPE no onset + tela neutra "AGORA IMAGINE" (imaginacao).
 
-        Duas opcoes novas (14/10/2026), ambas OPT-IN:
-        --mi-desenho    -> pulse suave do simbolo+seta durante a MI (ajuda a
+        (19/10/2026) A MI NAO mostra mais o cue: o participante ficava
+        olhando para o SIMBOLO em vez de imaginar (a tela distrai a
+        mentalizacao -- pedido da bancada). O onset da janela vem do BIPE
+        sonoro (thread propria: nao bloqueia o Qt) e a tela vira apenas o
+        texto MI_TEXTO -- olhar para DENTRO.
+
+        Opcoes OPT-IN (14/10/2026):
+        --mi-desenho    -> pulse suave do TEXTO durante a MI (ajuda a
                            mentalizacao; padrao DESLIGADO porque muda o que o
                            participante ve -- comparar condicoes exige cuidado);
         --mi-auto-onset -> o timer da MI so' comeca quando o KINECT VE o
-                           movimento (onset, marcador 795); --mi-auto-timeout
-                           limita a espera. Padrao DESLIGADO: a janela fixa
-                           pos-cue e' o que a maioria dos estudos de MI usa e
-                           mantem o alvo epocado no tempo (com auto o onset
-                           e' que ancora a epoca; janela de reacao varia).
+                           movimento (onset, marcador 795; o bipe so' toca
+                           nesse onset); --mi-auto-timeout limita a espera.
+                           Padrao DESLIGADO: a janela fixa pos-cue e' o que a
+                           maioria dos estudos de MI usa e mantem o alvo
+                           epocado no tempo (com auto o onset e' que ancora
+                           a epoca; janela de reacao varia).
         """
         cfg = self._cfg
         self._emit(CODE_MI_START)
         trial = (self._active_trials if self._active_trials is not None
                  else cfg["trials"])[self._trial_index]
         self._state.set_phase(PHASE_MI, cue=trial["condicao"])
-        # A janela estava em modo "video" (quadro do clipe da pausa). SEM
-        # restaurar o cue aqui, o paintEvent continuava no ULTIMO QUADRO
-        # CONGELADO durante a MI inteira -- era o "video para de funcionar"
-        # reportado em 30/09/2026. O protocolo pede o cue (seta + objeto),
-        # identico ao da ME, sem feedback do movimento.
+        # (19/10) A janela estava em modo "video" (quadro do clipe da
+        # pausa); `show_mi` troca o modo -- o bug antigo do quadro
+        # CONGELADO na MI inteira (30/09) morria aqui e continua morto.
+        # A MI mostra APENAS o texto (sem cue/seta/objeto): olhar para o
+        # estimulo distrai a imaginacao. O bipe marca o onset; com
+        # --mi-auto-onset ele so' toca quando o Kinect ve o MOVIMENTO
+        # (o inicio real da janela da imaginacao).
         self._mi_pulse_active = bool(cfg.get("mi_desenho", False))
-        self._window.show_condition(trial["objeto"], trial["mao"],
-                                    pulsante=self._mi_pulse_active)
+        if not cfg.get("mi_auto_onset", False):
+            _beep_async(MI_BEEP_FREQ, MI_BEEP_MS)
+        self._window.show_mi(pulsante=self._mi_pulse_active)
         if self._mi_pulse_active:
             self._mi_pulse_tick()
         if cfg.get("mi_auto_onset", False):
@@ -2946,6 +3038,7 @@ class _ParadigmController(QObject):
         if not self._cfg.get("mi_auto_onset", False):
             return
         if self._state.take_mi_onset():
+            _beep_async(MI_BEEP_FREQ, MI_BEEP_MS)
             print(f"[paradigma] onset na MI: janela da imaginacao comeca "
                   f"agora ({self._cfg['mi_sec']:g} s)", flush=True)
             self._schedule(self._cfg["mi_sec"] * 1000, self._end_mi)
@@ -3601,9 +3694,11 @@ def slides_instrucao():
         "1) MAO NO HOME (descanse)\n"
         "2) SETA + OBJETO: EXECUTE o movimento\n"
         "3) VIDEO: veja seu movimento em camera lenta\n"
-        "4) MESMO SIMBOLO: IMAGINE o movimento "
-        "(sem executar)",
+        "4) Um BIPE toca e a tela mostra AGORA IMAGINE: "
+        "IMAGINE o movimento (sem executar)",
         "NA FASE DE IMAGINACAO (4)\n\n"
+        "Um BIPE marca o inicio e a tela mostra apenas\n"
+        "AGORA IMAGINE.\n\n"
         "NAO mova a mao: apenas IMAGINE o alcance e a "
         "preensao, como se estivesse de fato fazendo.\n\n"
         "Mantenha o olhar no ponto central.",

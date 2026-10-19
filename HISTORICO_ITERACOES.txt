@@ -4576,3 +4576,61 @@ PENDENTE (hardware): rodar `eeg_motor_paradigm.py --source gnautilus` com
   para recalcular com o capacete ja' ajustado, reinicie o paradigma (medir
   ao vivo com o stream ligado e' impossivel nesta API -- item 70).
 
+ITEM 72 (19/10/2026) - MI SEM CUE VISUAL: BIPE + TELA "AGORA IMAGINE"
+
+MOTIVO (pedido da bancada): o cue (simbolo + seta) permanecia na tela
+  durante a MI inteira e o participante ficava olhando PARA O ESTIMULO em
+  vez de imaginar -- a tela distrai a mentalizacao.
+MUDANCA (eeg_motor_paradigm.py):
+  - `_start_mi` chama o NOVO `window.show_mi()` (canvas mode "mi"): a MI
+    mostra APENAS o texto MI_TEXTO = "AGORA IMAGINE" (via `_paint_text` --
+    quebra + encolhimento, nunca corta); cue/seta/objeto NAO aparecem
+    mais na fase de imaginacao. O trocar de modo tambem mata o bug
+    antigo do quadro de video CONGELADO (30/09) -- o canvas estava em
+    modo "video" quando a MI comecava.
+  - ONSET SONORO: `_beep_async` (thread propria -- `winsound.Beep` e'
+    SINCRONO e bloquearia a thread do Qt exatamente no onset) toca no
+    `_start_mi`; com `--mi-auto-onset` o bipe so' toca quando o KINECT
+    ve o MOVIMENTO (o inicio real da janela).
+  - `--mi-desenho` (opt-in) agora pulsa o TEXTO (mesma escala 1.0<->1.08
+    em 1,6 s; helper `_aplica_pulso` compartilhado com o cue da ME).
+  - Slides 3 e 4 de instrucao atualizados ("Um BIPE marca o inicio e a
+    tela mostra apenas AGORA IMAGINE"); docstrings (cabecalho,
+    sequencia, `_start_mi`) e README.
+TESTES: 4 assercoes "MI com cue" -> `("mi",)` no test_video_priming;
+  fakes `show_mi` novas em test_video_priming e test_paradigm_abort;
+  test_paradigm_protocol intocado (nao assera telas da MI).
+VALIDACAO: py_compile; test_video_priming; test_paradigm_abort;
+  test_paradigm_melhorias; test_trial_feedback (wrap dos slides novos);
+  suite completa (49 suites).
+PENDENTE: participante de verdade -- ouvir o bipe e ver "AGORA IMAGINE"
+  na MI (com o g.Nautilus ligado o fluxo e' identico; os marcadores
+  780/781 nao mudaram).
+
+ITEM 73 (19/10/2026) - INCLUIDO DA SESSAO PARALELA: AVISO "VIDEO INDISPONIVEL"
+
+Enquanto o item72 era escrito, OUTRA SESSAO editou o MESMO arquivo
+  (eeg_motor_paradigm.py) SEM doc e SEM commit: aviso de "VIDEO
+  INDISPONIVEL" na pausa quando o clipe de priming NUNCA CHEGA (Kinect
+  sem frame) -- canvas mode "aviso" (reaproveita _paint_text), janela
+  `show_video_aviso`, e `_video_tick` mostrando o aviso UMA unica vez
+  apos a metade da pausa (`_video_aviso_feito`); se o clipe CHEGA
+  depois, o show_video_frame sobrescreve. Declarado no proprio codigo:
+  o operador precisa saber que e' o SENSOR e nao o paradigma.
+PONTE (feita aqui): fake `show_video_aviso` no `_JanelaFake` do
+  test_video_priming -- sem ele os blocos 3 e 4 (clipe atrasado /
+  clipe que nunca chega) quebravam com AttributeError; as assercoes da
+  MI (`("mi",)`) ficaram validas porque o aviso acontece na PAUSA e a
+  MI vem depois. Commitado JUNTO com o item72 no MESMO commit: os dois
+  trabalhos vivem no mesmo arquivo e separar por hunk seria fragil; se
+  a sessao dona voltar, este e' o ponto de partida dela.
+CORRECAO extra no teste alheio (mesma ponte): `teste_integracao_dados_reais`
+  tinha um BUG INTERNO -- o proprio comentario dizia "o teste aceita os
+  dois vereditos" mas a assercao exigia "sample_index equivalente" (linha
+  que so' existe quando houve OVERLAP -> CASAMENTO: SIM). Uma gravacao
+  REAL de teste da bancada (19/10 11:42; movimento parou antes da ancora
+  do EEG -> CASAMENTO: NAO, 0% de overlap) quebrou o teste por ali.
+  Exigencia agora CONDICIONAL ao veredito SIM. NOTA ao autor: o teste de
+  integracao e' fragil por depender da ULTIMA gravacao de gravacoes/
+  ser "boa" -- sessao interrompida/logo apos quebra a suite.
+

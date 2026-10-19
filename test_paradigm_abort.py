@@ -25,6 +25,10 @@ import time
 import hotkeys
 import eeg_motor_paradigm as p
 
+#: Item 72: `_start_mi` toca um BIPE numa thread (winsound) -- o teste nao
+#: pode emitir SOM; neutraliza o beep.
+p._beep_async = lambda *args, **kwargs: None
+
 # =============================================================================
 # 1) Deteccao por BORDA (funcao pura: sem thread, sem teclado, sem Windows)
 # =============================================================================
@@ -175,6 +179,10 @@ class _WindowFake:
     def show_condition(self, objeto, mao, **kwargs):
         #: **kwargs: o paradigma passa `pulsante=` (cue MI pulsante, 14/10).
         self.mostrados.append(f"cue:{objeto}_{mao}")
+
+    def show_mi(self, pulsante=False):
+        #: MI (19/10): tela neutra "AGORA IMAGINE".
+        self.mostrados.append("mi")
 
     def show_message(self, texto):
         self.mostrados.append("msg")

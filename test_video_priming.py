@@ -23,6 +23,10 @@ import numpy as np
 
 import eeg_motor_paradigm as p
 
+#: Item 72: `_start_mi` toca um BIPE numa thread (winsound) -- o teste nao
+#: pode emitir SOM nem depender de alto-falante; neutraliza o beep.
+p._beep_async = lambda *args, **kwargs: None
+
 TRIALS = [{"objeto": obj, "mao": mao, "condicao": f"{obj}_{mao}"}
           for obj, mao in (("garrafa", "direita"), ("bola", "esquerda"))]
 
@@ -54,6 +58,10 @@ class _JanelaFake:
         #: o fake aceita e IGNORA; a tupla gravada fica igual para as assercoes.
         self.chamadas.append(("cue", objeto, mao))
 
+    def show_mi(self, pulsante=False):
+        #: MI (19/10): tela neutra "AGORA IMAGINE" -- sem simbolo, sem video.
+        self.chamadas.append(("mi",))
+
     def show_message(self, texto):
         self.chamadas.append(("msg", texto))
 
@@ -65,6 +73,11 @@ class _JanelaFake:
         # `_identifica_quadro`): o alvo aqui e' o TIMING (qual quadro esteve
         # na tela e quando), nao o formato do QImage.
         self.chamadas.append(("video", quadro))
+
+    def show_video_aviso(self, texto):
+        #: Aviso "VIDEO INDISPONIVEL" (sem clipe do Kinect) -- recurso que
+        #: entrou no mesmo arquivo por outra sessao; o fake acompanha.
+        self.chamadas.append(("aviso", texto))
 
     def show_trial_progress(self, feito, total):
         pass
@@ -135,7 +148,7 @@ def _roda_pausa(controlador, janela, relogio, passo=0.033):
 
 # =============================================================================
 # 1) clipe "saudavel" (1 s de movimento na pausa de 2 s = 0,5x): toca INTEIRO,
-#    termina exatamente na deadline e a MI comeca com o cue
+#    termina exatamente na deadline e a MI comeca com a tela AGORA IMAGINE
 # =============================================================================
 relogio = _RelogioFake()
 original_time = p.time
@@ -162,9 +175,9 @@ try:
     # clipe cheio: passo ~= 0,5x (1 s / 60 quadros / 0,5 = 0,0333 s)
     assert abs(controlador._video_passo - 1.0 / 60 / 0.5) < 0.005, \
         controlador._video_passo
-    # fim da pausa -> MI COM o cue restaurado (sem quadro congelado)
+    # fim da pausa -> MI COM a tela de imaginacao (sem quadro congelado)
     assert state.phase == p.PHASE_MI, state.phase
-    assert janela.ultima == ("cue", "garrafa", "direita"), janela.ultima
+    assert janela.ultima == ("mi",), janela.ultima
     assert not state.video_frames, "clear_video nao rodou"
 
     # =========================================================================
@@ -181,11 +194,11 @@ try:
     folga = controlador._video_deadline - mostrados[-1]
     assert folga <= controlador._video_passo + 0.05, f"congelou {folga:.2f} s"
     assert state.phase == p.PHASE_MI, state.phase
-    assert janela.ultima == ("cue", "garrafa", "direita"), janela.ultima
+    assert janela.ultima == ("mi",), janela.ultima
 
     # =========================================================================
     # 3) clipe ATRASADO (chega 1,5 s depois, tracking lento): encaixa no tempo
-    #    restante SEM congelar, AVISA que ficou > 0,5x e a MI comeca com o cue
+    #    restante SEM congelar, AVISA que ficou > 0,5x e a MI comeca com a tela
     #    (nada de quadro "stale" antes da chegada do clipe)
     # =========================================================================
     controlador, janela, state = _novo(video_sec=2.0)
@@ -203,7 +216,7 @@ try:
     assert "AVISO" in aviso.getvalue(), aviso.getvalue()
     assert len(mostrados) >= 5, f"clipe atrasado so' apareceu {len(mostrados)}x"
     assert janela.videos[-1][1] >= 30, janela.videos[-1]  # encaixou quase tudo
-    assert janela.ultima == ("cue", "garrafa", "direita"), janela.ultima
+    assert janela.ultima == ("mi",), janela.ultima
 
     # =========================================================================
     # 4) clipe NUNCA chega (sem Kinect / tracking morto): MI segue com o cue
@@ -214,7 +227,7 @@ try:
     _roda_pausa(controlador, janela, relogio)
     assert not janela.videos, "sem clipe nao pode haver quadro"
     assert state.phase == p.PHASE_MI, state.phase
-    assert janela.ultima == ("cue", "garrafa", "direita"), janela.ultima
+    assert janela.ultima == ("mi",), janela.ultima
 finally:
     p.time = original_time
 
@@ -251,4 +264,4 @@ texto = captura.getvalue()
 assert "fps de captura" in texto and "5.0 fps" in texto, texto
 
 print("test_video_priming_OK (playback cronometrado sem congelar | MI com "
-      "cue | snapshot nao consome | fps de captura medido)")
+      "tela AGORA IMAGINE | snapshot nao consome | fps de captura medido)")
