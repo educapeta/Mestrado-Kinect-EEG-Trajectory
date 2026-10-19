@@ -5741,3 +5741,62 @@ ALVOS no D (comparar com o item 82):
 Se o refit continuar > 15: ajustar Kp (2 -> 4) e/ou adicionar Ki ao
 AttitudeMahony (firmware, item 83) antes de culpar o resto.
 
+
+================================================================================
+ITEM 89 (19/10/2026) - FIRMWARE NOVO VALIDADO: O YAW CONSISTENTE RESOLVEU -- a
+    seta da palma saiu de 42-58 para ~2-13 graus (alinhamento do refit do D)
+================================================================================
+BOOT (o que finalmente funcionou, para o registro): rodar `GRAVAR_ESP32.bat`
+DIRETO (sem --sem-pulso) e, no prompt [1], PRESSIONAR e SOLTAR o BOOT. Foi o
+caminho assistido do item 85. (As tentativas anteriores que falharam eram
+antes do reboot/troca de porta: o bridge/pulso estava instavel; depois disso o
+mesmo metodo passou.)
+
+O QUE FOI FEITO NA BANCADA
+  - tool com o firmware novo (item 83), hotspot ligado;
+  - tecla O refeita (18:06:50): residuo RIGHT 6.14 / LEFT 7.69 graus (com o
+    yaw antigo era 11.76/9.60) -- captura melhor com a atitude correta;
+  - tecla D (18:07:02, palm_diag_20261019_180702.csv, 597 linhas).
+
+VALIDACAO DO FIRMWARE (o ponto da correcao do yaw)
+  - REFIT com 1 T/f para toda a sessao do D: RIGHT 14.42 / LEFT 10.64 graus
+    (OK, limite 15). COM O FIRMWARE ANTIGO era 37.9 / 28.6 -> o modelo agora
+    FECHA (era a assinatura do yaw inconsistente).
+  - TESTE DE YAW POR FASE (o mesmo do item 82): refit 1 T/f = 12.4/7.6 e
+    permitindo 1 offset de yaw por fase = 10.7/6.2 -> a correcao por fase
+    melhora so' 1.7/1.4 grau (antes melhorava 28/16!). Ou seja: o yaw DEIXOU de
+    ser o erro dominante; o resíduo restante e' ruido de captura (~10 graus).
+  - Consistencia PREPARO x KINECT: IMU 27/11 graus x Kinect 44/15 (a IMU
+    acompanha o Kinect dentro do que a pose permite; antes era 170/75 contra
+    20/11).
+  - Phisica das poses OK (MESA entre as maos 4.7, REZANDO 156.8 opostas,
+    KINECT 21.5), dispersao MESA/KINECT 2-5 graus.
+
+ACHADO/PENDENCIA: A TECLA O AINDA "DECORA" UM POUCO
+  A O tem residuo 6.1/7.7 mas NAO generaliza tao bem quanto o refit das 4 poses
+  do D: o f_body dela difere 32.5/45.0 graus do refit e o erro ao vivo com ela
+  chegou a 31-64 graus em PREPARO/REZANDO/KINECT. A causa provavel: na O a mao
+  GIRA continuamente por 14 s (ruido/lag entram na atitude) e a cobertura de
+  orientacoes pode ser limitada; o refit do D usa 4 poses ESTATICAS e bem
+  diferentes (palma para baixo, lateral, para o sensor).
+  SOLUCAO APLICADA: `analisa_diag_palma.py palm_diag_20261019_180702.csv
+  --salvar` gravou o T/f do REFIT (backup dos anteriores em .bak):
+    right residual 14.42 (OK) | left 10.64 (OK)
+  ERRO AO VIVO ESPERADO (simulado nos dados do D):
+    right: PREPARO 13.0 | MESA 4.8 | REZANDO 10.9 | KINECT 10.6 graus
+    left : PREPARO  8.5 | MESA 8.1 | REZANDO  1.7 | KINECT  4.5 graus
+  -> a seta fica UTILIZAVEL (~2-13 graus); era 42-58 (e 40-113 antes disso).
+
+PROXIMO
+  1) Reiniciar o tool (para carregar o alinhamento do refit) e conferir a seta/
+     "erro palma": esperado mediana <= ~13 graus. Se quiser, rodar D de novo
+     (com o alinhamento carregado o erro ao vivo deve repetir essa faixa).
+  2) Entao: TRIAL REAL com g.Nautilus + validacao dos 5 itens do item 65
+     (painel de impedancia na preparacao, slides, pratica, KT_onset na
+     ESQUERDA, mi_desenho) e casamento groundtruth x EEG
+     (tools/casamento_eeg_groundtruth.py).
+  3) Melhorias futuras (nao bloqueiam): refit com dados de MAIS de uma sessao D
+     (mais poses = T/f melhor); re-treinar a captura da O com rotacao mais
+     LENTA; e, se necessario, subir Kp (2 -> 4) ou adicionar Ki no
+     AttitudeMahony do firmware (item 83).
+
