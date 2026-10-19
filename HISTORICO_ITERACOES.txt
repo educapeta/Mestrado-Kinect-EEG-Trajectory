@@ -4946,3 +4946,68 @@ PROXIMO (depois do diagnostico)
   impedancia na preparacao, slides, pratica, KT_onset na ESQUERDA, mi_desenho)
   e casamento groundtruth x EEG com tools/casamento_eeg_groundtruth.py.
 
+
+================================================================================
+ITEM 77 (19/10/2026) - PRIMEIRA SESSAO REAL DO DIAGNOSTICO DA PALMA (tecla D,
+    sessao 15:38:36): a seta esta' no BOOTSTRAP (sem tecla O) e as maos juntas
+    se COBREM -- protocolo corrigido
+================================================================================
+MEDIDO (bancada; palm_diag_20261019_153836.csv, 360 linhas, 2 lados)
+  - ALINHAMENTO: NENHUM imu_palm_alignment_{right,left}.json existe. O meta da
+    sessao mostra `alinhamento.rotation = identidade` e `residual_deg = null`:
+    a seta estava no BOOTSTRAP de 1 amostra (`calibrate_palm_direction`), NAO no
+    alinhamento da tecla O. CONCLUSAO: o erro de 20-140 graus desta sessao nao
+    mede o modelo; mede a AUSENCIA da calibracao. Era o item 74 (a tecla O nunca
+    chegava ao tool por foco de janela) ainda valendo na pratica.
+  - OCULACAO NA REZANDO (a queixa do usuario: "quando junto as duas maos, as
+    cameras paralelas so' pegam a mao de um dos lados"): com as maos realmente
+    juntas a ESQUERDA sumiu -- 19 amostras brutas (4 pos-settle) contra 56/41 da
+    direita. A pose e' a unica que poe a normal na HORIZONTAL (quebra a
+    "decoracao" da pose da tecla O), mas tem de ser feita SEM ENCOSTAR.
+  - MESA: normal medida (0,0,-1) nos DOIS lados (deveria ser ~(0,-1,0)) e
+    dispersao 22 graus a direita. Ou a palma nao ficou apoiada, ou a mesa/corpo
+    tapou a mao e o depth pegou outra superficie: com a mao na BORDA e inteira
+    no quadro a normal volta a ser confiavel.
+  - REFIT do modelo (analisador): direita residuo 33.9 (ALTO), esquerda 11.5.
+    Com o alinhamento REFEITO so' pelo CSV, erro por fase (PREPARO/MESA/REZANDO/
+    KINECT): direita 42.6/8.6/52.9/26.3 e esquerda 18.6/5.5/21.7/4.3. Leitura:
+    a ESQUERDA tem modelo possivel (refit 11.5); a DIREITA nao fecha nem com
+    refit -> os dados da direita em PREPARO/REZANDO estao contaminados (mao
+    coberta/normal errada). Primeiro rodar O; so' depois julgar a direita.
+  - O CSV da 2a sessao (15:39:00, 3.6 KB) e' uma sessao ABORTADA (D apertado
+    duas vezes) e o analisador sem argumento pegava ela como "mais recente" --
+    o relatorio saia todo sem amostras e parecia que nada tinha sido gravado.
+
+CORRECOES (mesmo commit)
+  1. PALM_DIAG_PHASES: MESA agora "palma na BORDA da mesa, dorso para cima,
+     maos INTEIRAS no quadro e nada tapando"; REZANDO agora "palmas UMA PARA A
+     OUTRA, SEM SE ENCOSTAREM (uns 15 cm, como segurando uma bola)". O
+     comentario/help registram a medicao acima (por que nao encostar).
+  2. Veredito (tool E copia do analisador): amostras abaixo do minimo agora diz
+     "a mao saiu do quadro OU a outra mao cobriu esta (nao encoste as maos)".
+  3. `DiagnosticoPalma.iniciar`: avisa POR LUVA, ANTES das 21 s, se esta' usando
+     alinhamento SALVO (arquivo + residuo) ou o BOOTSTRAP de 1 amostra (ou nada)
+     -- para nao descobrir no fim que a seta medida nao era a de producao.
+  4. Analisador: `mais_recente` ignora sessao ABORTADA (< 30 linhas de dados) e
+     escolhe o CSV COM amostras; fallback para o mais recente se todos vazios.
+  5. test_diagnostico_palma grupo 5 cobre o item 4 (abortada nao pode ganhar).
+
+VALIDACAO: py_compile 0; test_diagnostico_palma 5/5; test_palm_alignment 8/8;
+  test_deteccao_cascata OK. Nos arquivos REAIS da bancada o analisador sem
+  argumento agora escolhe palm_diag_20261019_153836.csv (360 linhas) em vez do
+  abortado de 2 s.
+
+PROXIMO (ordem certa, na bancada)
+  1) tecla O: CLICAR no video antes; 14 s girando a mao devagar (palma para o
+     Kinect, sem virar o dorso, maos dentro do quadro); confirmar no console
+     "gravado em imu_palm_alignment_<lado>.json" e residuo <= 15 graus.
+  2) tecla D de novo com as instrucoes novas (REZANDO sem encostar; MESA na
+     borda). O inicio do D tem de dizer "alinhamento SALVO" nos DOIS lados.
+  3) `.venv\Scripts\python.exe tools\analisa_diag_palma.py` (sem argumento ja'
+     pega a sessao certa). Esperado: medianas <= 15 nas 3 poses e residuo do
+     refit baixo; se a DIREITA continuar alta mesmo com refit alto, o problema
+     e' a CAPTURA da direita (enquadramento/normal), nao o arquivo.
+  4) So' depois: trial real + 5 itens do item 65 e casamento EEG x groundtruth.
+
+NOTA: os palm_diag_* da bancada ficam na raiz como EVIDENCIA (nao commitados).
+

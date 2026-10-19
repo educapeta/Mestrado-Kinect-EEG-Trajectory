@@ -30,6 +30,9 @@ Casos:
     ruim", que o veredito tem de separar de "o arquivo esta' errado".
  4. `tools/analisa_diag_palma.py` NAO pode importar cv2/pykinect nem o modulo
     do ground truth (ele roda offline, so' com o CSV): checado pelo AST.
+ 5. `mais_recente` (o CLI sem argumento) IGNORA a sessao abortada: medido em
+    19/10/2026 que apertar D duas vezes deixa um CSV de 2 s como o "mais
+    recente" e o relatorio saia sem amostras, escondendo a sessao completa.
 
 Roda com o Python do projeto (sem pytest, sem hardware):
     .venv\\Scripts\\python.exe test_diagnostico_palma.py
@@ -540,12 +543,50 @@ def teste_analisador_sem_cv2():
           "no AST (so' stdlib + numpy + imu)")
 
 
+# ------------------------------------------------------------------- teste 5
+def teste_mais_recente_ignora_abortada():
+    """Sem argumento, o CLI escolhe o CSV COM amostras, nao a sessao abortada.
+
+    Bug real medido em 19/10/2026: apertar D duas vezes deixa uma sessao de 2 s
+    como a mais recente; o analisador sem argumento abria JUSTAMENTE ela e o
+    relatorio saia sem amostras, parecendo que o diagnostico nao gravou nada.
+    """
+    def escreve(caminho, linhas):
+        with open(caminho, "w", encoding="utf-8", newline="") as arquivo:
+            arquivo.write("t_s,fase_nome,lado\n")
+            for indice in range(linhas):
+                arquivo.write(f"{indice},MESA,right\n")
+
+    with tempfile.TemporaryDirectory() as pasta:
+        pasta = Path(pasta)
+        completa = pasta / "palm_diag_20261019_153836.csv"
+        abortada = pasta / "palm_diag_20261019_153900.csv"
+        escreve(completa, analisador.MIN_LINHAS_CSV_VALIDO + 10)
+        escreve(abortada, 3)
+        os.utime(completa, (1000.0, 1000.0))
+        os.utime(abortada, (2000.0, 2000.0))       # a abortada e' a mais NOVA
+        assert analisador.mais_recente(pasta) == completa, \
+            "escolheu a sessao abortada so' por ser a mais recente"
+        # Nenhuma com amostra: cai para a mais recente (para o operador ver o
+        # aviso "sem amostras", e nao "nao achei arquivo").
+        escreve(completa, 2)
+        # Reescrever ATUALIZA o mtime: sem reajustar, a "completa" voltaria a
+        # ser a mais nova e o assert abaixo mediria a ordem errada.
+        os.utime(completa, (3000.0, 3000.0))
+        os.utime(abortada, (4000.0, 4000.0))
+        assert analisador.mais_recente(pasta) == abortada
+        assert analisador.mais_recente(pasta / "vazia") is None
+    print("[ok] 5) analisador sem argumento ignora sessao abortada de 2 s "
+          "(escolhe o CSV com amostras)")
+
+
 # --------------------------------------------------------------------- main
 def main():
     grupos = (teste_fases_settle_e_cancelar,
               teste_registrar_erros_e_colunas,
               teste_ponta_a_ponta_sintetico,
-              teste_analisador_sem_cv2)
+              teste_analisador_sem_cv2,
+              teste_mais_recente_ignora_abortada)
     falhas = []
     for funcao in grupos:
         try:

@@ -74,17 +74,24 @@ resolve, o numero sozinho nao diz se o problema e' SISTEMATICO (T/f errados,
 arquivo de outra luva, normal do Kinect com sinal trocado) ou DEPENDENTE DA
 ROTACAO (o alinhamento "decora" a pose da tecla O). A tecla D mede o erro contra
 um MOVIMENTO PROGRAMADO de 4 fases (21 s): PREPARO (3 s, palmas para o Kinect,
-parado), MESA (6 s, as duas palmas apoiadas na mesa com o dorso para o Kinect),
-REZANDO (6 s, maos juntas, palmas uma contra a outra) e KINECT (6 s, palmas
-abertas para o Kinect). A mao tem de ficar DENTRO do quadro do Kinect nas quatro
-fases: a verdade e' a normal medida pelo depth, e fora do quadro (ou na borda)
-nao ha' linha nenhuma. A instrucao da fase aparece no video; D de novo (ou ESC)
-encerra e resume o que ja' foi coletado. O CSV (`palm_diag_<data>_<hora>.csv`)
-grava uma linha por (frame, lado) com a normal do Kinect, a previsao COM
-alinhamento (a seta), a previsao SEM alinhamento e os dois erros; o resumo sai
-em `palm_diag_<data>_<hora>.csv_resumo.txt` (tabela por fase/lado + veredito) e
-a analise completa, com refit do modelo, em
-`python tools\\analisa_diag_palma.py <csv>`.
+parado), MESA (6 s, as duas palmas na BORDA da mesa, dorso para cima), REZANDO
+(6 s, palmas uma para a outra MAS SEM SE ENCOSTAREM -- ~15 cm) e KINECT (6 s,
+palmas abertas para o Kinect). As maos tem de ficar DENTRO do quadro do Kinect
+nas quatro fases E SEM UMA COBRIR A OUTRA: a verdade e' a normal medida pelo
+depth; medido em 19/10/2026 que, com as maos realmente juntas, a mao coberta
+perde ~90% das amostras (e o par de cameras paralelas tambem passa a ver so' um
+lado). A instrucao da fase aparece no video; D de novo (ou ESC) encerra e
+resume o que ja' foi coletado. No comeco a ferramenta avisa, POR LUVA, se esta'
+usando alinhamento SALVO (`imu_palm_alignment_<lado>.json`) ou o bootstrap de 1
+amostra -- se avisar que nao ha' arquivo, rode a tecla O antes (foi a causa
+medida em 19/10/2026: erro de 20-140 graus com a seta rodando sem alinhamento).
+O CSV (`palm_diag_<data>_<hora>.csv`) grava uma linha por (frame, lado) com a
+normal do Kinect, a previsao COM alinhamento (a seta), a previsao SEM
+alinhamento e os dois erros; o resumo sai em
+`palm_diag_<data>_<hora>.csv_resumo.txt` (tabela por fase/lado + veredito) e a
+analise completa, com refit do modelo, em
+`python tools\\analisa_diag_palma.py [csv]` (sem argumento pega o CSV COM
+amostras mais recente, ignorando sessao abortada de 2 s).
 
 Nao ha copia de codigo: o corpo abaixo e' o mesmo de antes e usa os nomes do
 modulo importado (constantes, classes e helpers), copiados para o namespace
@@ -167,16 +174,27 @@ PALM_ALIGNMENT_MIN_STEP_DEG = 4.0
 #:
 #: A mao tem de ficar DENTRO do quadro do Kinect nas quatro fases: a verdade e'
 #: a normal medida pelo depth, e fora do quadro nao ha' linha nenhuma.
+#:
+#: NAO ENCOSTE AS MAOS (medido na bancada, 19/10/2026, sessao 15:38:36): com as
+#: maos REALMENTE juntas ("rezando"), uma mao COBRE a outra para o Kinect -- na
+#: fase REZANDO a esquerda teve 19 amostras brutas (4 depois do settle) contra
+#: 56 da direita, e as cameras auxiliares (o par paralelo) tambem passaram a ver
+#: SO' um lado (a queixa do usuario: "quando junto as duas maos, as cameras
+#: paralelas so' pegam a mao de um dos lados"). A pose continua valendo (e' a
+#: unica que poe a normal na HORIZONTAL, quebrando a "decoracao" da pose da
+#: tecla O) com as maos a ~15 cm uma da outra. Mesma razao para a MESA: mao na
+#: BORDA, inteira no quadro -- mesa/corpo tapando a mao nao tem amostra.
 PALM_DIAG_PHASES = (
     ("PREPARO", 3.0,
      "Maos na frente do corpo, palmas viradas para o Kinect, dedos para cima, "
      "PARADO."),
     ("MESA", 6.0,
-     "Apoie as DUAS palmas na mesa, dedos para frente, palma para BAIXO (dorso "
-     "para o Kinect), sem mexer."),
+     "Apoie as DUAS palmas na BORDA da mesa (dorso para cima, dedos para "
+     "frente), com as maos INTEIRAS no quadro e nada tapando, sem mexer."),
     ("REZANDO", 6.0,
-     "Maos juntas na frente do peito, dedos para cima, palmas uma contra a "
-     "outra, sem mexer."),
+     "Maos na frente do peito, palmas viradas UMA PARA A OUTRA, SEM SE "
+     "ENCOSTAREM (uns 15 cm, como segurando uma bola), dedos para cima, sem "
+     "mexer."),
     ("KINECT", 6.0,
      "Palmas abertas viradas para o Kinect, dedos para cima, sem mexer."),
 )
@@ -380,7 +398,8 @@ def veredito_palm_diag(estat_por_fase, bruto, limite=None, minimo=None):
     for fase, dados in estat_por_fase.items():
         if 0 < dados.get("n", 0) < minimo:
             notas.append(f"sem amostras suficientes na fase {fase} "
-                         f"({dados['n']} < {minimo}): a mao saiu do quadro")
+                         f"({dados['n']} < {minimo}): a mao saiu do quadro OU "
+                         "a outra mao cobriu esta (nao encoste as maos)")
     mediana = {fase: estat_por_fase[fase]["mediana"] for fase in poses}
     medio = float(np.mean([estat_por_fase[fase]["media"] for fase in poses]))
     bruto_medio = (bruto or {}).get("media")
@@ -572,6 +591,30 @@ class DiagnosticoPalma:
             f"({self.duracao_total_s:g} s, {len(self.fases)} fases): {fases_txt}\n"
             "  Mantenha as DUAS maos DENTRO do quadro do Kinect e faca a pose "
             "pedida no video; D de novo encerra e resume o que ja' foi coletado.")
+        # Estado do alinhamento ANTES da coleta: medido em 19/10/2026 que o
+        # operador fazia as 21 s e so' no fim descobria que NAO havia
+        # `imu_palm_alignment_<lado>.json` nenhum -- a seta estava no bootstrap
+        # de 1 amostra (T = identidade) e o erro de 20-140 graus nao tinha nada
+        # a ver com o modelo. Dizer isso no INICIO deixa escolher: rodar a
+        # tecla O antes (mede a seta de producao) ou seguir assim mesmo (o
+        # diagnostico separa bruto x calibrado e o refit offline ainda serve).
+        for lado in ("right", "left"):
+            dados_lado = meta["lados"][lado]
+            estado_lado = dados_lado.get("alinhamento") or {}
+            residual = estado_lado.get("residual_deg")
+            if dados_lado.get("arquivo_existe") and estado_lado:
+                self.avisar(
+                    f"  {lado}: alinhamento SALVO ({dados_lado['arquivo']}, "
+                    f"residuo {residual} graus) -- a seta aqui e' a de producao")
+            elif estado_lado:
+                self.avisar(
+                    f"  {lado}: SEM arquivo de alinhamento -- a seta esta' no "
+                    "BOOTSTRAP de 1 amostra (vai errar): rode a tecla O antes se "
+                    "quiser medir a seta calibrada; sem O, o refit do analisador "
+                    "ainda mostra o melhor alinhamento possivel")
+            else:
+                self.avisar(f"  {lado}: sem alinhamento NENHUM (a seta nem "
+                            "aparece): rode a tecla O antes")
         for indice, (nome, segundos, instrucao) in enumerate(self.fases):
             self.avisar(f"  fase {indice + 1}/{len(self.fases)} {nome} "
                         f"({float(segundos):g} s): {instrucao}")

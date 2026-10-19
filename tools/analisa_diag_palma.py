@@ -59,6 +59,13 @@ from imu import (PALM_ALIGNMENT_MAX_RESIDUAL_DEG,  # noqa: E402
 
 #: Prefixo do arquivo gravado pela tecla D (`DiagnosticoPalma`).
 PREFIXO_CSV = "palm_diag_"
+#: Abaixo disto (linhas de DADOS) o CSV e' uma sessao ABORTADA -- D apertado
+#: duas vezes no mesmo segundo ou ESC logo no inicio. Escolher o "mais recente"
+#: cru fazia o analisador abrir justamente o arquivo vazio: medido em
+#: 19/10/2026, a segunda sessao de 2 s (3,6 KB) virou a "mais recente" e o
+#: relatorio saiu todo sem amostras, escondendo a sessao COMPLETA de 21 s (57 KB)
+#: que estava do lado. O operador concluia "o diagnostico nao gravou nada".
+MIN_LINHAS_CSV_VALIDO = 30
 #: Espelho de `PALM_DIAG_SETTLE_S` do tool: segundos iniciais de cada fase que
 #: ficam fora do resumo (o experimentador leva ~1 s para chegar na pose). O
 #: valor REALMENTE usado vem do meta.json, que e' o que estava valendo na
@@ -111,13 +118,31 @@ def caminho_meta(caminho):
     return Path(texto + "_meta.json")
 
 
+def _conta_linhas_dados(caminho):
+    """Linhas de DADOS do CSV (sem cabecalho); 0 se o arquivo nao abre."""
+    try:
+        with open(caminho, encoding="utf-8", errors="replace") as arquivo:
+            return max(0, sum(1 for _linha in arquivo) - 1)
+    except OSError:
+        return 0
+
+
 def mais_recente(pasta=None):
-    """`palm_diag_*.csv` mais recente (mtime) da pasta, ou None."""
+    """`palm_diag_*.csv` mais recente COM AMOSTRAS da pasta, ou None.
+
+    Preferencia: o mais recente cujo CSV tem >= `MIN_LINHAS_CSV_VALIDO` linhas
+    de dados; so' se NENHUM tiver (todos abortados) cai para o mais recente cru,
+    para o operador ainda ver o erro "sem amostras" em vez de "nao achei arquivo".
+    """
     pasta = Path.cwd() if pasta is None else Path(pasta)
     candidatos = list(pasta.glob(PREFIXO_CSV + "*.csv"))
     if not candidatos:
         return None
-    return max(candidatos, key=lambda caminho: caminho.stat().st_mtime)
+    candidatos.sort(key=lambda caminho: caminho.stat().st_mtime, reverse=True)
+    for caminho in candidatos:
+        if _conta_linhas_dados(caminho) >= MIN_LINHAS_CSV_VALIDO:
+            return caminho
+    return candidatos[0]
 
 
 def estatisticas(valores):
@@ -351,7 +376,8 @@ def veredito_palm_diag(estat_por_fase, bruto, limite=PALM_ALIGNMENT_MAX_RESIDUAL
     for fase, dados in estat_por_fase.items():
         if 0 < dados.get("n", 0) < minimo:
             notas.append(f"sem amostras suficientes na fase {fase} "
-                         f"({dados['n']} < {minimo}): a mao saiu do quadro")
+                         f"({dados['n']} < {minimo}): a mao saiu do quadro OU "
+                         "a outra mao cobriu esta (nao encoste as maos)")
     mediana = {fase: estat_por_fase[fase]["mediana"] for fase in poses}
     medio = float(np.mean([estat_por_fase[fase]["media"] for fase in poses]))
     bruto_medio = (bruto or {}).get("media")
