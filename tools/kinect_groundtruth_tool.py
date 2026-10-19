@@ -342,7 +342,26 @@ def cabecalho_palm_diag():
             "nx", "ny", "nz",
             "prev_x", "prev_y", "prev_z", "err_deg",
             "raw_x", "raw_y", "raw_z", "err_raw_deg",
-            "alinhado"]
+            "alinhado",
+            # --- EVIDENCIA CRUA (acrescentada no item 78) -------------------
+            # Por que: a sessao real de 19/10/2026 15:55:51 provou que a
+            # ATITUDE do IMU nao fecha (a MESMA pose medida no inicio e no fim
+            # difere 74-171 graus no IMU e 11-20 no Kinect) -- o firmware
+            # integra o yaw com `yaw += gz*dt` (eixo Z do CORPO: so' vale com o
+            # sensor nivelado). Para PROVAR isso e testar uma correcao offline
+            # (yaw com o giro completo: -sin(pitch)gx + cos(pitch)sin(roll)gy +
+            # cos(pitch)cos(roll)gz) o CSV precisa do giroscopio/acelerometro
+            # CRUS e do timestamp do ESP32 (dt pelo relogio do sensor).
+            # Os 4 pontos 3D crus do frame da palma existem para diagnostico do
+            # SINAL da normal: `palm_normal_from_points` FORCA nz<0 (so' vale na
+            # pose "palma para o Kinect"); com os pontos da' para reconstruir a
+            # normal anatomica (por mao) offline, sem chute.
+            "imu_timestamp_us",
+            "ax_g", "ay_g", "az_g", "gx_dps", "gy_dps", "gz_dps",
+            "wrist_x", "wrist_y", "wrist_z",
+            "index_x", "index_y", "index_z",
+            "pinky_x", "pinky_y", "pinky_z",
+            "middle_x", "middle_y", "middle_z"]
 
 
 def _valor_csv_diag(texto, padrao=float("nan")):
@@ -424,6 +443,74 @@ def veredito_palm_diag(estat_por_fase, bruto, limite=None, minimo=None):
     notas.append("medianas: " + ", ".join(
         f"{fase} {mediana[fase]:.1f}" for fase in poses) + " graus")
     return notas
+
+
+def pontos_palma_camera(tracker, landmarks):
+    """4 pontos 3D (camera space) do frame da palma: punho e 3 MCPs.
+
+    PUNHO (0), MCP do indicador (5), MCP do medio (9), MCP do minimo (17) --
+    EVIDENCIA CRUA do diagnostico da palma (item 78 do historico).
+
+    Por que existe: a normal pronta (`palm_normal_from_points`) FORCA o sinal
+    para nz<0, o que so' e' a direcao da PALMA na pose "palma para o Kinect".
+    Nas outras poses (MESA com a palma para baixo, REZANDO com as palmas uma
+    para a outra) esse sinal vira ruido e o modelo `v = T R f` nao fecha. Com os
+    pontos crus da' para reconstruir a normal VERDADEIRA offline e decidir o
+    sinal POR MAO (direita x esquerda) com prova, sem chute.
+
+    Devolve {nome: (3,)} ou None se algum ponto nao tiver profundidade valida
+    (mao fora do quadro/borda): a linha do diagnostico sai sem os pontos, nunca
+    com zero disfarcado de medida.
+    """
+    indices = {"wrist": 0, "index": 5, "middle": 9, "pinky": 17}
+    pontos = {}
+    try:
+        for nome, indice in indices.items():
+            ponto = tracker._landmark_camera_point(landmarks[indice])
+            if ponto is None:
+                return None
+            ponto = np.asarray(ponto, np.float64).reshape(3)
+            if not np.isfinite(ponto).all():
+                return None
+            pontos[nome] = ponto
+    except (AttributeError, IndexError, TypeError):
+        return None
+    return pontos
+
+
+def _colunas_evidencia_diag(sample, pontos):
+    """Colunas CRUAS do CSV do diagnostico: giroscopio/acelerometro/pontos 3D.
+
+    Vazio quando o dado nao existe (nunca 0.0 disfarcado: no giroscopio um zero
+    significa "parado" e no timestamp "sem amostra"). Serve para (a) PROVAR a
+    inconsistencia de yaw do IMU com o relogio do proprio sensor e (b) testar
+    uma correcao de atitude offline (item 78).
+    """
+    campos = {}
+    aceleracao = (np.asarray(getattr(sample, "accel_g", None), np.float64).reshape(-1)
+                  if sample is not None else np.zeros(0))
+    giroscopio = (np.asarray(getattr(sample, "gyro_dps", None), np.float64).reshape(-1)
+                  if sample is not None else np.zeros(0))
+    campos["imu_timestamp_us"] = (
+        int(getattr(sample, "timestamp_us", 0) or 0)
+        if sample is not None else "")
+    for indice, chave in enumerate(("ax_g", "ay_g", "az_g")):
+        campos[chave] = (f"{aceleracao[indice]:.5f}"
+                         if aceleracao.size == 3 and np.isfinite(aceleracao).all()
+                         else "")
+    for indice, chave in enumerate(("gx_dps", "gy_dps", "gz_dps")):
+        campos[chave] = (f"{giroscopio[indice]:.3f}"
+                         if giroscopio.size == 3 and np.isfinite(giroscopio).all()
+                         else "")
+    for nome in ("wrist", "index", "pinky", "middle"):
+        ponto = None if pontos is None else pontos.get(nome)
+        ponto = (np.asarray(ponto, np.float64).reshape(3)
+                 if ponto is not None else None)
+        for eixo, sufixo in enumerate("xyz"):
+            campos[f"{nome}_{sufixo}"] = (
+                f"{ponto[eixo]:.5f}"
+                if ponto is not None and np.isfinite(ponto).all() else "")
+    return campos
 
 
 class DiagnosticoPalma:
@@ -620,7 +707,7 @@ class DiagnosticoPalma:
                         f"({float(segundos):g} s): {instrucao}")
         return True
 
-    def registrar(self, lado, agora, sample, normal_camera, fusion):
+    def registrar(self, lado, agora, sample, normal_camera, fusion, pontos=None):
         """Grava 1 linha do CSV (False quando nao deu para medir/ainda nao e' hora).
 
         `normal_camera` e' `palm_normal_camera` do Kinect (a verdade) e `sample`
@@ -688,6 +775,10 @@ class DiagnosticoPalma:
                             else f"{float(erro_bruto):.3f}"),
             "alinhado": 1 if referencia is not None else 0,
         }
+        # Evidencia crua (item 78): giroscopio/acelerometro/timestamp do ESP32 e
+        # os 4 pontos 3D da palma -- sem isso nao da' para provar a
+        # inconsistencia de yaw nem reconstruir o sinal da normal offline.
+        linha.update(_colunas_evidencia_diag(sample, pontos))
         try:
             self._escritor.writerow([linha[coluna]
                                      for coluna in cabecalho_palm_diag()])
@@ -2705,8 +2796,15 @@ def main():
                 # tem de ser do MESMO frame e da MESMA amostra de IMU, senao a
                 # comparacao "vivo x bruto x refit" mede o atraso, nao o erro.
                 if diag_palma.ativa:
+                    # Os 4 pontos 3D crus so' sao calculados DURANTE o
+                    # diagnostico (4 lookups de depth extras por frame/mao): e'
+                    # a evidencia do sinal da normal (item 78), nao precisa
+                    # existir na aquisicao normal.
+                    pontos_diag = (None if landmarks_lado is None
+                                   else pontos_palma_camera(tracker,
+                                                            landmarks_lado))
                     diag_palma.registrar(lado, now, sample_lado, normal_lado,
-                                         fusion)
+                                         fusion, pontos=pontos_diag)
                 if captura_palma.ativa:
                     captura_palma.coletar(lado, now, sample_lado, normal_lado)
                 if imu_calibration_active[lado]:

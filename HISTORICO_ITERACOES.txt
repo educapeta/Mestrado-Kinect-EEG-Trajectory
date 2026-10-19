@@ -5011,3 +5011,99 @@ PROXIMO (ordem certa, na bancada)
 
 NOTA: os palm_diag_* da bancada ficam na raiz como EVIDENCIA (nao commitados).
 
+
+================================================================================
+ITEM 78 (19/10/2026) - DIAGNOSTICO DA PALMA FUNCIONOU E ACHOU A CAUSA RAIZ:
+    o YAW DO IMU (firmware) nao e' uma atitude valida -- e o Kinect esta' certo
+================================================================================
+SESSAO REAL (palm_diag_20261019_155551.csv, 405 linhas; tecla O rodou as
+15:54:47 e gravou imu_palm_alignment_{right,left}.json). O diagnostico em si
+funcionou: as 4 fases com amostra dos dois lados, sem o defeito da sessao
+anterior. Mas o resultado apontou para SUSPEITO DIFERENTE do que a hipotese
+inicial (sinal da normal do Kinect / arquivo de alinhamento):
+
+MEDIDO
+  - Alinhamento SALVO, porem com residuo ALTO: 40.6 graus (direita) e 44.1
+    (esquerda) -- limite 15. Erros ao vivo: 45-125 graus nas 3 poses.
+  - REFIT do modelo so' com o CSV: residuo 35.4 (direita) e 25.0 (esquerda).
+    Mesmo o MELHOR T/f possivel nao explica os dados.
+  - Teste do sinal da normal (o `palm_normal_from_points` FORCA nz<0): liberando
+    1 sinal por fase -> 21.6/21.1 graus; liberando o sinal POR AMOSTRA (ajuste
+    alternado) -> 22.2/25.6 graus. Ou seja: o sinal e' um problema REAL
+    (`palm_normal_from_points` so' acerta na pose "palma para o Kinect"), mas
+    NÃO e' a causa principal do residuo de 25-40 graus.
+  - Teste de corpo rigido (angulo entre poses): majoritariamente OK (o Kinect
+    gira nao mais do que o IMU autoriza) -- entao a MAGNITUDE da rotacao
+    registrada bate.
+  - TESTE DECISIVO: PREPARO e KINECT sao a MESMA POSE pedida ("palmas para o
+    Kinect", no inicio e no fim). O Kinect mede as normais a 20 graus (direita)
+    e 11 graus (esquerda) de distancia -- plausivel. O IMU diz que a ATITUDE
+    girou 170 graus (direita) e 75 graus (esquerda) entre as duas.
+  - rpy por fase (media): direita PREPARO roll -37/pitch -80/yaw +51 x KINECT
+    roll +76/pitch -79/yaw +108; esquerda PREPARO yaw -37 x KINECT yaw -98.
+    Nos dois lados o YAW e' o que se move; pitch (acelerometro) fica parado.
+
+CAUSA RAIZ
+  O firmware da luva integra o yaw com `yaw += gz * dt` -- giroscopio no eixo Z
+  do CORPO (firmware/esp32_luvas/src/main.cpp e esp32_duas_imus/src/main.cpp;
+  README ate' avisa "yaw so' giroscopio, acumula drift", mas o erro e' pior que
+  drift: e' FRAME ERRADO). Isso so' vale com o sensor NIVELADO. A taxa de yaw
+  verdadeira no referencial do mundo e':
+      yaw_dot = -sin(pitch)*gx + cos(pitch)*sin(roll)*gy + cos(pitch)*cos(roll)*gz
+  Com a mao inclinada (aqui pitch ~ -80 graus em algumas poses), o termo
+  dominante e' gx, nao gz -- e o erro acumulado depende do CAMINHO: a MESMA
+  pose fisica medida no inicio e no fim da sessao sai com yaw diferente
+  (170/75 graus). Consequencia: R_i (rpy do IMU) NAO e' uma atitude
+  consistente; o modelo `v = T R f` nao pode fechar com nenhum T/f; a tecla O
+  captura residuo 40 graus (e' o mesmo defeito, nao falta de giro); a seta
+  erra 40-160 graus. Nao e' o Kinect, nao e' o arquivo de alinhamento, nao e'
+  luva trocada (as duas falham de forma parecida e o pitch bate).
+
+CONSEQUENCIA PARA O PROJETO
+  Refazer a tecla O ou a tecla D NAO resolve. Duas saidas:
+  A) FIRMWARE (correto, mexe em firmware/ -- AVISAR O CLINE ANTES): integrar o
+     giroscopio nos 3 eixos usando a atitude atual (a formula acima), ou trocar
+     por quaternion/Mahony; o yaw continua sem referencia absoluta (sem
+     magnetometro), mas fica CONSISTENTE (o T absorve o offset). Precisa
+     regravar o ESP32 (gravar.bat).
+  B) FILTRO NO PC (imu.py/tool): reconstruir a atitude a partir de
+     accel+gyro com dt do relogio do ESP32. Precisa de historico de amostras
+     (o receiver hoje guarda so' a ultima) e o loop entrega ~30 Hz -- validar
+     offline antes de integrar ao pipeline.
+
+INSTRUMENTADO NESTE COMMIT (para provar A/B e fechar o sinal da normal)
+  - CSV do diagnostico (39 colunas; antes 20): + imu_timestamp_us (dt pelo
+    relogio do ESP32), + ax/ay/az_g e gx/gy/gz_dps CRUS, + 4 pontos 3D crus do
+    frame da palma (punho 0, MCP indicador 5, MCP medio 9, MCP minimo 17).
+    Motivos: (a) testar a correcao de yaw offline com a evidencia crua; (b)
+    reconstruir a normal anatomica (sinal POR MAO) offline -- os pontos crus
+    resolvem o problema do nz<0 forcado sem chute; (c) nada de zero disfarcado:
+    sem dado a celula fica vazia.
+  - `DiagnosticoPalma.registrar(..., pontos=None)` e `pontos_palma_camera()`:
+    os 4 lookups 3D so' sao feitos DURANTE o diagnostico (custo zero na
+    aquisicao normal).
+  - Analisador: secao "CONSISTENCIA DA ATITUDE DO IMU (PREPARO x KINECT)" +
+    prioridade 0 nos PROXIMOS PASSOS quando o yaw e' inconsistente. Roda ate'
+    em CSV antigo (as colunas novas viram NaN e a secao usa rpy/normal).
+  - test_diagnostico_palma: trava 39 colunas; segue 5/5.
+
+VALIDACAO
+  py_compile 0; test_diagnostico_palma 5/5; test_palm_alignment 8/8;
+  test_deteccao_cascata ok; test_overlay_auxiliares 8/8; test_janelas_grade 5/5.
+  Analisador no CSV real: imprime "IMU girou 170 x Kinect 20 graus (IMPOSSIVEL
+  para corpo rigido)" e a prioridade 0.
+
+PROXIMO (ordem)
+  1) Rodar a tecla D UMA vez mais (~30 s) para gravar giroscopio/acelerometro e
+     os pontos 3D (sem mudar nada do protocolo). Com esse CSV, testar OFFLINE a
+     correcao de yaw pela formula acima: se o refit cair para ~5-10 graus, a
+     causa esta' provada e a correcao e' viavel no PC -- antes de pedir regrava
+     do firmware.
+  2) Decidir A x B com o usuario/Cline (firmware e' do Cline).
+  3) Com a atitude consistente: refazer O (residuo tem de cair para <= 15
+     graus) e a seta da palma passa a valer; so' entao o trial real + 5 itens
+     do item 65 + casamento EEG x groundtruth.
+  4) Sinal da normal do Kinect (nz<0 forcado): com os 4 pontos crus logged,
+     decidir a orientacao anatomica por mao e corrigir `palm_normal_from_points`
+     (afeta tambem palm_angles do paradigma; avisar o Cline se mexer na lib).
+

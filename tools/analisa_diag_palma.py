@@ -84,7 +84,15 @@ ORDEM_FASES = ("PREPARO", "MESA", "REZANDO", "KINECT")
 COLUNAS_NUMERICAS = ("t_s", "fase_idx", "t_fase_s", "roll_deg", "pitch_deg",
                      "yaw_deg", "nx", "ny", "nz", "prev_x", "prev_y", "prev_z",
                      "err_deg", "raw_x", "raw_y", "raw_z", "err_raw_deg",
-                     "alinhado")
+                     "alinhado",
+                     # evidencia crua (item 78): giroscopio/acelerometro do ESP32
+                     # e os 4 pontos 3D crus da palma. CSV antigo nao tem estas
+                     # colunas -> viram NaN e as secoes novas so' sao omitidas.
+                     "imu_timestamp_us",
+                     "ax_g", "ay_g", "az_g", "gx_dps", "gy_dps", "gz_dps",
+                     "wrist_x", "wrist_y", "wrist_z", "index_x", "index_y",
+                     "index_z", "pinky_x", "pinky_y", "pinky_z", "middle_x",
+                     "middle_y", "middle_z")
 #: Direcao ESPERADA da normal da palma em cada fase, no referencial da camera
 #: do Kinect (Y para CIMA, Z para dentro da cena; a normal da palma e' forcada
 #: para z < 0, ou seja, aponta para a CAMERA quando a palma esta' virada para
@@ -356,6 +364,90 @@ def refitar(linhas, lado):
     return solve_palm_alignment(rotacoes, direcoes)
 
 
+# ------------------------------------------------- consistencia da ATITUDE (IMU)
+def rotacao_media(linhas):
+    """Rotacao media (3,3) de uma lista de amostras, ou None.
+
+    A media componente-a-componente de matrizes de rotacao pode nao ser
+    rotacao; projeta-se de volta (SVD) para a rotacao propria mais proxima.
+    """
+    matrizes = []
+    for linha in linhas:
+        rpy = [linha.get(coluna) for coluna in ("roll_deg", "pitch_deg", "yaw_deg")]
+        if not all(valor is not None and np.isfinite(valor) for valor in rpy):
+            continue
+        matrizes.append(rotation_matrix(*rpy))
+    if not matrizes:
+        return None
+    media = np.mean(np.asarray(matrizes, np.float64), axis=0)
+    u, _s, vt = np.linalg.svd(media)
+    return u @ vt
+
+
+def _angulo_rotacao_graus(rotacao):
+    """Angulo (graus) de uma rotacao pela formula do traco (robusto a ruido)."""
+    traco = float(np.clip((np.trace(rotacao) - 1.0) / 2.0, -1.0, 1.0))
+    return float(np.degrees(np.arccos(traco)))
+
+
+def consistencia_pose_repetida(linhas, fases=("PREPARO", "KINECT"),
+                               settle=SETTLE_PADRAO_S):
+    """A MESMA pose fisica medida duas vezes: quanto o IMU e o Kinect divergem.
+
+    PREPARO e KINECT sao a MESMA pose pedida ("palmas para o Kinect"). As duas
+    medidas sao do mesmo corpo, entao o angulo entre as duas atitudes do IMU
+    teria de ser ~o angulo entre as duas normais do Kinect. Medido na bancada em
+    19/10/2026 (sessao 15:55:51): Kinect 11-20 graus, IMU 74-171 graus --
+    assinatura de yaw INCONSISTENTE, nao de ruido de captura. O firmware da luva
+    integra `yaw += gz*dt` (gyro no eixo Z do CORPO), o que so' vale com o sensor
+    nivelado; com a mao inclinada o yaw verdadeiro mistura gx/gy.
+
+    Devolve {lado: {"imu_deg": ..., "kinect_deg": ..., "n": ...}}. Lados sem as
+    duas fases (ou poucas amostras) ficam de fora.
+    """
+    resultado = {}
+    for lado in ("right", "left"):
+        amostras = {fase: [] for fase in fases}
+        for linha in linhas:
+            if linha.get("lado") != lado:
+                continue
+            fase = linha.get("fase_nome")
+            if fase not in amostras:
+                continue
+            t_fase = linha.get("t_fase_s")
+            if t_fase is None or not np.isfinite(t_fase) or t_fase < settle:
+                continue
+            amostras[fase].append(linha)
+        primeira, segunda = fases
+        if min(len(amostras[primeira]), len(amostras[segunda])) < 3:
+            continue
+        rotacao_primeira = rotacao_media(amostras[primeira])
+        rotacao_segunda = rotacao_media(amostras[segunda])
+        normais = []
+        for fase in fases:
+            vetores = [np.asarray([linha["nx"], linha["ny"], linha["nz"]],
+                                  np.float64) for linha in amostras[fase]]
+            vetores = [vetor for vetor in vetores if np.isfinite(vetor).all()]
+            if not vetores:
+                normais = []
+                break
+            normal = np.mean(vetores, axis=0)
+            norma = float(np.linalg.norm(normal))
+            if norma < 1e-9:
+                normais = []
+                break
+            normais.append(normal / norma)
+        if (rotacao_primeira is None or rotacao_segunda is None
+                or len(normais) != 2):
+            continue
+        resultado[lado] = {
+            "imu_deg": _angulo_rotacao_graus(rotacao_primeira.T @ rotacao_segunda),
+            "kinect_deg": angle_between(normais[0], normais[1]),
+            "n": len(amostras[primeira]) + len(amostras[segunda]),
+        }
+    return resultado
+
+
 def veredito_palm_diag(estat_por_fase, bruto, limite=PALM_ALIGNMENT_MAX_RESIDUAL_DEG,
                        minimo=MIN_AMOSTRAS_FASE):
     """Linhas do veredito de UM lado -- os MESMOS criterios do tool.
@@ -530,6 +622,22 @@ def analisar(caminho, settle=None, limite=None):
         if comparacoes:
             print(f"    {lado}: " + " | ".join(comparacoes) + " (mediana, graus)")
 
+    # ------------------------------------ consistencia da ATITUDE do IMU
+    repetida = consistencia_pose_repetida(linhas, settle=settle)
+    if repetida:
+        print()
+        print("CONSISTENCIA DA ATITUDE DO IMU: a MESMA pose medida duas vezes "
+              "(PREPARO x KINECT)")
+        for lado, dados in repetida.items():
+            print(f"  {lado:5s}: o IMU diz que o sensor girou "
+                  f"{dados['imu_deg']:.0f} graus | o Kinect diz que a palma "
+                  f"girou {dados['kinect_deg']:.0f} graus")
+            if dados["imu_deg"] > dados["kinect_deg"] + 40.0:
+                print(f"    {lado}: IMPOSSIVEL para um corpo rigido -> o yaw do "
+                      "IMU nao representa a atitude (o firmware integra o "
+                      "giroscopio so' no eixo Z do corpo). Refazer a tecla O "
+                      "NAO resolve; a correcao e' de firmware/filtro (item 78).")
+
     # ------------------------------------------------------------ veredito
     print()
     print("VEREDITO")
@@ -559,10 +667,23 @@ def analisar(caminho, settle=None, limite=None):
                   "fora do quadro/na borda, luva trocada), nao o arquivo de "
                   "alinhamento")
             problemas.append("captura")
+        dados_repetida = repetida.get(lado)
+        if (dados_repetida is not None
+                and dados_repetida["imu_deg"] > dados_repetida["kinect_deg"] + 40.0):
+            print(f"  {lado}: o YAW do IMU e' INCONSISTENTE para um corpo "
+                  f"rigido (mesma pose: IMU {dados_repetida['imu_deg']:.0f} x "
+                  f"Kinect {dados_repetida['kinect_deg']:.0f} graus)")
+            problemas.append("yaw do IMU")
 
     # ------------------------------------------------------- proximos passos
     print()
     print("PROXIMOS PASSOS")
+    if "yaw do IMU" in problemas:
+        print("  0) PRIORIDADE: o yaw do IMU (firmware) NAO e' consistente -- "
+              "nenhuma captura da tecla O vai fechar enquanto isso. Corrigir o "
+              "firmware (integrar o giroscopio TAMBEM nos eixos gx/gy, pela "
+              "atitude atual) ou aplicar o filtro no PC; detalhes no item 78 do "
+              "historico.")
     print("  1) refaca a tecla O GIRANDO a mao devagar e em varias direcoes (com "
           "a palma virada para o Kinect, sem virar o dorso) -- captura quase "
           "parada ou sempre na mesma orientacao 'decora' uma pose so'.")

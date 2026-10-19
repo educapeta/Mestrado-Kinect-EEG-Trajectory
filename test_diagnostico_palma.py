@@ -311,8 +311,11 @@ def teste_registrar_erros_e_colunas():
 
         cabecalho, linhas = linhas_do_csv(diag.caminho_csv)
         assert cabecalho == tool.cabecalho_palm_diag(), cabecalho
-        assert len(cabecalho) == 20, len(cabecalho)
-        assert all(len(linha) == 20 for linha in linhas), \
+        # 20 colunas de medida + as 19 de EVIDENCIA CRUA do item 78
+        # (giroscopio/acelerometro/timestamp + 4 pontos 3D da palma).
+        assert len(cabecalho) == len(tool.cabecalho_palm_diag()) == 39, \
+            len(cabecalho)
+        assert all(len(linha) == len(cabecalho) for linha in linhas), \
             [len(linha) for linha in linhas]
         linhas_lidas, _meta = analisador.carregar(diag.caminho_csv)
         direita = [linha for linha in linhas_lidas if linha["lado"] == "right"]
