@@ -44,9 +44,10 @@ indice e o NOME do Windows da camera; a camera ATIVA (teclas K/L/H) diz "ATIVA"
 no quadro, porque trim, log de desvio e calibracao do esqueleto valem so' nela.
 
 Teclas: C origem | B bias do acelerometro | O alinhamento da palma (IMU <-> camera,
-por luva) | T diagnostico do tabuleiro | K trim fixo do overlay | H calibracao do
-esqueleto da mao | L log de desvio | R reset | ESC sair. Precisa do Kinect v2
-(SDK 2.0) e, opcionalmente, da webcam auxiliar e do ESP32/UDP.
+por luva) | D diagnostico da palma (3 poses programadas) | T diagnostico do
+tabuleiro | K trim fixo do overlay | H calibracao do esqueleto da mao | L log de
+desvio | R reset | ESC sair. Precisa do Kinect v2 (SDK 2.0) e, opcionalmente, da
+webcam auxiliar e do ESP32/UDP.
 
 FOCO DA JANELA: o waitKey do OpenCV so' entrega tecla com uma janela de VIDEO
 do programa em foco -- se a tecla O "nao faz nada" e o console nao imprime
@@ -67,6 +68,23 @@ sessoes. O erro ao vivo ("Palma R/L: erro Kinect x IMU") fica no video, no CSV
 (coluna `palm_err_deg`) e no log da tecla L -- e' o numero que diz se aquela luva
 esta' boa. Residuo alto em um lado so' costuma ser luva trocada: use
 `--imu-portas "4210,4211"` (ordem DIREITA,ESQUERDA) para casar com o firmware.
+
+DIAGNOSTICO DA PALMA (tecla D): quando o erro ao vivo esta' alto e a tecla O nao
+resolve, o numero sozinho nao diz se o problema e' SISTEMATICO (T/f errados,
+arquivo de outra luva, normal do Kinect com sinal trocado) ou DEPENDENTE DA
+ROTACAO (o alinhamento "decora" a pose da tecla O). A tecla D mede o erro contra
+um MOVIMENTO PROGRAMADO de 4 fases (21 s): PREPARO (3 s, palmas para o Kinect,
+parado), MESA (6 s, as duas palmas apoiadas na mesa com o dorso para o Kinect),
+REZANDO (6 s, maos juntas, palmas uma contra a outra) e KINECT (6 s, palmas
+abertas para o Kinect). A mao tem de ficar DENTRO do quadro do Kinect nas quatro
+fases: a verdade e' a normal medida pelo depth, e fora do quadro (ou na borda)
+nao ha' linha nenhuma. A instrucao da fase aparece no video; D de novo (ou ESC)
+encerra e resume o que ja' foi coletado. O CSV (`palm_diag_<data>_<hora>.csv`)
+grava uma linha por (frame, lado) com a normal do Kinect, a previsao COM
+alinhamento (a seta), a previsao SEM alinhamento e os dois erros; o resumo sai
+em `palm_diag_<data>_<hora>.csv_resumo.txt` (tabela por fase/lado + veredito) e
+a analise completa, com refit do modelo, em
+`python tools\\analisa_diag_palma.py <csv>`.
 
 Nao ha copia de codigo: o corpo abaixo e' o mesmo de antes e usa os nomes do
 modulo importado (constantes, classes e helpers), copiados para o namespace
@@ -286,6 +304,501 @@ class CapturaAlinhamentoPalma:
             return None
         return solve_palm_alignment([r for r, _v in amostras],
                                     [v for _r, v in amostras])
+
+
+def cabecalho_palm_diag():
+    """Colunas do CSV do diagnostico da palma (tecla D), uma linha por
+    (frame, lado) -- e so' quando a mao E a normal do Kinect existem.
+
+    ORDEM = a mesma da linha gravada em `DiagnosticoPalma.registrar`; quem le'
+    por NOME (tools/analisa_diag_palma.py) nao depende dela, mas a
+    documentacao da sessao depende: (nx,ny,nz) e' a normal do KINECT (a
+    verdade), (prev_*) e' a previsao COM alinhamento (`T R f`, a seta do
+    video) e (raw_*) e' a previsao SEM alinhamento (`R f`, T = identidade).
+    Ter as DUAS previsoes na mesma linha e' o que permite responder, offline,
+    se o alinhamento melhorou alguma coisa (era a suspeita do item 74: "o tool
+    nem esta' usando o arquivo").
+    """
+    return ["t_s", "fase_idx", "fase_nome", "t_fase_s", "lado",
+            "roll_deg", "pitch_deg", "yaw_deg",
+            "nx", "ny", "nz",
+            "prev_x", "prev_y", "prev_z", "err_deg",
+            "raw_x", "raw_y", "raw_z", "err_raw_deg",
+            "alinhado"]
+
+
+def _valor_csv_diag(texto, padrao=float("nan")):
+    """float() tolerante para o CSV do diagnostico: vazio/ilegivel -> NaN.
+
+    Nunca 0: "nao deu para medir" e "erro zero" sao coisas MUITO diferentes
+    neste diagnostico (um erro 0 graus seria o alinhamento perfeito).
+    """
+    try:
+        return float(texto)
+    except (TypeError, ValueError):
+        return padrao
+
+
+def _estatisticas_diag(valores):
+    """n/media/mediana/desvio-padrao/p90/min/max (graus) de uma lista."""
+    dados = np.asarray([valor for valor in valores
+                        if valor is not None and np.isfinite(valor)], dtype=float)
+    if dados.size == 0:
+        return {"n": 0}
+    return {
+        "n": int(dados.size),
+        "media": float(np.mean(dados)),
+        "mediana": float(np.median(dados)),
+        "desvio": float(np.std(dados)),
+        "p90": float(np.percentile(dados, 90)),
+        "minimo": float(np.min(dados)),
+        "maximo": float(np.max(dados)),
+    }
+
+
+def veredito_palm_diag(estat_por_fase, bruto, limite=None, minimo=None):
+    """Linhas do veredito da palma para UM lado.
+
+    `estat_por_fase` = {fase: estatisticas de `err_deg`} (SEM as amostras do
+    settle); `bruto` = estatisticas de `err_raw_deg` do lado (o erro que a seta
+    teria SEM alinhamento nenhum). `tools/analisa_diag_palma.py` tem uma copia
+    literal desta funcao: ele NAO pode importar este arquivo (o import carrega
+    OpenCV/pykinect) -- se um criterio mudar aqui, mude la' tambem.
+
+    A ordem das causas e' a ordem em que uma esconde a outra: poucas amostras
+    invalidam qualquer conclusao; "o alinhamento nao esta' aplicado" explica
+    erro grande em TODAS as poses; so' depois faz sentido separar sistematico
+    (T/f) de dependente da rotacao (modelo/captura).
+    """
+    limite = PALM_DIAG_MAX_ERR_DEG if limite is None else float(limite)
+    minimo = PALM_DIAG_MIN_SAMPLES_FASE if minimo is None else int(minimo)
+    notas = []
+    poses = [fase for fase in ("MESA", "REZANDO", "KINECT")
+             if estat_por_fase.get(fase, {}).get("n")]
+    if not poses:
+        return ["sem amostras validas: nenhuma pose programada foi medida"]
+    for fase, dados in estat_por_fase.items():
+        if 0 < dados.get("n", 0) < minimo:
+            notas.append(f"sem amostras suficientes na fase {fase} "
+                         f"({dados['n']} < {minimo}): a mao saiu do quadro")
+    mediana = {fase: estat_por_fase[fase]["mediana"] for fase in poses}
+    medio = float(np.mean([estat_por_fase[fase]["media"] for fase in poses]))
+    bruto_medio = (bruto or {}).get("media")
+    if bruto_medio is not None and np.isfinite(bruto_medio) \
+            and bruto_medio <= medio + 2.0:
+        notas.append("o alinhamento NAO esta' sendo aplicado (sem "
+                     "imu_palm_alignment_<lado>.json / bootstrap de 1 amostra): "
+                     f"erro SEM alinhamento {bruto_medio:.1f} graus x "
+                     f"{medio:.1f} com ele")
+    ok = {fase: mediana[fase] <= limite for fase in poses}
+    if len(poses) == 3 and all(ok.values()):
+        notas.append("ALINHAMENTO OK nas 3 poses programadas")
+    elif ok.get("KINECT") and (not ok.get("MESA", True)
+                               or not ok.get("REZANDO", True)):
+        notas.append("o alinhamento DECORA a pose da tecla O: T/f estao errados "
+                     "(captura O quase parada ou sempre na mesma orientacao) -> "
+                     "refaca O girando a mao devagar")
+    elif not ok.get("KINECT", True):
+        notas.append("nem a pose da calibracao fecha: conferir "
+                     "enquadramento/profundidade da mao, luva trocada "
+                     "(--imu-portas) ou normal do Kinect ruidosa")
+    notas.append("medianas: " + ", ".join(
+        f"{fase} {mediana[fase]:.1f}" for fase in poses) + " graus")
+    return notas
+
+
+class DiagnosticoPalma:
+    """Diagnostico da palma por MOVIMENTO PROGRAMADO (tecla D): CSV + resumo.
+
+    Por que existe (item 74 do historico -- "a calibracao da palma esta'
+    dando ruim"): `palm_err_deg` diz QUE a seta esta' errada, mas nao POR QUE.
+    Sem um protocolo de poses conhecidas nao da' para separar as duas causas:
+
+      (a) SISTEMATICA -- `T`/`f` (ou o arquivo `imu_palm_alignment_<lado>.json`
+          carregado) estao errados, e entao o erro e' grande em QUALQUER pose;
+      (b) DEPENDENTE DA ROTACAO -- o modelo/captura sao ruins e o vetor acerta
+          so' a pose "palma para o Kinect", que e' a unica que a tecla O
+          costuma ver (captura quase parada "decora" essa pose).
+
+    O que este objeto grava, uma linha por (frame, lado): a normal da palma
+    medida pelo KINECT (a verdade), a previsao COM alinhamento (`T R f`, a seta
+    do video), a previsao SEM alinhamento (`R f`, T = identidade) e os dois
+    erros em graus. O resumo por (fase, lado) e o veredito saem no fim (a
+    tecla D de novo encerra antes e gera o resumo do que ja' foi coletado).
+    A analise mais completa e' offline, em `tools/analisa_diag_palma.py`.
+
+    Robustez: o arquivo e' fechado em `finally` (nunca fica aberto se algo
+    estourar no meio de um frame), cada linha e' gravada com flush (dá' para
+    ler o CSV com o diagnostico ainda rodando) e `cancelar()` fecha sem resumo
+    (saida por ESC).
+    """
+
+    def __init__(self, fases=None, relogio=time.monotonic, avisar=print):
+        #: Clock injetavel: os testes avancam o tempo sem dormir 21 s.
+        self.fases = tuple(PALM_DIAG_PHASES if fases is None else fases)
+        self.relogio = relogio
+        self.avisar = avisar
+        self.ativa = False
+        self.t_inicio = 0.0
+        self.caminho_csv = None
+        self.caminho_meta = None
+        self.caminho_resumo = None
+        #: Linhas ja' gravadas (dicts com as MESMAS chaves do cabecalho): o
+        #: resumo e' calculado daqui, sem reler o arquivo (o CSV pode estar
+        #: aberto em outra maquina/editor e travado no Windows).
+        self.linhas = []
+        self._arquivo = None
+        self._escritor = None
+        self._ultimo = {"right": -1e9, "left": -1e9}
+
+    # ------------------------------------------------------------ propriedades
+    @property
+    def duracao_total_s(self):
+        """Duracao programada das fases, em segundos (21 s com as 4 padrao)."""
+        return float(sum(float(segundos) for _nome, segundos, _instrucao
+                         in self.fases))
+
+    @property
+    def restante_total_s(self):
+        """Quanto falta do diagnostico inteiro (0 quando nao esta' ativo)."""
+        if not self.ativa:
+            return 0.0
+        return max(0.0, self.duracao_total_s - (self.relogio() - self.t_inicio))
+
+    def fase_atual(self, agora):
+        """(idx, nome, t_fase_s, restante_s, instrucao) ou None se terminou.
+
+        `agora` e' um instante de `time.monotonic()` (o do laco), passado de
+        fora para o mesmo `now` valer para o CSV principal e para o
+        diagnostico -- dois `time.monotonic()` diferentes fariam a linha do
+        diagnostico cair numa fase e a do CSV na anterior.
+        """
+        if not self.ativa:
+            return None
+        decorrido = float(agora) - self.t_inicio
+        if decorrido < 0.0:
+            decorrido = 0.0
+        inicio = 0.0
+        for indice, (nome, segundos, instrucao) in enumerate(self.fases):
+            fim = inicio + float(segundos)
+            if decorrido < fim:
+                return (indice, nome, decorrido - inicio, fim - decorrido,
+                        instrucao)
+            inicio = fim
+        return None
+
+    # ------------------------------------------------------------- ciclo de vida
+    def iniciar(self, agora, fusions):
+        """Liga o diagnostico e cria `palm_diag_<data>_<hora>.csv` + `_meta.json`.
+
+        Grava no meta o que NAO esta' no CSV e e' decisivo para interpretar o
+        resultado: as fases e suas instrucoes, o settle, o limite de erro, o
+        estado de alinhamento de cada lado (`palm_alignment_state()`, None =
+        bootstrap de 1 amostra) e se havia `imu_palm_alignment_<lado>.json` --
+        com data/hora do arquivo, para pegar o caso "o arquivo e' de outra
+        sessao/outra luva" (um dos modos de falha do item 74).
+
+        Devolve False se ja' estava ativo (nao cria um segundo par de arquivos).
+        """
+        if self.ativa:
+            return False
+        agora = float(agora)
+        carimbo = time.strftime("%Y%m%d_%H%M%S", time.localtime())
+        base = PALM_DIAG_CSV_PREFIX + carimbo
+        sufixo = 1
+        # Duas sessoes iniciadas no mesmo segundo nao podem dividir arquivo.
+        while Path(base + ".csv").exists() or Path(base + "_meta.json").exists():
+            sufixo += 1
+            base = f"{PALM_DIAG_CSV_PREFIX}{carimbo}_{sufixo}"
+        self.caminho_csv = Path(base + ".csv")
+        self.caminho_meta = Path(base + "_meta.json")
+        self.caminho_resumo = Path(base + ".csv_resumo.txt")
+        self.linhas = []
+        self._ultimo = {"right": -1e9, "left": -1e9}
+        meta = {
+            "pc_time": time.strftime("%Y-%m-%d %H:%M:%S", time.localtime()),
+            "csv": self.caminho_csv.name,
+            "fases": [{"nome": nome, "segundos": float(segundos),
+                       "instrucao": instrucao}
+                      for nome, segundos, instrucao in self.fases],
+            "settle_s": float(PALM_DIAG_SETTLE_S),
+            "limite_erro_graus": float(PALM_DIAG_MAX_ERR_DEG),
+            "duracao_total_s": self.duracao_total_s,
+            "amostras_minimas_fase": int(PALM_DIAG_MIN_SAMPLES_FASE),
+            "lados": {},
+        }
+        for lado in ("right", "left"):
+            fusion = (fusions or {}).get(lado)
+            estado = (fusion.palm_alignment_state()
+                      if fusion is not None else None)
+            caminho = palm_alignment_path(lado)
+            existe = caminho.exists()
+            mtime = None
+            if existe:
+                try:
+                    mtime = time.strftime("%Y-%m-%d %H:%M:%S",
+                                          time.localtime(caminho.stat().st_mtime))
+                except OSError:
+                    existe = False
+            meta["lados"][lado] = {
+                "alinhamento": estado,
+                "arquivo": caminho.name,
+                "arquivo_existe": bool(existe),
+                "arquivo_mtime": mtime,
+            }
+        try:
+            self._arquivo = open(self.caminho_csv, "w", newline="",
+                                 encoding="utf-8")
+            self._escritor = csv.writer(self._arquivo)
+            self._escritor.writerow(cabecalho_palm_diag())
+            self._arquivo.flush()
+            with self.caminho_meta.open("w", encoding="utf-8") as arquivo_meta:
+                json.dump(meta, arquivo_meta, indent=2)
+        except OSError as exc:
+            self._fechar()
+            self.avisar(f"DIAGNOSTICO DA PALMA: nao consegui criar os arquivos "
+                        f"({exc}); diagnostico NAO ligado")
+            self.ativa = False
+            self._arquivo = None
+            self._escritor = None
+            return False
+        self.t_inicio = agora
+        self.ativa = True
+        fases_txt = " | ".join(f"{indice + 1}) {nome} {float(segundos):g}s"
+                               for indice, (nome, segundos, _instrucao)
+                               in enumerate(self.fases))
+        self.avisar(
+            f"DIAGNOSTICO DA PALMA LIGADO -> {self.caminho_csv.name} "
+            f"({self.duracao_total_s:g} s, {len(self.fases)} fases): {fases_txt}\n"
+            "  Mantenha as DUAS maos DENTRO do quadro do Kinect e faca a pose "
+            "pedida no video; D de novo encerra e resume o que ja' foi coletado.")
+        for indice, (nome, segundos, instrucao) in enumerate(self.fases):
+            self.avisar(f"  fase {indice + 1}/{len(self.fases)} {nome} "
+                        f"({float(segundos):g} s): {instrucao}")
+        return True
+
+    def registrar(self, lado, agora, sample, normal_camera, fusion):
+        """Grava 1 linha do CSV (False quando nao deu para medir/ainda nao e' hora).
+
+        `normal_camera` e' `palm_normal_camera` do Kinect (a verdade) e `sample`
+        a amostra do IMU daquele lado. As duas previsoes sao calculadas AQUI
+        (nao vem do `mao[...]` do laco) para a linha do diagnostico ser
+        justamente "T R f" e "R f", independentes do que a tela desenhou.
+        """
+        if not self.ativa or self._escritor is None:
+            return False
+        agora = float(agora)
+        fase = self.fase_atual(agora)
+        if fase is None:
+            return False
+        # 20 Hz por lado: sem isto o CSV teria uma linha por frame para uma
+        # pose PARADA (o CSV principal ja' guarda todo frame).
+        if agora - self._ultimo.get(lado, -1e9) < PALM_DIAG_SAMPLE_INTERVAL:
+            return False
+        if sample is None or normal_camera is None:
+            return False
+        normal = np.asarray(normal_camera, np.float64).reshape(3)
+        norma = np.linalg.norm(normal)
+        if not np.isfinite(normal).all() or norma < 1e-9:
+            return False
+        normal = normal / norma
+        indice, nome, t_fase, _restante, _instrucao = fase
+        previsto = fusion.palm_direction(sample) if fusion is not None else None
+        if previsto is not None:
+            previsto = np.asarray(previsto, np.float64).reshape(3)
+            norma_prev = np.linalg.norm(previsto)
+            previsto = (previsto / norma_prev
+                        if np.isfinite(previsto).all() and norma_prev > 1e-9
+                        else None)
+        rotacao = rotation_matrix(sample.roll_deg, sample.pitch_deg,
+                                  sample.yaw_deg)
+        referencia = (None if fusion is None
+                      else getattr(fusion, "palm_reference_body", None))
+        bruto = None
+        if referencia is not None:
+            bruto = rotacao @ np.asarray(referencia, np.float64).reshape(3)
+            norma_bruta = np.linalg.norm(bruto)
+            bruto = (bruto / norma_bruta
+                     if np.isfinite(bruto).all() and norma_bruta > 1e-9
+                     else None)
+        erro = None if previsto is None else angle_between(normal, previsto)
+        erro_bruto = None if bruto is None else angle_between(normal, bruto)
+        linha = {
+            "t_s": f"{agora:.3f}",
+            "fase_idx": indice,
+            "fase_nome": nome,
+            "t_fase_s": f"{t_fase:.3f}",
+            "lado": lado,
+            "roll_deg": f"{float(sample.roll_deg):.3f}",
+            "pitch_deg": f"{float(sample.pitch_deg):.3f}",
+            "yaw_deg": f"{float(sample.yaw_deg):.3f}",
+            "nx": f"{normal[0]:.6f}", "ny": f"{normal[1]:.6f}",
+            "nz": f"{normal[2]:.6f}",
+            "prev_x": "" if previsto is None else f"{previsto[0]:.6f}",
+            "prev_y": "" if previsto is None else f"{previsto[1]:.6f}",
+            "prev_z": "" if previsto is None else f"{previsto[2]:.6f}",
+            "err_deg": "" if erro is None else f"{float(erro):.3f}",
+            "raw_x": "" if bruto is None else f"{bruto[0]:.6f}",
+            "raw_y": "" if bruto is None else f"{bruto[1]:.6f}",
+            "raw_z": "" if bruto is None else f"{bruto[2]:.6f}",
+            "err_raw_deg": ("" if erro_bruto is None
+                            else f"{float(erro_bruto):.3f}"),
+            "alinhado": 1 if referencia is not None else 0,
+        }
+        try:
+            self._escritor.writerow([linha[coluna]
+                                     for coluna in cabecalho_palm_diag()])
+            self._arquivo.flush()
+        except (OSError, ValueError) as exc:
+            # Disco cheio/arquivo travado nao pode derrubar a sessao de
+            # aquisicao: avisa e DESLIGA o diagnostico (o CSV principal segue).
+            self.avisar(f"DIAGNOSTICO DA PALMA: falha ao gravar em "
+                        f"{self.caminho_csv.name} ({exc}); desligando")
+            self.cancelar()
+            return False
+        self.linhas.append(linha)
+        self._ultimo[lado] = agora
+        return True
+
+    # --------------------------------------------------------------- resumo
+    def _estatisticas_por_fase(self):
+        """({(fase, lado): estatisticas de err_deg}, {lado: estatisticas de raw})."""
+        grupos = {}
+        brutos = {"right": [], "left": []}
+        for linha in self.linhas:
+            lado = linha.get("lado")
+            if lado not in brutos:
+                continue
+            bruto = _valor_csv_diag(linha.get("err_raw_deg"))
+            if np.isfinite(bruto):
+                brutos[lado].append(bruto)
+            t_fase = _valor_csv_diag(linha.get("t_fase_s"))
+            if not np.isfinite(t_fase) or t_fase < PALM_DIAG_SETTLE_S:
+                continue
+            valor = _valor_csv_diag(linha.get("err_deg"))
+            if not np.isfinite(valor):
+                continue
+            chave = (linha.get("fase_nome"), lado)
+            grupos.setdefault(chave, []).append(valor)
+        return ({chave: _estatisticas_diag(valores)
+                 for chave, valores in grupos.items()},
+                {lado: _estatisticas_diag(valores)
+                 for lado, valores in brutos.items()})
+
+    def _linha_tabela(self, lado, fase, dados):
+        if not dados.get("n"):
+            return (f"{lado:5s} | {fase:8s} | {0:4d} | {'-':>7s} | {'-':>7s} | "
+                    f"{'-':>6s} | {'-':>6s} | {'-':>6s} | {'-':>6s}")
+        return (f"{lado:5s} | {fase:8s} | {dados['n']:4d} | "
+                f"{dados['media']:7.2f} | {dados['mediana']:7.2f} | "
+                f"{dados['desvio']:6.2f} | {dados['p90']:6.2f} | "
+                f"{dados['minimo']:6.2f} | {dados['maximo']:6.2f}")
+
+    def _texto_resumo(self, estat, brutos):
+        """Tabela ASCII + veredito por lado (o que vai para o .txt e a tela)."""
+        nome_csv = self.caminho_csv.name if self.caminho_csv else "?"
+        cabecalho = (f"{'lado':5s} | {'fase':8s} | {'n':>4s} | {'media':>7s} | "
+                     f"{'mediana':>7s} | {'std':>6s} | {'p90':>6s} | "
+                     f"{'min':>6s} | {'max':>6s}")
+        linha_sep = "-" * len(cabecalho)
+        linhas = [
+            f"DIAGNOSTICO DA PALMA -- {nome_csv}",
+            f"settle {PALM_DIAG_SETTLE_S:g} s (amostras do inicio de cada fase "
+            f"ficam FORA do resumo, mas no CSV) | limite por fase "
+            f"{PALM_DIAG_MAX_ERR_DEG:g} graus",
+            "",
+            "ERRO AO VIVO (Kinect x IMU) POR FASE E LADO",
+            cabecalho,
+            linha_sep,
+        ]
+        for lado in ("right", "left"):
+            for fase, _segundos, _instrucao in self.fases:
+                linhas.append(self._linha_tabela(lado, fase,
+                                                 estat.get((fase, lado), {})))
+            linhas.append(linha_sep)
+        brutos_txt = " | ".join(
+            f"{lado} {dados['media']:.1f} graus"
+            for lado, dados in brutos.items() if dados.get("n"))
+        if brutos_txt:
+            linhas.append("erro SEM alinhamento (R f, T = identidade), sessao "
+                          "inteira: " + brutos_txt)
+        linhas.append("")
+        linhas.append("VEREDITO")
+        for lado in ("right", "left"):
+            estat_lado = {fase: estat[(fase, lado)] for fase, _s, _i
+                          in self.fases if (fase, lado) in estat}
+            if not estat_lado:
+                linhas.append(f"  {lado}: sem amostras (a mao nao apareceu no "
+                              "Kinect durante o diagnostico)")
+                continue
+            for nota in veredito_palm_diag(estat_lado, brutos.get(lado)):
+                linhas.append(f"  {lado}: {nota}")
+        linhas.append("")
+        linhas.append("Analise completa (refit do modelo, execucao das poses): "
+                      "python tools\\analisa_diag_palma.py " + nome_csv)
+        return "\n".join(linhas) + "\n"
+
+    def finalizar(self, resumo_txt=None):
+        """Fecha o CSV, calcula o resumo e grava `<csv>_resumo.txt`.
+
+        `resumo_txt` sobrescreve o caminho do resumo (None = `<csv>_resumo.txt`).
+        Devolve o caminho gravado (None se nao havia nada coletado). Depois
+        disto `ativa` e' False e o objeto PODE ser reiniciado por `iniciar`.
+
+        Parada antecipada (D de novo) tambem passa por aqui: perder 15 s de
+        coleta so' porque o experimentador quis parar antes seria pior que um
+        resumo de amostras parciais -- a coluna `n` diz quanto vale.
+        """
+        self.ativa = False
+        caminho_resumo = (Path(resumo_txt) if resumo_txt is not None
+                          else self.caminho_resumo)
+        try:
+            self._fechar()
+            estat, brutos = self._estatisticas_por_fase()
+            if not estat and not any(dados.get("n") for dados in brutos.values()):
+                self.avisar("DIAGNOSTICO DA PALMA: nenhuma amostra coletada "
+                            "(a mao/normal nao apareceu no Kinect); resumo NAO "
+                            "gerado")
+                return None
+            texto = self._texto_resumo(estat, brutos)
+            gravado = None
+            if caminho_resumo is not None:
+                try:
+                    caminho_resumo.write_text(texto, encoding="utf-8")
+                    gravado = caminho_resumo
+                except OSError as exc:
+                    self.avisar(f"DIAGNOSTICO DA PALMA: nao consegui gravar "
+                                f"{caminho_resumo} ({exc})")
+            print(texto, flush=True)
+            if gravado is not None:
+                self.avisar(f"resumo gravado em {gravado}")
+            if self.caminho_csv is not None:
+                self.avisar(f"CSV do diagnostico: {self.caminho_csv}")
+            if self.caminho_meta is not None and self.caminho_meta.exists():
+                self.avisar(f"meta do diagnostico: {self.caminho_meta}")
+            return gravado
+        finally:
+            # Nunca deixar arquivo aberto, mesmo se o resumo estourar no meio
+            # (o finally roda DEPOIS do return: `_fechar` e' idempotente).
+            self._fechar()
+            self._escritor = None
+            self.ativa = False
+
+    def cancelar(self):
+        """Fecha os arquivos SEM gerar resumo (saida por ESC)."""
+        self.ativa = False
+        self._fechar()
+        self._escritor = None
+
+    def _fechar(self):
+        """Fecha o CSV se estiver aberto (idempotente, nunca levanta)."""
+        if self._arquivo is not None:
+            try:
+                self._arquivo.close()
+            except OSError:
+                pass
+            finally:
+                self._arquivo = None
 
 
 class GradeDeJanelas:
@@ -1052,7 +1565,7 @@ def main():
     }
     print(f"IMU: direita na porta {receivers['right'].port} | esquerda na porta "
           f"{receivers['left'].port}")
-    print("TECLAS (C/B/O/K/H/L/R): clique ANTES em uma janela de VIDEO -- sem "
+    print("TECLAS (C/B/O/D/K/H/L/R): clique ANTES em uma janela de VIDEO -- sem "
           "foco no video o OpenCV nao recebe a tecla (a tecla O parece nao "
           "funcionar e o console fica mudo).")
     for receiver in receivers.values():
@@ -1195,6 +1708,14 @@ def main():
             print(f"IMU {lado}: sem alinhamento da palma salvo -- aperte O para "
                   "medir (gire a mao com a palma virada para o Kinect)")
     captura_palma = CapturaAlinhamentoPalma()
+    # Diagnostico da palma por MOVIMENTO PROGRAMADO (tecla D): grava
+    # palm_diag_<data>_<hora>.csv e, no fim, o resumo por (fase, lado). E' o
+    # log que faltava para separar "calibracao sistematicamente errada" de
+    # "modelo so' vale na pose da tecla O" (item 74).
+    diag_palma = DiagnosticoPalma()
+    #: Ultima fase do diagnostico JA' ANUNCIADA (indice): a instrucao sai uma
+    #: vez por fase, nao a cada frame (e o texto aparece tambem no video).
+    diag_fase_vista = None
 
     # Camera calibration is performed only by stereo_calibration.py.
     camera_calibrating = False
@@ -2136,6 +2657,13 @@ def main():
                     if (mao["palm_direction"] is None or normal_lado is None)
                     else angle_between(normal_lado, mao["palm_direction"])
                 )
+                # Diagnostico da palma (tecla D): a linha do CSV do diagnostico
+                # e' gravada AQUI, logo depois do erro ao vivo -- as tres coisas
+                # tem de ser do MESMO frame e da MESMA amostra de IMU, senao a
+                # comparacao "vivo x bruto x refit" mede o atraso, nao o erro.
+                if diag_palma.ativa:
+                    diag_palma.registrar(lado, now, sample_lado, normal_lado,
+                                         fusion)
                 if captura_palma.ativa:
                     captura_palma.coletar(lado, now, sample_lado, normal_lado)
                 if imu_calibration_active[lado]:
@@ -2199,6 +2727,23 @@ def main():
                               "dorso e mantenha a mao dentro do quadro; se "
                               "persistir, confira se as luvas nao estao "
                               "trocadas (--imu-portas)")
+            # --- DIAGNOSTICO DA PALMA (tecla D): fase e fim --------------------
+            # Roda UMA vez por iteracao (depois do laco dos lados): trocar a
+            # fase no meio do laco faria uma mao gravar na fase nova e a outra
+            # na antiga no MESMO frame. A instrucao sai no terminal UMA vez por
+            # fase -- repetir a cada frame afogaria as outras linhas (e o
+            # experimentador esta' olhando a mao, nao o console).
+            if diag_palma.ativa:
+                fase_diag = diag_palma.fase_atual(now)
+                if fase_diag is None:
+                    diag_palma.finalizar()
+                    diag_fase_vista = None
+                elif fase_diag[0] != diag_fase_vista:
+                    diag_fase_vista = fase_diag[0]
+                    print(f"DIAG PALMA fase {fase_diag[0] + 1}/"
+                          f"{len(diag_palma.fases)} {fase_diag[1]} "
+                          f"({fase_diag[3]:.1f} s): {fase_diag[4]}",
+                          flush=True)
             # Compatibilidade: variaveis "atuais" apontam para a mao primaria.
             lado_atual = lado_primario or "right"
             prim_mao = resultados_por_lado.get(lado_atual)
@@ -2407,6 +2952,34 @@ def main():
             if display is not None:
                 for index, text in enumerate(lines):
                     cv2.putText(display, text, (20, 35 + index * 28), cv2.FONT_HERSHEY_SIMPLEX, 0.65, (0, 255, 0), 2)
+                # DIAGNOSTICO DA PALMA (tecla D): a fase TAMBEM vai para o
+                # video, em texto grande e no rodape (para nao competir com as
+                # linhas de status). Por que no video e nao so' no terminal:
+                # durante o diagnostico o experimentador esta' de frente para o
+                # Kinect, longe do teclado -- e a janela do video e' a que
+                # precisa estar em FOCO para o waitKey entregar D/ESC. Desenhado
+                # ANTES do `janelas.mostrar`, sobre o display em tamanho cheio:
+                # depois do redimensionamento o texto encolheria junto.
+                if diag_palma.ativa:
+                    fase_video = diag_palma.fase_atual(now)
+                    if fase_video is not None:
+                        altura_texto = display.shape[0]
+                        cv2.putText(
+                            display,
+                            f"DIAG PALMA fase {fase_video[0] + 1}/"
+                            f"{len(diag_palma.fases)} {fase_video[1]} "
+                            f"{fase_video[3]:.1f}s",
+                            (20, altura_texto - 60),
+                            cv2.FONT_HERSHEY_SIMPLEX, 1.0, (0, 0, 255), 3)
+                        # Instrucao em UMA linha curta: o texto completo (longo)
+                        # ja' saiu no terminal ao trocar de fase.
+                        instrucao_curta = fase_video[4]
+                        if len(instrucao_curta) > 72:
+                            instrucao_curta = instrucao_curta[:69] + "..."
+                        cv2.putText(display, instrucao_curta,
+                                    (20, altura_texto - 20),
+                                    cv2.FONT_HERSHEY_SIMPLEX, 0.7,
+                                    (0, 0, 255), 2)
                 janelas.mostrar("Kinect RGB + esqueleto + IMU",
                                 janelas.redimensionar(display))
                 depth_view_frame = tracker.depth_view()
@@ -2536,9 +3109,30 @@ def main():
                 diagnostico_tabuleiro(
                     color, color_for_calibration, auxiliary_frame, tracker,
                     alignment, aux_ok=auxiliary_ok, aux_index=AUX_CAMERA_INDEX)
+            elif key == ord("d"):
+                # DIAGNOSTICO DA PALMA (item 74): liga/desliga a coleta das 4
+                # poses programadas. Por que uma tecla e nao um flag de linha de
+                # comando: o diagnostico tem de comecar com a mao JA' em quadro
+                # e da' para repetir quantas vezes quiser na mesma sessao, sem
+                # reiniciar Kinect+IMU (o custo de reiniciar e' alto e a pose
+                # muda). D de novo encerra ANTES e gera o resumo do que ja' foi
+                # coletado (a coluna `n` de cada fase diz o quanto vale).
+                if diag_palma.ativa:
+                    diag_palma.finalizar()
+                    diag_fase_vista = None
+                else:
+                    diag_palma.iniciar(now, fusions)
+                    diag_fase_vista = None
             elif key == 27:
                 break
     finally:
+        # DIAGNOSTICO DA PALMA: escolhemos FINALIZAR (nao cancelar) na saida --
+        # o experimentador pode ter saido no meio de uma sessao de 21 s, e o que
+        # ja' foi coletado custou poses reais. `finalizar` fecha o CSV no
+        # `finally` dele e nunca deixa arquivo aberto; se o resumo falhar, o CSV
+        # continua valido (flush por linha).
+        if diag_palma.ativa:
+            diag_palma.finalizar()
         if overlay_log_file is not None:
             overlay_log_file.close()
         for receiver in receivers.values():

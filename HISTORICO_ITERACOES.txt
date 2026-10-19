@@ -4468,6 +4468,89 @@ sem aparelho direto nem API do g.Pype)".
 
 
 ================================================================================
+ITEM 69 (16/10/2026) - CASAMENTO groundtruth x EEG: ponte mono<->sample_index
+    medida nas gravacoes REAIS (o objetivo principal ganhou a primeira
+    ferramenta verificavel)
+================================================================================
+CONTEXTO
+  Proximo passo escolhido com o usuario: casar a ground truth de movimento
+  (overlay Kinect/par de auxiliares/IMU) com o sinal EEG g.Nautilus -- o
+  objetivo principal do projeto, e o unico dos 3 proximos passos que avanca
+  SEM hardware (os outros: trial real com capacete e tecla O / ESP32).
+  Auditoria do formato de gravacao mostrou que a ARQUITETURA do casamento ja'
+  existe: cada evento do `*_eventos.json` traz `sample_index` (indice 0-based
+  da linha do EEG) E `monotonic_s` (time.monotonic do mesmo instante), e o
+  `*_movimento.csv` (30 Hz) traz `t_mono_s` por linha. Duas ancoras bastam
+  para mapear qualquer timestamp de camera/IMU em sample_index.
+
+FERRAMENTA NOVA: tools/casamento_eeg_groundtruth.py
+  - mono_para_sample_index(ts_mono, ancoras): interpolacao mono -> sample_index
+    com clamp fora da ancora (o movimento comeca/termina um pouco fora do
+    primeiro/ultimo evento).
+  - ancora_dos_eventos / marcadores_do_csv: extrai ancoras e a 1a amostra de
+    cada codigo da coluna Marker.
+  - diagnostico(prefixo): imprime, por sessao, FS da coluna `Time` do CSV,
+    ancoras mono<->sample_index, casamento Marker x codigos do JSON e faixa
+    do movimento dentro da ancora (com o sample_index equivalente).
+
+MEDIDO NAS GRAVACOES REAIS (16/10/2026):
+  - Sessao completa gravacao_MEMI_20261016_153213: 73456 amostras, passo EXATO
+    2.0000 ms (500.0 Hz) na coluna `Time`; 70 ancoras; 1086/1134 linhas de
+    movimento (95,8%) dentro da ancora -> CASAMENTO SIM (cada linha de
+    movimento vira (sample_index, valor)).
+  - ACHADO IMPORTANTE: a ancora (486,26 Hz) diverge do `Time` (500,0 Hz
+    nominais) em -27.489 ppm. NAO usar a ancora para estimar FS -- ela mede o
+    jitter de escrita do pipeline g.Pype, nao a taxa do ADC. Quem dita o FS e'
+    a propria coluna `Time`; a ancora serve para POSICAO (mono -> sample).
+    Consequencia: derivar sample_index por fs fixa (500) ERRARIA; usar as
+    ancoras ACERTA.
+  - Sessao interrompida gravacao_MEMI_20261016_160626 (link caiu): o JSON
+    nasceu com o nome PEDIDO (`..._160626_eventos.json`, sem o timestamp do
+    CSV) porque a sessao abortou antes do _align_event_json -- a ferramenta
+    acha os DOIS formatos. As 2 unicas ancoras sao o 899 (link perdido) e o
+    898 (recuperado) coladas no link morto -> FS ancora 16,8 Hz, absurdo.
+    Instrumentado: quando as ancoras cobrem < 50% das amostras, o relatorio
+    AVISA que o mapeamento so' vale entre as ancoras (link perdido / sessao
+    curta).
+
+TESTE NOVO: test_casamento_eeg.py (8 casos)
+  interpolacao + clamp + exigir 2 ancoras, ancoras ordenadas/ignorando campos
+  faltantes + formato legado `t_mono_s`, marcadores (1a amostra, filtro,
+  codigo 0 ignorado) e INTEGRACAO com os arquivos reais de gravacoes/ (acha a
+  sessao valida mais recente, roda o diagnostico e confere o veredito).
+  Falha capturada durante o desenvolvimento: a 1a versao do teste pegava a
+  sessao MAIS RECENTE, que era a interrompida (sem JSON alinhado) -- corrigido
+  para so' aceitar sessao com eventos.json, e a ferramenta passou a aceitar o
+  JSON nao-alinhado de sessao interrompida.
+
+VALIDACAO
+  - test_casamento_eeg.py 8/8; suite COMPLETA 49/49 (47 antigas + 2 novas).
+  - Nenhum arquivo de producao tocado (eeg_motor_paradigm.py intacto; so'
+    tools/ + teste novos) -- o Cline nao precisa ser avisado.
+
+PROXIMO
+  - Com o capacete: rodar o trial real e usar esta ferramenta para conferir o
+    casamento EEG x groundtruth daquela sessao (checklist do item 65).
+  - O casamento do OVERLAY (overlay_deviation_log.csv) usa timestamps de
+    camera; falta casar o relogio dessas linhas com o `t_mono_s` (mesma ponte
+    das ancoras) -- pendente quando houver um log de overlay gravado na mesma
+    sessao que o EEG.
+
+================================================================================
+REGRAS DE OPERACAO DO AGENTE (definidas com o usuario, 16/10/2026) - VALEM
+PARA SEMPRE neste projeto
+================================================================================
+  1. NENHUMA ferramenta pode ser chamada mais de 3x seguidas com o MESMO
+     objetivo; na 3a falha, PARAR e perguntar ao usuario (nao insistir).
+  2. DELEGAR subagentes sempre que possivel, para o modelo mais economico
+     MIMO v2.6 flash. Trabalho pesado/exploracao vai para subagente.
+  3. Objetivo final (goal) tem max_goal_rounds = 5.
+  4. Arquivo travado/editado por outra sessao: NAO insistir em edit/grep --
+     trocar de metodo (append via script, arquivo temporario, etc.).
+  Motivo: nesta sessao um edit que falhou por "file changed" virou um loop de
+  grep que gastou horas; estas regras existem para que isso NUNCA se repita.
+
+================================================================================
 ITEM 70 (16/10/2026) - PAINEL DE IMPEDANCIA QUE NUNCA APARECIA: 3 defeitos
     encadeados (chave de uso, medida com stream ligado, ordem do start)
 ================================================================================
@@ -4765,3 +4848,101 @@ VALIDACAO: py_compile OK; 12/12 suites (as 6 do tool + 6 so de imu/firmware/
   bridge) verdes. Relance PID 11532: 28 linhas em 20 s (antes 218 em minutos),
   lateralidade 4 (so' transicoes reais de estado), gate-tri 0, status 2 com
   55 Hz / 55 Hz medido.
+
+================================================================================
+ITEM 76 (19/10/2026) - DIAGNOSTICO DA PALMA: log do erro contra 4 poses
+    programadas (tecla D) + analisador offline com REFIT do modelo
+================================================================================
+CONTEXTO (de onde veio: item 74)
+  A seta da palma continuava ruim e o item 74 so' provou que a tecla O nao
+  chegava ao tool (foco). O erro ao vivo (`palm_err_deg` = angulo entre a normal
+  do Kinect `v_i` e a previsao `T R_i f`) diz QUE esta' errado, nunca POR QUE.
+  Faltava medir contra poses CONHECIDAS e repetiveis.
+
+IMPLEMENTADO (tools/kinect_groundtruth_tool.py, ~+540 linhas, tecla D)
+  - 4 fases programadas (21 s), instrucao no terminal e NO VIDEO (rodape, texto
+    grande -- a janela do Kinect e' a que precisa de FOCO pro waitKey):
+    PREPARO 3 s (palmas para o Kinect, parado), MESA 6 s (palmas apoiadas na
+    mesa, dorso para o Kinect), REZANDO 6 s (maos juntas, palmas uma contra a
+    outra), KINECT 6 s (palmas abertas para o Kinect = pose da tecla O).
+  - `DiagnosticoPalma` grava palm_diag_<data>_<hora>.csv, 1 linha por
+    (frame, lado) a 20 Hz, 20 colunas: rpy do IMU, normal do KINECT
+    (nx,ny,nz = a verdade), previsao COM alinhamento (prev_* = T R f, a seta),
+    previsao SEM alinhamento (raw_* = R f, T=identidade) e os dois erros
+    (err_deg, err_raw_deg) + flag `alinhado`.
+  - `_meta.json`: fases/instrucoes, settle, limite e, por lado, o
+    `palm_alignment_state()` + nome/mtime do imu_palm_alignment_<lado>.json
+    (pega "arquivo de OUTRA sessao/luva" -- modo de falha do item 74).
+  - Settle de 1.5 s por fase: as amostras de transicao ficam no CSV mas FORA
+    do resumo (a mao ainda esta' chegando na pose).
+  - Fim (21 s, ou D de novo, ou ESC): `*.csv_resumo.txt` + tabela por
+    (fase,lado) n/media/mediana/std/p90/min/max e VEREDITO por lado:
+    * as 3 poses <= 15 graus -> "ALINHAMENTO OK nas 3 poses programadas";
+    * so' KINECT fecha e MESA/REZANDO estouram -> o alinhamento "DECORA" a pose
+      da tecla O (captura quase parada ou sempre na mesma orientacao);
+    * nem KINECT fecha -> enquadramento/profundidade, luva trocada
+      (--imu-portas) ou normal do Kinect ruidosa;
+    * erro SEM alinhamento <= erro COM + 2 -> o alinhamento NAO esta' sendo
+      aplicado (sem JSON / bootstrap de 1 amostra) -- era a suspeita do item 74.
+  - Robustez: flush por linha (da' para ler o CSV com o diagnostico rodando),
+    finally fecha tudo (nunca deixa arquivo aberto), FINALIZA (nao descarta) na
+    saida por ESC; iniciar() nao sobrescreve arquivo de outra sessao no mesmo
+    segundo. Tecla D nao colide com as existentes (C/B/O/R/H/K/L/P/T/ESPACO).
+
+ANALISADOR OFFLINE NOVO: tools/analisa_diag_palma.py (584 linhas)
+  `python tools\analisa_diag_palma.py [palm_diag_*.csv]` (sem arg = mais
+  recente). So' stdlib+numpy+imu.py (SEM cv2/pykinect -- verificado por AST no
+  teste): tabela por fase/lado, checagem HEURISTICA de execucao das poses
+  (cluster da normal do Kinect x direcao esperada) e o REFIT: resolve
+  `v_i = T R_i f` SO' com o CSV (solve_palm_alignment) e compara vivo x refit
+  por fase. Limite CONHECIDO e documentado: um T errado CONSTANTE e' absorvido
+  pelo refit; o refit denuncia erro DEPENDENTE DA POSE (cresce com a rotacao).
+
+TESTE NOVO: test_diagnostico_palma.py (566 linhas, sem pytest) -- 4/4 grupos:
+  relogio injetado/fases/settle/cancelar/reinicio; registrar (20 colunas, 0/90
+  graus, alinhado 1/0); ponta a ponta sintetico com T/f verdadeiros (resumo e
+  refit <= 5 graus) E CSV corrompido com erro DEPENDENTE DA POSE (mediana 30 >
+  limite e residuo do refit 14.7 > 10 -> veredito "DECORA"); AST do analisador
+  sem cv2/pykinect.
+
+VALIDACAO (Lead + subagente; .venv\Scripts\python.exe, PYTHONIOENCODING=utf-8)
+  - py_compile OK (tool, analisador, teste).
+  - VERDES: test_diagnostico_palma 4/4, test_palm_alignment 8/8,
+    test_deteccao_cascata, test_janelas_grade 5/5, test_overlay_auxiliares 8/8,
+    test_lateralidade_maos.
+  - INTEGRACAO tool->analisador (smoke do Lead, temporarios apagados): CSV
+    gerado pela CLASSE de producao (DiagnosticoPalma + PositionFusion real,
+    T=I/f por lado, 420 linhas) -> analisador le', refita e sai 0; resumo
+    "ALINHAMENTO OK" e meta com residuo 0.0.
+  - NAO testado com hardware (sem Kinect/ESP32 aqui): o desenho do texto no
+    video e o enquadramento real so' valem na bancada.
+
+COORDENACAO COM A SESSAO PARALELA (Cline) -- ler antes de mexer no tool
+  - O Cline editou `imu.py` (+4: ImuReceiver.count para a taxa Hz do [status] do
+    tool) e commitou b9960de (item 75 DELE: [status] unico/anti-inundacao)
+    DURANTE este trabalho; esse commit ARRASTOU o estado PARCIAL do diagnostico
+    (constantes PALM_DIAG_*) por estar no mesmo working tree. O estado FINAL vai
+    neste commit; NADA do trabalho do Cline foi removido (marcas dele intactas).
+  - Por isso este item e' 76: o Cline ja' usou o 75.
+  - A tecla D grava em arquivos proprios; `--log-overlay` (CSV principal) segue
+    ortogonal.
+
+COMO USAR NA BANCADA (proximo passo do usuario)
+  1) Kinect entregando frame (se voltar a mudo: item 42/73 -- integridade M de
+     C:\mestradopy e Kinect Studio FECHADO).
+  2) `.venv\Scripts\python.exe tools\kinect_groundtruth_tool.py --log-overlay`
+  3) CLICAR no video do Kinect (foco do waitKey), apertar D, fazer as 4 poses
+     com as DUAS maos DENTRO do quadro; D de novo ou ESC no fim.
+  4) Ler palm_diag_*.csv_resumo.txt e rodar:
+     `.venv\Scripts\python.exe tools\analisa_diag_palma.py`
+  5) Interpretar: erro so' na KINECT -> T/f errados (refazer O); erro em
+     MESA/REZANDO com KINECT bom -> captura O "decorou" (refazer O girando a
+     mao); erro em tudo + erro_bruto igual -> alinhamento nao aplicado (JSON
+     ausente); residuo do refit alto -> normal do Kinect ruidosa/mao fora do
+     quadro/luva trocada.
+
+PROXIMO (depois do diagnostico)
+  Trial real com g.Nautilus + validacao dos 5 itens do item 65 (painel de
+  impedancia na preparacao, slides, pratica, KT_onset na ESQUERDA, mi_desenho)
+  e casamento groundtruth x EEG com tools/casamento_eeg_groundtruth.py.
+
