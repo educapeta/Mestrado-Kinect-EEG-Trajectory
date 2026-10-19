@@ -5415,3 +5415,84 @@ PROXIMO: usuario decide A x B; se A, passar a nota tecnica acima para o Cline;
 depois: O -> D de conferencia -> trial real + 5 itens do item 65 + casamento
 EEG x groundtruth.
 
+
+================================================================================
+ITEM 83 (19/10/2026) - FIRMWARE: YAW DO IMU CORRIGIDO -- atitude por QUATERNION
+    + Mahony 6 eixos nos DOIS firmwares (ESP32 v2 MPUs e luvas antigas)
+================================================================================
+DECISAO DO USUARIO: caminho A do item 82 (corrigir o firmware). firmware/ e'
+area do CLINE -- estas edicoes foram feitas COM AUTORIZACAO explicita do
+usuario e PRECISAM da revisao do Cline (o diff esta' em `git show`; a
+justificativa medidada esta nos itens 78/79/82). Nada mais de firmware/ foi
+tocado.
+
+BUG (medido, nao hipotese): os dois firmwares faziam
+    yawD += gz * dt;      // e o mesmo no lado esquerdo / na luva unica
+integrando o giroscopio no eixo Z do CORPO. Isso so' vale com o sensor
+nivelado. A taxa de yaw VERDADEIRA no referencial do mundo e'
+    yaw_dot = (gy*sin(roll) + gz*cos(roll)) / cos(pitch)
+e fica singular perto de pitch +-90 (as poses da bancada chegam a ~ -80). O
+erro acumulado depende do CAMINHO: no item 82 a MESMA pose fisica (PREPARO x
+KINECT) saiu com yaw diferente por 61 graus, o modelo `v = T R f` nao fechava
+(refit 37.9/28.6 graus) e a seta errava ate' 160. Com um offset de yaw POR FASE
+o residuo caia para 10.5/7.6 -- assinatura exata deste bug.
+
+CORRECAO IMPLEMENTADA
+  Classe `AttitudeMahony` (nos dois src/main.cpp, com o "por que" no codigo):
+  - atitude = QUATERNION q (corpo -> mundo), integrado com o giroscopio dos 3
+    eixos no referencial do CORPO (sem singularidade de Euler);
+      q += 0.5 * q (x) (0, w) * dt,  normalizado
+  - correcao de INCLINACAO pelo acelerometro (Mahony 6 eixos, Kp = 2 1/s):
+    erro = accel_medido x "para cima" previsto no corpo (R^T z), somado como
+    taxa; so' quando |a| ~ 1 g (movimento acelerado nao entra);
+  - roll/pitch/yaw SALEM do quaternion na convencao ZYX que o PC ja' usa
+    (imu.rotation_matrix = Rz(yaw) Ry(pitch) Rx(roll)); o yaw agora e' limitado
+    a +-180 por construcao (o PC aceita qualquer angulo);
+  - inicializacao com a inclinacao do acelerometro (sem transiente no boot);
+  - o Kalman antigo de roll/pitch e os filtros ficaram como referencia no
+    arquivo, SEM uso (a classe foi mantida documentando o historico).
+  Arquivos: firmware/esp32_duas_imus/src/main.cpp (atitudeD e atitudeE),
+  firmware/esp32_luvas/src/main.cpp (atitude); os dois READMEs ganharam a nota
+  "ATUALIZACAO 19/10/2026 (item 83)" porque a frase antiga sobre yaw ficou
+  obsoleta.
+
+VALIDACAO FEITA AQUI
+  - COMPILA: `pio run -d firmware/esp32_duas_imus -e esp32_duas_imus` SUCCESS
+    (RAM 13.9%, Flash 58.3%); `pio run -d firmware/esp32_luvas -e luva_direita
+    -e luva_esquerda` SUCCESS nos dois envs (Flash 58.1%).
+  - test_firmware_luvas.py 5/5 (portas/lado/pacote/unicast/README em sincronia).
+  - Validacao OFFLINE da correcao nos dados ja' gravados: reconstruindo o yaw
+    corrigido a partir de roll/pitch/gyro do CSV (20 Hz) o residuo do refit cai
+    so' 42.1->28.6 e 37.8->34.6 (direita). MOTIVO: o CSV do D e' limitado a
+    20 Hz (throttle do diagnostico) enquanto o firmware roda a ~55 Hz -- a
+    integracao do giro perde 2/3 das amostras, entao essa validacao offline e'
+    PESSIMISTA. A prova definitiva e' pos-flash (O + D), como abaixo.
+
+COMO GRAVAR (usuario; precisa do BOOT)
+  Bancada atual (1 ESP32 + 2 MPU6050, UDP 4210/4211):
+      cd firmware\esp32_duas_imus
+      gravar.bat COMx        (segure o BOOT durante "Connecting..."; ao final
+                              desligue/religue o USB da placa)
+  Luvas antigas (1 ESP32 por mao):
+      gravar_direita.bat COMx   e   gravar_esquerda.bat COMx
+  Conferir os IMUs (opcional): .venv\Scripts\python.exe tools\diagnostico_imu_serial.py COMx 115200 15
+
+DEPOIS DE GRAVAR (roteiro de validacao; eu analiso os arquivos)
+  1) REINICIAR o tool (ele recarrega tudo do zero). Confirmar no [status]
+     "IMU R 5x Hz | L 5x Hz".
+  2) Os imu_palm_alignment_*.json ESTAO OBSOLETOS (foram ajustados ao yaw
+     antigo): refazer a tecla O UMA vez (14 s, girando a mao em varias
+     direcoes). Esperado: residuo <= ~8 graus (era 11.8/9.6 com dados ruins).
+  3) Rodar a tecla D (21 s, maos sem se encostarem).
+  4) Eu analiso com tools/analisa_diag_palma.py. ALVOS:
+       - refit: <= 15 graus (era 37.9/28.6 no direito/esquerdo);
+       - consistencia PREPARO x KINECT: IMU ~ Kinect (era 18/17 x 3/9);
+       - teste de yaw por fase: offsets ~0 (era +84/+108/-44/+72);
+       - erro ao vivo da palma: <= ~10 graus.
+  5) Se o refit ainda passar de 15: primeiro olhar o log/imagens (pose,
+     enquadramento, oclusao); depois ajustar KP (2 -> 4) ou adicionar termo
+     integral (Ki) -- a rampa e' rapida.
+
+PENDENCIA: Cline revisar o diff de firmware/ (git show <commit> -- firmware/)
+  e, se quiser, ajustar KP/Ki. A logica/diagnostico esta nos itens 78-83.
+

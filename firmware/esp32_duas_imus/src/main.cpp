@@ -78,11 +78,118 @@ class KalmanAngle {
   const float measurementNoise = 0.03f;
 };
 
+// ==================== ATITUDE: quaternion + Mahony (item 83) ==========
+// POR QUE ESTA CLASSE: a versao antiga fazia `yaw += gz*dt`, integrando o
+// giroscopio no eixo Z do CORPO -- so' vale com o sensor NIVELADO. Com a mao
+// inclinada (a bancada chega a pitch ~ -80 graus) a taxa de yaw verdadeira e'
+//   yaw_dot = (gy*sin(roll) + gz*cos(roll)) / cos(pitch)
+// (usa os 3 eixos; fica singular perto de pitch +-90). O erro acumulado
+// depende do CAMINHO: medido em 19/10/2026, a MESMA pose fisica no comeco e no
+// fim da sessao saia com yaw diferente por 61 graus, o modelo `v = T R f` nao
+// fechava (residuo 38 graus) e a seta da palma errava ate' 160 graus.
+// Aqui a rotacao e' integrada como QUATERNION no referencial do CORPO (sem
+// singularidade) e a inclinacao e' corrigida pelo acelerometro (Mahony 6
+// eixos). roll/pitch/yaw saem do quaternion na convencao ZYX que o PC ja' usa
+// (imu.rotation_matrix = Rz(yaw) Ry(pitch) Rx(roll)).
+class AttitudeMahony {
+ public:
+  bool iniciada = false;
+
+  /** Arranca com a inclinacao do acelerometro (sem transiente de ~1 s). */
+  void iniciar(float ax, float ay, float az) {
+    float norma = sqrtf(ax * ax + ay * ay + az * az);
+    if (norma > 0.1f) {
+      ax /= norma;
+      ay /= norma;
+      az /= norma;
+    } else {
+      ax = 0.0f;
+      ay = 0.0f;
+      az = 1.0f;
+    }
+    // MESMAS formulas do firmware antigo para o roll/pitch iniciais:
+    float roll = atan2f(ay, az);
+    float pitch = atan2f(-ax, sqrtf(ay * ay + az * az));
+    float cr = cosf(roll * 0.5f), sr = sinf(roll * 0.5f);
+    float cp = cosf(pitch * 0.5f), sp = sinf(pitch * 0.5f);
+    q[0] = cr * cp;    // w
+    q[1] = sr * cp;    // x
+    q[2] = cr * sp;    // y
+    q[3] = -sr * sp;   // z
+    iniciada = true;
+  }
+
+  void update(float gx_dps, float gy_dps, float gz_dps, float ax, float ay,
+              float az, float dt) {
+    if (!(dt > 0.0f) || dt > 0.1f) return;
+    if (!iniciada) iniciar(ax, ay, az);
+    // taxa angular do CORPO em rad/s
+    float wx = gx_dps * (PI / 180.0f);
+    float wy = gy_dps * (PI / 180.0f);
+    float wz = gz_dps * (PI / 180.0f);
+    // correcao de inclinacao: so' quando |a| ~ 1 g (sem aceleracao linear)
+    float norma = sqrtf(ax * ax + ay * ay + az * az);
+    if (norma > 0.5f && norma < 1.5f) {
+      ax /= norma;
+      ay /= norma;
+      az /= norma;
+      float ux, uy, uz;
+      cima_prevista(&ux, &uy, &uz);
+      const float KP = 2.0f;  // 1/s: fecha o tilt em ~1 s
+      wx += KP * (ay * uz - az * uy);
+      wy += KP * (az * ux - ax * uz);
+      wz += KP * (ax * uy - ay * ux);
+    }
+    // q <- q + 0.5 * q (x) (0, omega) * dt   (omega no referencial do corpo)
+    float qw = q[0], qx = q[1], qy = q[2], qz = q[3];
+    float metade = 0.5f * dt;
+    q[0] += metade * (-qx * wx - qy * wy - qz * wz);
+    q[1] += metade * (qw * wx + qy * wz - qz * wy);
+    q[2] += metade * (qw * wy + qz * wx - qx * wz);
+    q[3] += metade * (qw * wz + qx * wy - qy * wx);
+    float norma_q =
+        sqrtf(q[0] * q[0] + q[1] * q[1] + q[2] * q[2] + q[3] * q[3]);
+    if (norma_q > 0.0f) {
+      q[0] /= norma_q;
+      q[1] /= norma_q;
+      q[2] /= norma_q;
+      q[3] /= norma_q;
+    }
+  }
+
+  /** roll/pitch/yaw (graus) na convencao ZYX: R = Rz(yaw) Ry(pitch) Rx(roll). */
+  void to_euler_zyx_deg(float &roll, float &pitch, float &yaw) const {
+    float w = q[0], x = q[1], y = q[2], z = q[3];
+    float r00 = 1.0f - 2.0f * (y * y + z * z);
+    float r10 = 2.0f * (x * y + w * z);
+    float r20 = 2.0f * (x * z - w * y);
+    float r21 = 2.0f * (y * z + w * x);
+    float r22 = 1.0f - 2.0f * (x * x + y * y);
+    float seno_pitch = -r20;
+    if (seno_pitch > 1.0f) seno_pitch = 1.0f;
+    if (seno_pitch < -1.0f) seno_pitch = -1.0f;
+    pitch = asinf(seno_pitch) * (180.0f / PI);
+    roll = atan2f(r21, r22) * (180.0f / PI);
+    yaw = atan2f(r10, r00) * (180.0f / PI);
+  }
+
+ private:
+  float q[4] = {1.0f, 0.0f, 0.0f, 0.0f};
+
+  /** R^T * (0,0,1): direcao "para cima" do mundo expressa NO CORPO. */
+  void cima_prevista(float *ux, float *uy, float *uz) const {
+    float w = q[0], x = q[1], y = q[2], z = q[3];
+    *ux = 2.0f * (x * z - w * y);
+    *uy = 2.0f * (y * z + w * x);
+    *uz = 1.0f - 2.0f * (x * x + y * y);
+  }
+};
 // ==================== VARIAVEIS GLOBAIS ==============================
 // Bias e filtro SEPARADOS para cada MPU (cada sensor tem o seu relogio e o seu
 // viés; misturar contaminaria o outro lado).
-KalmanAngle rollFilterD, pitchFilterD;   // MPU direito (0x68)
-KalmanAngle rollFilterE, pitchFilterE;   // MPU esquerdo (0x69)
+// Os filtros de Kalman de angulo NAO sao mais usados para a atitude: quem
+// integra agora e' o AttitudeMahony (acima), que tambem da' o yaw (o Kalman
+// antigo nao conseguia: ver item 83). A classe ficou como referencia/historico.
 float gyroBiasDx = 0.0f, gyroBiasDy = 0.0f, gyroBiasDz = 0.0f;
 float gyroBiasEx = 0.0f, gyroBiasEy = 0.0f, gyroBiasEz = 0.0f;
 uint32_t previousMicrosD = 0;
@@ -302,12 +409,12 @@ void loop() {
       if (dt > 0.0f && dt <= 0.1f) {
         float ax = rawAx / 16384.0f, ay = rawAy / 16384.0f, az = rawAz / 16384.0f;
         float gx = rawGx / 131.0f - gyroBiasDx, gy = rawGy / 131.0f - gyroBiasDy, gz = rawGz / 131.0f - gyroBiasDz;
-        float accelRoll = atan2f(ay, az) * 180.0f / PI;
-        float accelPitch = atan2f(-ax, sqrtf(ay * ay + az * az)) * 180.0f / PI;
-        float roll = rollFilterD.update(accelRoll, gx, dt);
-        float pitch = pitchFilterD.update(accelPitch, gy, dt);
-        static float yawD = 0.0f;
-        yawD += gz * dt;
+        // ATITUDE propria (quaternion + Mahony 6 eixos): substitui
+        // `yaw += gz*dt` e o Kalman de roll/pitch -- ver item 83 e a classe.
+        static AttitudeMahony atitudeD;
+        atitudeD.update(gx, gy, gz, ax, ay, az, dt);
+        float roll, pitch, yawD;
+        atitudeD.to_euler_zyx_deg(roll, pitch, yawD);
         uint32_t sampleTimestampUs = micros();
         char packet[180];
         snprintf(packet, sizeof(packet), "%lu,%.2f,%.2f,%.2f,%.6f,%.6f,%.6f,%.4f,%.4f,%.4f\n",
@@ -340,12 +447,12 @@ void loop() {
       if (dt > 0.0f && dt <= 0.1f) {
         float ax = rawAx / 16384.0f, ay = rawAy / 16384.0f, az = rawAz / 16384.0f;
         float gx = rawGx / 131.0f - gyroBiasEx, gy = rawGy / 131.0f - gyroBiasEy, gz = rawGz / 131.0f - gyroBiasEz;
-        float accelRoll = atan2f(ay, az) * 180.0f / PI;
-        float accelPitch = atan2f(-ax, sqrtf(ay * ay + az * az)) * 180.0f / PI;
-        float roll = rollFilterE.update(accelRoll, gx, dt);
-        float pitch = pitchFilterE.update(accelPitch, gy, dt);
-        static float yawE = 0.0f;
-        yawE += gz * dt;
+        // ATITUDE propria (quaternion + Mahony 6 eixos) -- mesmo filtro do
+        // lado direito, com o SEU proprio estado (item 83).
+        static AttitudeMahony atitudeE;
+        atitudeE.update(gx, gy, gz, ax, ay, az, dt);
+        float roll, pitch, yawE;
+        atitudeE.to_euler_zyx_deg(roll, pitch, yawE);
         uint32_t sampleTimestampUs = micros();
         char packet[180];
         snprintf(packet, sizeof(packet), "%lu,%.2f,%.2f,%.2f,%.6f,%.6f,%.6f,%.4f,%.4f,%.4f\n",

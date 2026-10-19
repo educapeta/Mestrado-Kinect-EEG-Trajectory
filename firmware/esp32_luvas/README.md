@@ -177,3 +177,23 @@ gravar_esquerda.bat         idem, para a luva esquerda
 unicast                     nota de bancada: SSID do hotspot + IP do notebook
 include/ lib/ test/         pastas padrão do PlatformIO (vazias)
 ```
+
+---
+
+## ATUALIZACAO 19/10/2026 (item 83 do HISTORICO) - ATITUDE (roll/pitch/yaw)
+
+A frase acima sobre `yaw` **so' giroscopio / acumula drift** ficou OBSOLETA. O
+que o firmware fazia era pior que drift: `yaw += gz*dt` integrava o giroscopio
+no eixo Z do **CORPO**, o que so' vale com o sensor nivelado. Medido na bancada
+(19/10/2026): com a mao inclinada o erro dependia do CAMINHO -- a MESMA pose
+fisica no comeco e no fim da sessao saia com yaw diferente por 61 graus, o
+modelo `v = T R f` da luva nao fechava (residuo 38 graus) e a seta da palma
+errava ate' 160 graus.
+
+Agora a atitude e' estimada por **quaternion + Mahony 6 eixos** (classe
+`AttitudeMahony` no `src/main.cpp`): o giroscopio e' integrado no referencial do
+CORPO (sem singularidade) e a inclinacao e' corrigida pelo acelerometro;
+`roll`/`pitch`/`yaw` saem do proprio quaternion na convencao ZYX que o PC ja'
+usa (`imu.rotation_matrix` = Rz(yaw) Ry(pitch) Rx(roll)). O `yaw` continua sem
+referencia ABSOLUTA (nao ha' magnetometro): pode derivar lentamente, mas agora
+e' CONSISTENTE entre poses -- que e' o que a calibracao da palma precisa.
