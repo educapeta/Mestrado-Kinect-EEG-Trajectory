@@ -163,9 +163,41 @@ try:
     assert estado.impedance_values is not None, "a medida nao foi publicada"
     assert "99.0" in estado.impedance_text, estado.impedance_text
 
+    # 4c) ITEM 70: no fluxo NORMAL a thread NAO e' iniciada (medida
+    #     sincrona via medir_agora antes do pipeline.start), mas o
+    #     on_session_start (ESPACO) e o finally do main ainda chamam
+    #     stop() -- join() de thread nunca iniciada levantava RuntimeError
+    #     no primeiro ESPACO da sessao (medido em 19/10).
+    monitor_nunca = p.ImpedanceMonitor(None, p.SharedState(), period=0.01)
+    assert not monitor_nunca.is_alive()
+    monitor_nunca.stop()                   # nao pode levantar
+    monitor_nunca.stop()                   # idempotente sem start tambem
+
+    # 4d) medir_agora (item 70): a janela e' ANTES do pipeline.start()
+    #     (aparelho aberto, stream parado) e publica um snapshot.
+    ap2 = AparelhoFake()
+    est2 = p.SharedState()
+    mon2 = p.ImpedanceMonitor(ap2, est2, limite_kohm=50.0, period=0.01)
+    assert mon2.medir_agora(tentativas=2, pausa_s=0.01) is True
+    assert est2.impedance_values is not None, "o snapshot nao foi publicado"
+    assert "99.0" in est2.impedance_text, est2.impedance_text
+
+    # Se o aparelho falha SEMPRE, medir_agora publica o erro REAL (nao
+    # deixa a tela em "(medindo impedancias...)") e devolve False.
+    class Pifado:
+        def get_impedance(self, _primeira):
+            raise RuntimeError("Data acquisition is running.")
+
+    est3 = p.SharedState()
+    mon3 = p.ImpedanceMonitor(Pifado(), est3, limite_kohm=50.0, period=0.01)
+    assert mon3.medir_agora(tentativas=2, pausa_s=0.01) is False
+    assert "Data acquisition is running." in est3.impedance_text, \
+        est3.impedance_text
+
 finally:
     shutil.rmtree(pasta, ignore_errors=True)
 
 print("PARADA_THREADS_OK: 5/5 grupos (nomes internos do Thread livres, "
-      "MotionRecorder, LinkWatchdog, ImpedanceMonitor e stop idempotente)")
+      "MotionRecorder, LinkWatchdog, ImpedanceMonitor [thread sem start, "
+      "medir_agora] e stop idempotente)")
 sys.exit(0)

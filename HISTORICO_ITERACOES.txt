@@ -4465,3 +4465,114 @@ sem aparelho direto nem API do g.Pype)".
   APARECER com "-10" em tudo, nao sumir. O conserto garante isso.
   Validacao: py_compile + test_trial_feedback (novo bloco 5),
   parada_threads 5/5, protocol 11/11, gtec_runtime 9/9, melhorias.
+
+
+ITEM 70 (16/10/2026) - PAINEL DE IMPEDANCIA QUE NUNCA APARECIA: 3 defeitos
+    encadeados (chave de uso, medida com stream ligado, ordem do start)
+================================================================================
+CONTEXTO
+  Seguindo o que o Cline deixou em aberto (commit ff47019) sobre o painel de
+  impedancias do eeg_motor_paradigm que nao aparecia na tela de PREPARACAO.
+  Hardware: g.Nautilus LIGADO, capacete FORA da cabeca (esperado: valores
+  -10/altos e "0/32 BONS"; a meta era ver o painel MEDINDO, nao "TODOS OK").
+  O PID antigo (13680) que segurava o aparelho em modo exclusivo JA' NAO
+  existia mais -- o bloqueio de sessao antiga estava resolvido.
+
+CAUSA-RAIZ (3 defeitos ENCADEADOS, provados com o probe ao vivo):
+  1) CHAVE DE USO LOCAL: `gds.GNautilus(...)` chama `GDS._check_key()` no
+     __init__ e levanta `KeyError: 'Invalid usage.'` se a chave de uso nao
+     estiver registrada -- ANTES de qualquer get_impedance. O gpype registra
+     antes de abrir (`gpype/backend/sources/g_nautilus.py:137-138`
+     `driver_usage.register()`). O `tools/probe_impedancia.py` abria o
+     aparelho DIRETO e morria no _check_key -- o probe nunca chegava a medir.
+     FIX: chamar `driver_usage.register()` antes de abrir (mesmo caminho do
+     gpype), com fallback que avisa se o registro nao existir.
+  2) MEDIDA COM STREAM LIGADO: com a chave registrada o aparelho ABRE
+     (serial=NR-2018.10.53, 32 canais, fs=500) e o `get_impedance` FUNCIONA
+     PARADO (OK: 32 canais, -10 = nao-medido com capacete fora). MAS com o
+     stream ligado levanta `GDSError: Data acquisition is running.` -- ou
+     seja, o g.Nautilus so' mede impedancia com o stream PARADO. Confirmado
+     nos dois estados do probe (parado OK / transmitindo FALHA).
+  3) ORDEM ERRADA NO `main()`: `pipeline.start()` (ligava o stream) vinha
+     ANTES de `impedance_monitor.start()` -- entao o painel tentava medir
+     sempre com o stream ligado, caia no erro 2 e virava "(falha na medicao:
+     Data acquisition is running.)" para sempre. Era ISSO que fazia o painel
+     nunca aparecer: ele nunca teve a janela certa para medir.
+
+FIX APLICADO (eeg_motor_paradigm.py):
+  - Novo `ImpedanceMonitor.medir_agora(tentativas=4)`: medida SINCRONA antes
+    do `pipeline.start()` (aparelho ja' aberto, stream ainda parado = janela
+    certa), publica o snapshot para a tela de preparacao e, se nada der certo,
+    publica o erro REAL em vez de deixar "(medindo impedancias...)".
+  - `main()`: `impedance_monitor.medir_agora()` ANTES de `pipeline.start()`;
+    o `impedance_monitor.start()` (thread) foi removido do fluxo normal --
+    medir continuamente com o stream rodando e' impossivel neste aparelho.
+    O `run()` permanece disponivel mas nao e' iniciado. O `on_session_start`
+    ainda chama `.stop()` (inofensivo; a thread nem comeca).
+  - `tools/probe_impedancia.py`: registra a chave de uso antes de abrir.
+
+VALIDACAO (sem hardware novo; o g.Nautilus foi desconectado no fim):
+  - probe ao vivo COM g.Nautilus: abriu, mediu 32 canais PARADO (-10 esperado
+    com capacete fora) e provou o "Data acquisition is running." TRANSMITINDO
+    -- as tres causas medidas, nao hipotetizadas.
+  - py_compile OK (paradigma + probe).
+  - test_trial_feedback.py e test_parada_threads.py: verdes (contrato do
+    ImpedanceMonitor: thread sai sozinha; transitÃ³rio re-tenta; resolve_device
+    acha o aparelho no core do chain; 3 leituras publicadas).
+  - SUITE COMPLETA: 49/49 verde (47 antigas + 2 do item 69).
+
+ARMADILHAS RESPEITADAS (do aviso do Cline):
+  - Nao transformei falha transitoria em permanente (o retry do CRC continua).
+  - Contrato de test_parada_threads preservado (sem aparelho a thread sai).
+  - Nao toquei no texto dos slides (_paint_text/_ajusta_tamanho_fonte).
+  - Item 69 (casamento EEG) deste arquivo + test_casamento_eeg.py +
+    tools/casamento_eeg_groundtruth.py seguem como estavam (outra sessao).
+
+PROXIMO (precisa hardware; com o g.Nautilus religado):
+  - Rodar `eeg_motor_paradigm.py --source gnautilus` e confirmar na tela de
+    PREPARACAO a TABELA de impedancias + veredito "ELETRODOS: N/32 BONS" em
+    vez de "(medindo...)/(indisponivel...)" -- com capacete fora, "0/32 BONS"
+    com valores -10/altos e' o ESPERADO e prova que o painel mede.
+  - Se ainda falhar: `python tools/probe_impedancia.py` e ler o erro real nos
+    estados parado/transmitindo (o probe agora registra a chave sozinho).
+
+ITEM 71 (19/10/2026) - PROBE v2 + BUG do stop() achado na REVISAO do fix 70
+
+SINTOMA (usuario): o probe v1 falhou "No g.Nautilus devices found." com o
+  aparelho LIGADO, sendo que a propria ConnectedDevices() uma linha antes
+  o enxergava (em_uso=False).
+DIAGNOSE:
+  - Enquanto o paradigma (PID antigo) ainda estava de pe', o discovery do
+    GDS se mostrou contestavel; com TUDO fechado o probe v2 enumera 5/5
+    FIRME e o aparelho ABRE NA PRIMEIRA tentativa (serial=NR-2018.10.53,
+    32 canais, fs=500). Fechar o paradigma antes do probe e' obrigatorio.
+  - tools/probe_impedancia.py v2: enumera 5x seguidas (flutuacao fica
+    visivel), chama GDS._check_key() e enumera de novo (ordem IDENTICA ao
+    __init__), re-tenta abrir 4x re-enumerando apos CADA falha e, se nada
+    abrir, lista os processos python/gds/recorder do sistema. Rodada ao
+    vivo em 19/10: PARADO mediu 32x -10 (nao-medido, capacete fora =
+    esperado) e TRANSMITINDO provou "GDSError: Data acquisition is
+    running." -- as mesmas causas do item 70, confirmadas de novo.
+  - REVISAO do diff do item 70 achou um BUG: o fluxo normal NAO inicia
+    mais a thread do ImpedanceMonitor, mas o on_session_start (ESPACO do
+    experimentador) e o finally do main ainda chamam stop() -> join() de
+    thread NUNCA INICIADA = RuntimeError "cannot join thread before it is
+    started" no PRIMEIRO ESPACO da sessao (medido ao vivo em 19/10).
+FIX (eeg_motor_paradigm.py): guard `if self.is_alive(): self.join(...)`
+  no stop() -- nunca-iniciada ou ja' encerrada pula o join; viva junta
+  normalmente (contrato antigo preservado).
+TESTE (test_parada_threads): +4c stop em thread nunca iniciada (e
+  idempotente); +4d contrato do medir_agora (aparelho bom -> True +
+  snapshot publicado; aparelho que falha SEMPRE -> False + o erro REAL
+  "Data acquisition is running." na tela, nunca "(medindo impedancias...)").
+VALIDACAO: py_compile 0; snippet stop-uniniciado OK; test_parada_threads
+  5/5; test_trial_feedback OK; SUITE COMPLETA 49/49 (0 falhas); probe v2
+  ao vivo com g.Nautilus (abriu na 1a; parado mediu; transmitindo provou o
+  erro de estado).
+PENDENTE (hardware): rodar `eeg_motor_paradigm.py --source gnautilus` com
+  o g.Nautilus religado e confirmar na PREPARACAO a TABELA + veredito
+  "ELETRODOS: N/32 BONS" (com capacete fora, 0/32 com -10 e' o esperado).
+  NOTA de uso: o painel mostra um SNAPSHOT medido ANTES do pipeline.start;
+  para recalcular com o capacete ja' ajustado, reinicie o paradigma (medir
+  ao vivo com o stream ligado e' impossivel nesta API -- item 70).
+

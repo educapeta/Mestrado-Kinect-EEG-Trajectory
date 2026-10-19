@@ -3713,7 +3713,44 @@ class ImpedanceMonitor(threading.Thread):
 
     def stop(self):
         self._stop_event.set()
-        self.join(timeout=2.5)
+        # `join()` de uma thread NUNCA INICIADA levanta RuntimeError
+        # ("cannot join thread before it is started"). Desde o item 70 o
+        # fluxo normal NAO inicia esta thread (medida SINCRONA pelo
+        # `medir_agora` antes do pipeline.start), mas o `on_session_start`
+        # (ESPACO do experimentador) e o `finally` do `main` ainda chamam
+        # stop() -- sem este guard o PRIMEIRO ESPACO da sessao quebrava
+        # (medido: join() em monitor recem-criado levanta RuntimeError).
+        if self.is_alive():
+            self.join(timeout=2.5)
+
+    def medir_agora(self, tentativas=4, pausa_s=0.6):
+        """Mede e publica a impedancia UMA vez, de forma SINCRONA.
+
+        Usado no `main` ANTES do `pipeline.start()`: o get_impedance do
+        g.Nautilus so' funciona com o stream parado (o probe mediu
+        "GDSError: Data acquisition is running." com o stream ligado). Aqui o
+        aparelho ja' esta' aberto e o stream ainda nao comecou -- a janela
+        certa. Tenta algumas vezes (o link sem fio pode dar CRC) e publica o
+        snapshot para a tela de preparacao; se nada der certo, publica o erro
+        real em vez de deixar o painel em "(medindo impedancias...)".
+        """
+        ultimo_erro = None
+        for _ in range(max(1, int(tentativas))):
+            if self._stop_event.is_set():
+                return False
+            try:
+                valores = self._medir()
+                self._state.set_impedance(valores,
+                                          _impedance_table(valores,
+                                                           self._limite))
+                return True
+            except Exception as exc:          # noqa: BLE001 - diagnostico
+                ultimo_erro = exc
+                self._primeiro = True
+                time.sleep(pausa_s)
+        self._state.set_impedance(
+            None, f"(falha na medicao: {ultimo_erro})")
+        return False
 
     def _medir(self):
         """Uma medida de impedancia, com caminho redundante.
@@ -4839,10 +4876,17 @@ def main():
     window.show()
     if panel is not None:
         panel.show()
+    # IMPEDANCIA ANTES do pipeline.start(): o get_impedance do g.Nautilus so'
+    # le com o stream PARADO (medido: "GDSError: Data acquisition is running."
+    # quando o device ja' esta' transmitindo -- tools/probe_impedancia.py).
+    # Antes o monitor era ligado DEPOIS do start() e cada medida caia nesse
+    # erro virando "(falha na medicao...)" para sempre: era isso que fazia o
+    # painel nunca aparecer. AQUI o aparelho ja' esta' aberto (build_source) e
+    # o stream ainda nao comecou -- a janela certa para medir.
+    if impedance_monitor is not None:
+        impedance_monitor.medir_agora(tentativas=4)
     pipeline.start()
     watchdog.start()
-    if impedance_monitor is not None:
-        impedance_monitor.start()
     motion_recorder = MotionRecorder(state, motion_name, hz=args.mov_hz,
                                      fs=args.fs)
     motion_recorder.start()
