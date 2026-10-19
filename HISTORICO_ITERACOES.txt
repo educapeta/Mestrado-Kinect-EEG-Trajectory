@@ -5708,3 +5708,36 @@ monitor, o problema e' o proprio botao/rotina de reset (ou o cabo de dados nao
 leva o pulso). Nesse caso: GPIO0 no GND + power-on resolve a entrada em
 download mode.
 
+
+================================================================================
+ITEM 88 (19/10/2026) - UPLOAD FINALMENTE OK (firmware do item 83 gravado) e a
+    placa ja' transmite o IMU NOVO a 56 Hz nos dois lados -- hora de validar
+================================================================================
+O usuario conseguiu gravar depois de varias tentativas ("que esquisito"). O
+metodo que funcionou deve ser registrado por ele (provavelmente o power-on com
+BOOT segurado / --sem-pulso, item 87; o pulso assistido e o BOOT+EN nao
+pegavam). O importante e' que NAO foi preciso mexer em driver nem reinstalar
+nada: era o download mode.
+
+VERIFICADO AGORA (depois do flash):
+  - hotspot/ICS ativo: 192.168.137.1 na "Conexao Local* 2";
+  - a placa transmite UDP nas DUAS portas: 4210 (direita) 56 pacotes/s e
+    4211 (esquerda) 56 pacotes/s --> firmware NOVO rodando (item 83), WiFi OK;
+  - serial/alimentacao/cabo estao bons (item 87).
+
+VALIDACAO PENDENTE (o que a correcao do yaw tem de entregar)
+  1) rodar o tool com o firmware novo e REFEZER a tecla O (os JSON de
+     alinhamento atuais foram ajustados ao yaw ANTIGO -- estao obsoletos):
+       .venv\Scripts\python.exe tools\kinect_groundtruth_tool.py --log-overlay
+     (sugestao para esta sessao: --aux-cameras 0 --escala-janelas 0.4 -> loop
+     ~22 fps em vez de ~12; a diagnostica da palma nao usa o par de auxiliares)
+  2) O: 14 s girando a mao devagar em varias direcoes, as DUAS maos no quadro;
+     ALVO: residuo <= ~8 graus por lado (era 11.8/9.6 com o yaw antigo);
+  3) D: 21 s, maos SEM se encostarem; depois eu analiso o palm_diag novo.
+ALVOS no D (comparar com o item 82):
+  - refit: <= 15 graus (era 37.9 direita / 28.6 esquerda);
+  - consistencia PREPARO x KINECT: IMU ~ Kinect (era 18/17 x 3/9);
+  - erro ao vivo da palma: <= ~10 graus (era 42-58 de mediana).
+Se o refit continuar > 15: ajustar Kp (2 -> 4) e/ou adicionar Ki ao
+AttitudeMahony (firmware, item 83) antes de culpar o resto.
+
