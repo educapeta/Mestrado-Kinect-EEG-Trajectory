@@ -5203,3 +5203,59 @@ PENDENCIAS / PROXIMO
      comparar o residuo com o do alinhamento do refit (o D agora e' mais
      confiavel para calibrar).
 
+
+================================================================================
+ITEM 80 (19/10/2026) - CALIBRACAO ESTEREO: ONDE ELA ENTRA NO ERRO (e onde NAO)
+================================================================================
+Pedido do usuario: "o stereo calibration das cameras nao esta' perfeito, ele
+acaba tambem contribuindo um pouco para o erro". Medido nos arquivos da bancada
+(19/10/2026) -- vale separar as DUAS cadeias:
+
+A) ANGULO DA PALMA (seta / tecla O / diagnostico): NAO usa o stereo.
+   O ponto 3D do landmark vem do RGB do KINECT (MediaPipe) + mapeamento
+   cor->depth do PROPRIO SDK (`MapColorFrameToDepthSpace`, calibracao de
+   fabrica) + depth. `stereo_calibration*.npz` nao entra em nada disso.
+   Prova de que a cadeia do Kinect esta' boa: a MESMA pose medida no inicio e
+   no fim (PREPARO x KINECT) da' a normal da mesma mao a 2-4 graus de distancia
+   (sessao 16:07:43). O erro residual 6-26 graus da seta vem do YAW DO IMU
+   (~33 graus/sessao, item 79), nao da calibracao.
+
+B) POSICAO / OVERLAY (par de auxiliares + Kinect): aqui o stereo entra.
+   Medido no overlay_deviation_log.csv da sessao 16:07 (2523 frames, 21 nos):
+     direita : desvio mediano 22 px | p90 30 | offset dx -1 / dy +22 px (PARADO)
+     esquerda: desvio mediano  9 px | p90 19 | offset dx -0 / dy +9  px
+   com a mao parada a ~1,5 m -- ~3 cm e ~1,3 cm de erro, e a componente e'
+   SISTEMATICA (dy positivo nos dois lados), nao ruido de deteccao.
+   Quando o gate da triangulacao ACEITA, o desvio cai para 4 px; 81% dos frames
+   do log foram pela triangulacao "crua" (reproj-crua: desvio 22 px direita /
+   9 px esquerda) -> o vies aparece justamente na via sem gate.
+
+ESTADO DOS ARQUIVOS (tools/diagnostico_calibracao.py + diagnostico_cameras.py)
+  camera 0 SIGMA-W780M  -> stereo_calibration.npz    RMS 0.85 px (pior pose 3.1) ACEITA
+  camera 1 Trust USB    -> stereo_calibration_aux1.npz RMS 1.03 px (pior pose 7.09) ACEITA
+  camera 2 (nao existe) -> stereo_calibration_aux2.npz REJEITADA: tabuleiro 5x3
+     != 7x5 atual e intrincsecas do Kinect re-estimadas (fx 1053.9 vs 1042.0,
+     k3 -1.79) -> 16.6 px de discordancia do modelo congelado; NAO e' usada hoje,
+     mas convem renomear para .bak para nao confundir sessao futura.
+  Modelo congelado do Kinect: kinect_intrinsics.npz RMS 0.67 px (13 poses) ACEITO.
+  O `diagnostico_calibracao` tambem avisa: usar Z de DEPTH do Kinect no overlay
+  custa caro (929 px/cm a 0,6 m, 12 px/cm a 1,0 m) -- o log mostra que o overlay
+  ja' usa triangulacao, entao o que sobra e' a qualidade da triangulacao/calib.
+
+COMO FECHAR (receita do proprio tool)
+  1. tecla T (diagnostico do tabuleiro) a 0,6 / 0,9 / 1,3 m: se > 25 px o modelo
+     e' suspeito; se a correspondencia dos cantos e' ruim, e' captura.
+  2. se o T mostrar SO' offset constante: tecla K (trim do overlay) resolve.
+  3. se o T acusar erro de modelo: 1) congelar o modelo do Kinect em arranjo
+     Kinect-only (freeze_kinect_direto.py ou stereo_calibration.py
+     --salvar-intrinsecas-kinect); 2) recalibrar CADA auxiliar contra o modelo
+     congelado (stereo_calibration.py, com a camera ativa); 3) validar com T;
+     4) so' depois trim K.
+  4. para o EXPERIMENTO: a verdade de POSICAO (trajetoria) deve usar a
+     triangulacao ACEITA (4 px) e nao a crua (22 px), e o CSV ja' tem a coluna
+     `hand_source` para separar; o ANGULO da palma segue Kinect-only (bom).
+
+PENDENTE (opcional): tools/analyze_overlay_log.py tem caminho de log
+HARDCODED de outra maquina (C:\Users\elgut\OneDrive\...) -- aceitar argv para
+virar ferramenta util de medicao de vies do overlay.
+
