@@ -4467,6 +4467,7 @@ sem aparelho direto nem API do g.Pype)".
   parada_threads 5/5, protocol 11/11, gtec_runtime 9/9, melhorias.
 
 
+================================================================================
 ITEM 70 (16/10/2026) - PAINEL DE IMPEDANCIA QUE NUNCA APARECIA: 3 defeitos
     encadeados (chave de uso, medida com stream ligado, ordem do start)
 ================================================================================
@@ -4634,3 +4635,95 @@ CORRECAO extra no teste alheio (mesma ponte): `teste_integracao_dados_reais`
   integracao e' fragil por depender da ULTIMA gravacao de gravacoes/
   ser "boa" -- sessao interrompida/logo apos quebra a suite.
 
+
+================================================================================
+ITEM 73 (19/10/2026) - VIDEO DE PRIMING SUMIU: nao era o paradigma, era o
+    Kinect MUDO (rotulo de integridade LOW revertido + Kinect Studio segurando)
+================================================================================
+SINTOMA
+  Na PRATICA do trial (bancada), a pausa "PAUSA+VIDEO" (ME x MI) nao mostrava o
+  video da pessoa se movendo: a CUE continuava na tela e a pausa parecia
+  instantanea. O groundtruth tool tambem nao mostrava o video do Kinect.
+
+CAUSA-RAIZ (medida, nao hipotese):
+  1) KINECT SEM FRAME: `tools/checa_kinect.py` -> "ABRIU mas NAO entregou frame
+     em 20 s". Sem frame, `_frame_buffer` vazio -> `_publish_slowmo` publica
+     `clipe=[]` -> `_video_tick` (if quadros:) nunca chama `show_video_frame` ->
+     canvas preso em mode="cue" -> a cue "continua na tela".
+  2) CAUSA PROFUNDA (mesma do item 42, publicada no GitHub): `C:\mestradopy`
+     com ROTULO DE INTEGRIDADE LOW (`Nivel Obrigatorio Baixo:(OI)(CI)(NW)`,
+     medido com icacls). Processo nasce LOW -> KinectService (MEDIA) nao
+     sinaliza callbacks de clientes LOW -> sem frame.
+  3) Agravante: KINECT STUDIO aberto TAMBEM segura o sensor.
+
+CONCERTOS:
+  - `icacls C:\mestradopy /setintegritylevel "(OI)(CI)M"` (elevado): rotulo
+    LOW -> MEDIO, medido antes/depois. Mesma solucao do item 42 (que reverteu
+    no item 43 -- conferir apos reinstalacoes).
+  - AVISO NA PAUSA: quando o clipe nao chega, mostra "VIDEO INDISPONIVEL (Kinect
+    sem frame)" em vez de cue parada. Patch em eeg_motor_paradigm.py: modo
+    "aviso" no _StimulusCanvas (show_video_aviso + paintEvent via _paint_text
+    reaproveitado) + `else` no `_video_tick` quando `quadros` vazio (50% da
+    pausa, UMA vez, flag _video_aviso_feito). Se o clipe chegar depois,
+    show_video_frame sobrescreve. py_compile OK.
+  - test_video_priming.py: _JanelaFake ganhou show_video_aviso (o teste agora
+    cobre o aviso e imprime "[video] AVISO: clipe de priming nao chegou").
+
+VALIDACAO: 6/6 suites relevantes verdes (video_priming, paradigm_abort,
+  paradigm_melhorias, trial_feedback, cue_estimulos, parada_threads).
+  test_paradigm_protocol passou FORA do sandbox (validado pelo usuario).
+
+PENDENTE (usuario): fechar Kinect Studio + processos; rodar `checa_kinect.py`
+  ate' sair 0 (ou religar a fonte do Kinect). Com o Kinect entregando frame, o
+  clipe de priming volta. PATCH DO AVISO NAO COMMITADO (avisar o Cline antes,
+  que mexe em eeg_motor_paradigm.py).
+
+NOTA AMBIENTE: o sandbox do DSH (AppContainer) tem DENY de escrita
+  (Todos:(DENY)(DC) + SID AppContainer com DENY W/D) que impede criar arquivos
+  em C:\mestradopy dentro do sandbox -- por isso test_paradigm_protocol falha
+  AQUI (Permission denied) mas passa FORA. Nao e' bug de codigo.
+
+
+ITEM 74 (19/10/2026) - SETA DA PALMA "NAO FUNCIONANDO": a tecla O NUNCA CHEGOU
+AO TOOL (FOCO DA JANELA DO OPENCV) + mensagem de boot enganosa "1 amostra"
+================================================================================
+SINTOMA
+  Usuario no tools/kinect_groundtruth_tool.py: "to tentando, mas nao ta
+  funcionando direito a seta de orientacao da palma". Tool do PID 17244,
+  morto limpo depois (sem traceback -- ESC ou janela fechada).
+
+CAUSA-RAIZ (medida no log _kgt2.out.log):
+  1) NENHUM JSON imu_palm_alignment_{right,left}.json existia (boot: "sem
+     alinhamento ... aperte O"). Sem T/f por luva, a seta anda no quadro cru
+     do IMU (sem magnetometro, "norte" arbitrario) -- o proprio teste 4) do
+     test_palm_alignment mede 19.3 graus de ERRO MEDIO na formula antiga.
+  2) A tecla O nunca registrou: o handler imprime "Captura do alinhamento da
+     palma por 14 s..." ao iniciar e essa linha NAO aparece no log. Causa:
+     cv2.waitKey so' le tecla com uma janela de VIDEO em FOCO; o foco estava
+     no terminal/VS Code, que engole a tecla.
+  3) Mensagem enganosa: "IMU right: direcao da palma calibrada (1 amostra)" e'
+     do BOOTSTRAP (imu_calibration_active nasce True dos dois lados; ao ver
+     mao visivel + parada, reancora com UMA amostra -- ruidosa, e so' quando
+     nao ha alinhamento salvo). String hardcoded, NADA a ver com a tecla O;
+     leu-se como "O rodou e so' deu 1 amostra".
+
+CONCERTOS (tools/kinect_groundtruth_tool.py -- so' help/mensagens, logica intacta):
+  - Help: paragrafo "FOCO DA JANELA" explicando o waitKey e o sintoma.
+  - Boot: print "TECLAS (C/B/O/K/H/L/R): clique ANTES em uma janela de VIDEO..."
+    logo apos as portas IMU.
+  - Bootstrap: "calibrada (1 amostra)." -> "ancorada em 1 amostra so'
+    (bootstrap ruidoso, NAO e' o alinhamento da tecla O) -- aperte O com a
+    mao visivel e girando para a seta ficar confiavel."
+
+RECEITA (para a seta ficar boa):
+  1) Relancar o tool; CLICAR numa janela de VIDEO antes de qualquer tecla.
+  2) O uma vez; confirmar no console a linha dos 14 s.
+  3) Durante 14 s: mao DENTRO DO QUADRO + pulso girando devagar (overlay
+     mostra contadores R/L ao vivo; meta = dezenas, minimo 6/lado).
+  4) Fim: "... amostras | residuo X graus | gravado" por lado (OK <= 15 graus).
+  5) Teste do lado: mover SO' a direita -> seta direita responde (se a
+     esquerda responder, lados trocados: --imu-portas "4210,4211").
+
+VALIDACAO: py_compile OK; 6/6 testes que importam o tool verdes
+  (deteccao_cascata, diagnostico_calibracao, janelas_grade,
+  lateralidade_maos, overlay_auxiliares, palm_alignment 8/8 grupos).

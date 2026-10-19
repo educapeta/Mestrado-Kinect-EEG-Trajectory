@@ -48,6 +48,11 @@ por luva) | T diagnostico do tabuleiro | K trim fixo do overlay | H calibracao d
 esqueleto da mao | L log de desvio | R reset | ESC sair. Precisa do Kinect v2
 (SDK 2.0) e, opcionalmente, da webcam auxiliar e do ESP32/UDP.
 
+FOCO DA JANELA: o waitKey do OpenCV so' entrega tecla com uma janela de VIDEO
+do programa em foco -- se a tecla O "nao faz nada" e o console nao imprime
+"Captura do alinhamento da palma por 14 s", clique primeiro no video (o foco
+estava no terminal/VS Code, que engole a tecla).
+
 VETOR DA PALMA (por que a tecla O existe): a seta vermelha da palma e' prevista
 pelo IMU da LUVA, e o referencial do IMU (vertical do acelerometro, mas "norte"
 arbitrario -- nao ha' magnetometro) NAO e' o da camera, e ainda muda com a
@@ -986,6 +991,9 @@ def main():
     }
     print(f"IMU: direita na porta {receivers['right'].port} | esquerda na porta "
           f"{receivers['left'].port}")
+    print("TECLAS (C/B/O/K/H/L/R): clique ANTES em uma janela de VIDEO -- sem "
+          "foco no video o OpenCV nao recebe a tecla (a tecla O parece nao "
+          "funcionar e o console fica mudo).")
     for receiver in receivers.values():
         receiver.start()
     # --- webcams auxiliares: a ATIVA (--aux-index) + as OUTRAS (--aux-cameras) ---
@@ -2082,7 +2090,10 @@ def main():
                         print(f"IMU {lado}: direcao da palma "
                               + ("mantida do alinhamento salvo."
                                  if alinhamento_carregado[lado]
-                                 else "calibrada (1 amostra)."))
+                                 else "ancorada em 1 amostra so' (bootstrap "
+                                      "ruidoso, NAO e' o alinhamento da tecla "
+                                      "O) -- aperte O com a mao visivel e "
+                                      "girando para a seta ficar confiavel."))
                 elif now < bias_calibration_until:
                     fusion.add_bias_sample(sample_lado)
                 if imu_calibration_active[lado]:
