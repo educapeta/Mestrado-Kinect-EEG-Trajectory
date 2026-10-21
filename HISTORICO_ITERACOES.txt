@@ -6420,3 +6420,60 @@ RETOMAR AMANHA (ordem)
   5) So' entao o TRIAL REAL (g.Nautilus + 5 itens do item 65 + casamento
      groundtruth x EEG).
 
+
+================================================================================
+ITEM 99 (21/10/2026) - DERIVA DOS IMUs MEDIDA COM AS LUUVAS PARADAS (10 min):
+    giroscopio da DIREITA com bias residual de -12.5 dps (yaw 434 graus/min!)
+================================================================================
+CONTEXTO: o usuario saiu da bancada e deixou as DUAS luvas paradas na mesa
+(palma para baixo), com a placa e o hotspot ligados. Capturei 10 min de UDP
+4210/4211 em `deriva_estatica_20261021.csv` (34.486/34.485 amostras por lado,
+57,5 Hz, maior gap 0,38 s) e analisei roll/pitch/yaw + accel + gyro parados.
+
+RESULTADO (medido, nao estimado)
+  DIREITA (4210): roll/pitch PERFEITOS (std 0,02/0,03 graus; deriva 0,00 graus
+    em 10 min), mas o giroscopio parado tem BIAS RESIDUAL CONSTANTE:
+      gyro_x +0,642 dps | gyro_y **-12,504 dps** | gyro_z +6,942 dps
+    (std de cada eixo ~0,09 dps = e' OFFSET, nao ruido). Consequencia:
+      yaw medido: +7,244 graus/s = **+434,6 graus/min** (deu 7 voltas em 10 min!)
+      yaw previsto pela projecao do gyro na vertical: +7,243 graus/s (bate).
+  ESQUERDA (4211): roll/pitch perfeitos (std 0,02); bias menor mas ainda real:
+      gyro_x +0,326 | gyro_y -0,168 | gyro_z +0,115 dps
+      yaw: +0,104 graus/s = **+6,2 graus/min** (yaw previsto +5,98 graus/min).
+  AMBAS: accel com norma 1,068 g e std 0,004-0,005 (paradas de verdade); nenhum
+  salto de yaw entre amostras (0 saltos >5 graus) -> o filtro (Mahony) esta'
+  ESTAVEL, o problema e' so' o BIAS RESIDUAL do giroscopio entrando no yaw.
+
+CAUSA PROVAVEL: a calibracao de bias do giroscopio e' feita UMA VEZ no boot
+(`calibrateGyroscopeAt` no setup do firmware) e assume a luva PARADA. Se ela e'
+religada com a mao/luva se mexendo, o bias "calibrado" fica com a media do
+movimento -> o offset gigante da direita (-12,5 dps em gy) e' exatamente esse
+padrao. A esquerda pegou um bias pequeno (0,1-0,3 dps), que ainda da' 6 graus/min
+de deriva de yaw. Nao ha' deriva termica relevante em 10 min (bias constante).
+
+IMPLICACOES
+  1) A REANCORAGEM DO YAW DO BOOT (item 97) corrige o OFFSET do boot, mas NAO
+     segura o yaw ao longo do tempo: 6 graus/min (esquerda) e 434 graus/min
+     (direita) fazem a seta/atitude se perder dentro de uma sessao.
+  2) No estado atual, a luva DIREITA esta' inutilizavel para orientacao (yaw) e
+     a ESQUERDA serve por poucos minutos.
+  3) Os `IMU_*_yaw` gravados no CSV do paradigma carregam essa deriva (roll/pitch
+     estao bons); para analise de orientacao use PALM_* do Kinect (quando o sinal
+     anatomico for corrigido — pendencia do item 79).
+
+PROXIMOS PASSOS (ordem)
+  1) BANCADA (2 min): religar/REBOOTAR as duas luvas com elas PARADAS na mesa e
+     conferir no tool (ou no UDP) que o gyro parado fica ~0. Se a direita
+     continuar com -12,5 dps parada -> problema de calibracao/MPU, nao de
+     movimento no boot.
+  2) FIRMWARE (patch a fazer): calibracao de bias mais robusta (2-3 s, detectar
+     movimento e AVISAR/repetir se a luva nao estiver parada) + comando de
+     re-zero do giroscopio em runtime via UDP (ex.: "Z" na porta 4212) e/ou tecla
+     serial: permite rezerar na bancada sem regravar.
+  3) TOOL (patch a fazer): REANCORAGEM CONTINUA do yaw (janela deslizante +
+     passo limitado/EMA) em vez de uma vez no inicio, para o drift residual nao
+     tirar a seta de lugar; a infraestrutura (AncoradorYawBoot/reancorar_yaw,
+     item 97) ja' existe.
+  4) Sessao real: antes de cada sessao, religar as luvas paradas e conferir o
+     gyro ~0 (ou rodar o re-zero do item 2).
+
