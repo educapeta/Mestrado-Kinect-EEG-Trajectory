@@ -5929,3 +5929,32 @@ MEDIDO
   - Tools de bancada: tools/monitor_serial_esp32.py (novo) mostra a serial a
     115200/74880 e ajuda a separar "placa muda" de "modo boot".
 
+
+================================================================================
+ITEM 93 (21/10/2026) - NOVA POLITICA DE DESENVOLVIMENTO + typo do slide
+================================================================================
+DECISAO DO USUARIO (21/10/2026, trial real na bancada): "ignore esta questao da
+area do cline, a partir de agora iremos desenvolver tudo por aqui".
+=> A regra antiga "eeg_motor_paradigm.py e firmware/ sao do Cline; avisar e
+   coordenar antes de tocar" FICA REVOGADA por esta instrucao direta do usuario.
+   Todo o desenvolvimento (paradigma, firmware, tools, docs) e' feito NESTA
+   sessao; o HISTORICO continua sendo o registro para o Cline ler (revisao
+   pos-fato, sem bloquear).
+
+FEITO
+  - typo no slide de instrucao (eeg_motor_paradigm.py:3686):
+      "Voce ver' simbolos na tela e fara movimentos de alcance e preensao com
+      as maos" -> "Você verá símbolos na tela e fará movimentos de alcance e
+      preensão com as mãos".
+
+PENDENTE (4 questoes do trial real de 21/10, subagentes investigando em
+paralelo; patches serao aplicados e testados aqui)
+  1) CUE confundindo: trocar seta por simbolo de mao direita/esquerda + objeto.
+  2) Pausa de bloco: ao zerar o timer de 2 min NAO iniciar o proximo bloco sem
+     ESPACO de confirmacao.
+  3) Kinect trocando a mao rastreada no meio do trial (dados das duas maos sao
+     gravados; o problema e' a selecao/label da mao ativa).
+  4) Video de priming comecando antes do movimento/em momentos diferentes;
+     deveria comecar no onset (CODE_MOVE_ONSET/KT_onset).
+  Painel de impedancias: CONFIRMADO funcionando pelo usuario ("tudo certinho").
+

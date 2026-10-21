@@ -3683,8 +3683,8 @@ def slides_instrucao():
     """Slides de instrucao mostrados ANTES da pratica (ESPACO avanca)."""
     return [
         "BEM-VINDO(A) AO EXPERIMENTO\n\n"
-        "Voce ver' simbolos na tela e fara movimentos de alcance e "
-        "preensao com as maos.\n\nESPACO para continuar",
+        "Você verá símbolos na tela e fará movimentos de alcance e "
+        "preensão com as mãos.\n\nESPAÇO para continuar",
         "OS SIMBOLOS\n\n"
         "SETA ESQUERDA = use a MAO ESQUERDA\n"
         "SETA DIREITA = use a MAO DIREITA\n\n"
