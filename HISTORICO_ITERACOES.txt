@@ -5848,3 +5848,84 @@ ESTADO PARA A PROXIMA SESSAO
     refazer a O com rotacao mais lenta; subir Kp (2->4) ou adicionar Ki no
     AttitudeMahony se quiser apertar o yaw ainda mais.
 
+
+================================================================================
+ITEM 91 (21/10/2026) - KINECT GROUNDTRUTH: "esqueleto auxiliar desgovernado
+    quando a mao se perde" -- CAUSA RAIZ + CORRECAO (subagente + revisao)
+================================================================================
+QUEIXA (usuario): com a camera auxiliar E o Kinect perdendo uma das maos, a
+projecao MediaPipe da OUTRA auxiliar (que ainda ve a mao) fica desgovernada no
+video do Kinect.
+
+CAUSA RAIZ (achada pelo subagente, revisada aqui)
+  kinect_imu_groundtruth.py:3395-3401 (`_projetar_mao_no_kinect`): sem 3D e sem
+  profundidade daquele lado, usava a profundidade NOMINAL FIXA de 1,0 m
+  (`NOMINAL_HAND_DEPTH_M`, :121). O caminho:
+    tool:2024 -> so' a camera ATIVA alimenta `resultados_por_lado`;
+    tool:2128-2133 -> Kinect cego E ativa cega naquele lado => None;
+    tool:2500-2507 -> tri/z das OUTRAS auxiliares = None;
+    tool:2508-2513 -> draw_auxiliary_cameras_on_color(depths=None, tri=None);
+    -> projecao em 1,0 m fixo; o gate `dentro.sum()<5` e' so' geometrico e
+       deixa DESENHAR.
+  Assimetria: a camera ATIVA tem cadeia de fallback (esqueletoSDK -> modelo3D ->
+  amostrada -> ultima valida -> nominal + EMA por lado); as OUTRAS nao tem nada.
+  MECANISMO medido (npz reais, mao a X=0, erro mediano dos 21 nos):
+    0,90 m: SIGMA 223 px / Trust 139 px | 1,05 m: 58/45 | 1,20 m: Trust 162 |
+    1,40 m: 267 | 1,60 m: 340 px -- sempre 21/21 dentro do quadro no lugar
+    errado; erro ~0 exatamente em 1,0 m e alterna quando o z aparece/some =>
+    e' o "voando". Evidencia: overlay_deviation_log.csv com 317 linhas
+    note=amostrada (Kinect cego) em 119 s e TODAS as nX_dev_px = NaN.
+
+CORRECAO (implementada e commitada)
+  sem 3D e sem profundidade daquele lado, `_projetar_mao_no_kinect` devolve None
+  (NAO desenha) em vez de inventar 1,0 m. Fisica: uma camera so' da' o RAIO; a
+  distancia ao longo dele nao e' observavel. Contido: 1 chamador (multicamera,
+  :3488); a camera ativa sempre passa z finito; eeg_motor_paradigm.py:1289-1300
+  tambem sempre passa [z] finito => sem regressao la. Teste novo caso 9 em
+  test_overlay_auxiliares.py (verificado que FALHA sem o patch).
+  TESTES (rodados aqui de forma independente): overlay_auxiliares 9/9 |
+  aux_pair_stereo 7/7 | cameras_multi 12/12 | triangulation OK |
+  paradigm_aux_pair 5/5.
+
+IMPACTO: so' DESENHO. O retorno de draw_auxiliary_cameras_on_color e' ignorado
+(tool:2508); overlay_deviation_log.csv (tool:2594-2614) e o CSV principal
+(tool:3187-3214) vem de resultados_por_lado (camera ativa) e pulam o lado None
+=> nenhum dado de groundtruth/CSV muda. Nada de eeg_motor_paradigm.py nem
+firmware/.
+
+ACHADOS SECUNDARIOS (registrados, NAO corrigidos; area do Cline p/ decidir)
+  1) `to_kinect_stereo` usa cv2.undistortPoints com a distorcao da aux: landmark
+     FORA do quadro (MediaPipe devolve em mao parcial) explode -- medido 1,7e8
+     px para (1.35, 0.10). O gate de quadro segura hoje (no/linha descartados),
+     mas falta um clamp.
+  2) mao auxiliar com lado "" (`_handedness_of` pode devolver vazio) tambem caia
+     no nominal -- o fix cobre esse caminho.
+  3) Opcional: em vez de sumir, dar profundidade PROPRIA a cada camera (o
+     modelo3D por camera ja' existe em
+     alignment.aux_models[i]["scale_depth_params"]/["reference_scale"], mas
+     estimate_hand_depth so' usa os campos vivos da ativa; exigiria metodo novo).
+
+================================================================================
+ITEM 92 (21/10/2026) - IMUs NO DORSO DAS DUAS MAOS: funcionam (serial e CSV
+    provam); a SESSAO que estava rodando gravava so' o IMU da direita
+================================================================================
+MEDIDO
+  - Monitor da serial COM4 (placa central, USB): o firmware imprime os DOIS
+    lados continuamente -- linhas "1,<10 campos>" (direita) e "2,<10 campos>"
+    (esquerda), com rpy/acc/gyro validos e se movendo nos dois => os dois
+    MPU6050 respondem (o "IMU nao chega" era a porta 4210 ocupada pelo proprio
+    paradigma, nao falha de hardware).
+  - Hotspot/ICS ativo (192.168.137.1); cliente 192.168.137.83; UDP 4211 chega a
+    ~55-57 Hz; 4210 chega mas e' consumido pelo processo do paradigma.
+  - SESSAO EM CURSO (21/10 13:57:30, PID 4272,
+    `eeg_motor_paradigm.py --impedancia`): so' tem a porta UDP 4210 aberta
+    (default = 1 IMU, lado 1 = direita) => o CSV de movimento grava IMU_R com
+    dados e IMU_L todo NaN. PENDENCIA: para gravar as DUAS maos, iniciar com
+    `--imu-portas "4210,4211"`; e o item 5 (mi_desenho) exige `--mi-desenho`.
+  - ACHADO/BUG DE FLAG: com 1 IMU so', `IMU_L_valid` sai 1 mesmo com as colunas
+    L em NaN (o flag devia ser 0). Fica anotado para o Cline (arquivo do
+    paradigma, nao tocado aqui); um treino que confie em `*_valid` pode aceitar
+    dados vazios.
+  - Tools de bancada: tools/monitor_serial_esp32.py (novo) mostra a serial a
+    115200/74880 e ajuda a separar "placa muda" de "modo boot".
+

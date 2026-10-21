@@ -3355,6 +3355,14 @@ class KinectHandTracker:
            profundidade por no espalha os dedos, porque o modelo de escala
            aparente tem ~12 cm de residuo).
 
+        SEM nenhuma das duas (mao perdida: nem 3D nem profundidade daquele lado)
+        devolve None -- nao desenha. Uma camera so' da' o RAIO onde a mao esta';
+        a distancia ao longo do raio nao e' observavel, e projetar com a
+        profundidade NOMINAL (1,0 m) jogava o esqueleto a centenas de px
+        (bug de bancada de 19/10/2026: Kinect + camera ATIVA cegos num lado e a
+        outra auxiliar, que ainda via a mao, desenhava em 1,0 m fixo -- medido
+        744 px de erro a 0,65 m na Trust e 1836 px na SIGMA).
+
         NAO depende do depth FRAME do Kinect (so' da profundidade em metros que o
         chamador passar): e' isso que permite desenhar as auxiliares justamente
         quando o Kinect nao esta' entregando nada.
@@ -3385,7 +3393,12 @@ class KinectHandTracker:
             if validos.size > 0:
                 init_depth = float(np.median(validos))
         if init_depth is None:
-            init_depth = NOMINAL_HAND_DEPTH_M
+            # Mao PERDIDA: sem triangulacao e sem profundidade deste lado nao ha'
+            # medida nenhuma -- o lado fica SEM esqueleto (melhor que inventar a
+            # posicao). Ver o docstring: e' o fix do "esqueleto desgovernado"
+            # quando o Kinect e a auxiliar ativa perdem a mao e a outra auxiliar
+            # ainda a ve.
+            return None
         pixels = view.to_kinect_stereo(pixels, [init_depth])
         if pixels is None:
             return None

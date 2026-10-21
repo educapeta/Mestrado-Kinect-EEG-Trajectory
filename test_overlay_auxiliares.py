@@ -262,10 +262,42 @@ def main():
     aceita, cat, _, _ = tool.avalia_triangulacao(lenta, err_ok, ref, 0.5)
     assert aceita, (aceita, cat)
 
-    print("OVERLAY_AUXILIARES_OK: 8/8 (dois esqueletos auxiliares em cores "
+    # --- 9) mao PERDIDA (sem 3D e sem profundidade) NAO pode ser inventada ----
+    # Bancada 19/10/2026 (queixa do usuario): quando o Kinect E a camera ATIVA
+    # perdem uma mao, a OUTRA auxiliar -- que ainda ve aquela mao -- era
+    # projetada com a profundidade NOMINAL fixa de 1,0 m. Com a mao a ~0,65 m
+    # isso da' 744 px de erro na Trust e 1836 px na SIGMA e o esqueleto era
+    # DESENHADO (o gate de borda nao pega: a projecao cai dentro do quadro).
+    # Regra: uma camera so' da' o RAIO -- sem 3D e sem profundidade daquele lado
+    # nao ha' medida, entao o lado fica SEM esqueleto.
+    perto = verdade_esq.copy()
+    perto[:, 2] -= 0.40                      # mao a ~0,65 m (nominal = 1,0 m)
+    lms_perto = mao_em(esquerda, perto)
+    for z_ruim in (None, [None], [float("nan")], [0.0]):
+        assert tracker._projetar_mao_no_kinect(
+            esquerda, lms_perto, z_ruim, None) is None, (
+            "sem 3D e sem profundidade valida a mao auxiliar nao pode ser "
+            f"projetada (z={z_ruim!r})")
+    frame = np.zeros((ALTURA, LARGURA, 3), np.uint8)
+    resultado = tracker.draw_auxiliary_cameras_on_color(
+        frame, {esquerda.index: [lms_perto]}, alinhamento,
+        triangulados={esquerda.index: [None]}, depths={esquerda.index: [None]})
+    assert resultado == {} and not frame.any(), (
+        "mao perdida nao pode gerar esqueleto (nem com a profundidade nominal)")
+    # E com profundidade MEDIDA a mesma chamada continua desenhando: o fix nao
+    # pode suprimir a mao que tem medida (nada de regressao no caminho feliz).
+    resultado = tracker.draw_auxiliary_cameras_on_color(
+        frame, {esquerda.index: [lms_perto]}, alinhamento,
+        triangulados={esquerda.index: [None]},
+        depths={esquerda.index: [float(perto[9, 2])]})
+    assert resultado and frame.any(), (
+        "com profundidade valida o esqueleto da auxiliar tem de aparecer")
+
+    print("OVERLAY_AUXILIARES_OK: 9/9 (dois esqueletos auxiliares em cores "
           "distintas, desvio contra o verde, profundidade rigida, camera sem "
-          "stereo ignorada, gating de borda, prioridade da triangulacao e "
-          "GATES reprojecao/velocidade)")
+          "stereo ignorada, gating de borda, prioridade da triangulacao, "
+          "GATES reprojecao/velocidade e mao perdida sem profundidade nao "
+          "desenhada)")
     return 0
 
 
