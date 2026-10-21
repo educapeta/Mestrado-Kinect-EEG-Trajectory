@@ -263,5 +263,91 @@ assert len(quadros) == 12, len(quadros)          # 6 reais x repeticoes (0,5x)
 texto = captura.getvalue()
 assert "fps de captura" in texto and "5.0 fps" in texto, texto
 
+# =============================================================================
+# 7) ANCORA DO CLIPE NA TRAJETORIA DA ME: o video comeca no MOVIMENTO.
+#    Bug real de 21/10/2026: o detector disparava com a MAO PARADA (5 mm/0,03
+#    m/s esta' no chao de ruido do punho 3D) e o clipe comecava 0,2-0,8 s antes
+#    do movimento; em 29 clipes, 16 comecavam com a mao parada e 6 nao tinham
+#    movimento nenhum. Estes casos falham sem o patch.
+# =============================================================================
+def _trajetoria_me(inicio_s=1.2, total_s=4.0, fs=30.0, desloc_m=0.18,
+                   jitter_mm=2.0, semente=5, t_me=100.10):
+    """[(t, pos)] de uma ME: mao parada (jitter) + um alcance no meio."""
+    rng = np.random.default_rng(semente)
+    pontos = []
+    for i in range(int(total_s * fs)):
+        t = t_me + i / fs
+        s = np.clip((t - t_me - inicio_s) / 0.6, 0.0, 1.0)
+        suave = 3 * s ** 2 - 2 * s ** 3
+        pontos.append((t, np.array([0.0, 0.0, -desloc_m * suave])
+                       + rng.normal(0.0, jitter_mm / 1000.0, 3)))
+    return pontos
+
+
+state = p.SharedState()
+tracking = p.TrackingThread(state, p.ImuReceiver(4210), with_kinect=False,
+                            aux_indices=(), show_window=False)
+
+# 7a) alcance em 1,2 s: ancora no INICIO do movimento, nao no jitter do comeco
+tracking._me_track = _trajetoria_me(inicio_s=1.2)
+t0, t1 = tracking._clip_window(104.0)
+inicio_mov = 100.10 + 1.2
+assert abs((t1 - t0) - p.SLOWMO_SPAN_SEC) < 1e-9, (t0, t1)
+assert inicio_mov - 0.12 <= t0 <= inicio_mov + 0.30, (t0, inicio_mov)
+assert t0 > 100.10 + 0.6, "ancorou no jitter do inicio da ME e nao no movimento"
+assert t1 > inicio_mov + 0.35, "o clipe nao chega a mostrar o movimento"
+
+# 7b) mao PARADA a ME inteira -> fallback antigo (fim da ME), com aviso
+tracking._me_track = _trajetoria_me(desloc_m=0.0)
+aviso = io.StringIO()
+with contextlib.redirect_stdout(aviso):
+    t0, t1 = tracking._clip_window(104.0)
+assert "SEM movimento confirmado" in aviso.getvalue(), aviso.getvalue()
+assert abs(t1 - (104.0 - p.SLOWMO_END_LAG_SEC)) < 1e-9, (t0, t1)
+
+# 7c) sem trajetoria (--sem-onset / Kinect mudo): comportamento antigo com a
+#     deteccao em tempo real
+tracking._me_track = []
+tracking.onset_time = 101.0
+assert tracking._clip_window(104.0) == (101.0, 101.0 + p.SLOWMO_SPAN_SEC)
+
+# 7d) sem trajetoria e sem deteccao: recuo fixo do fim da ME
+tracking.onset_time = None
+t0, t1 = tracking._clip_window(104.0)
+assert abs(t1 - (104.0 - p.SLOWMO_END_LAG_SEC)) < 1e-9, t1
+assert abs((t1 - t0) - p.SLOWMO_SPAN_SEC) < 1e-9, (t0, t1)
+
+# 7e) movimento MUITO tarde (3,6 s de uma ME de 4 s): o fim da janela e'
+#     limitado ao pedido, senao os ultimos quadros ainda nao existiriam
+tracking._me_track = _trajetoria_me(inicio_s=3.6, total_s=4.0)
+aviso = io.StringIO()
+with contextlib.redirect_stdout(aviso):
+    t0, t1 = tracking._clip_window(104.0)
+assert t1 <= 104.0 - 0.02 + 1e-9, t1
+assert 0.0 < t1 - t0 < p.SLOWMO_SPAN_SEC, (t0, t1)
+assert "comecou tarde" in aviso.getvalue(), aviso.getvalue()
+
+# =============================================================================
+# 8) O CLIPE PUBLICADO e' o do MOVIMENTO: `_publish_slowmo` recorta os quadros
+#    do intervalo ancorado (e nao os do fim da ME, como no comportamento antigo)
+# =============================================================================
+state = p.SharedState()
+tracking = p.TrackingThread(state, p.ImuReceiver(4210), with_kinect=False,
+                            aux_indices=(), show_window=False)
+tracking._me_track = _trajetoria_me(inicio_s=1.2)
+for i in range(120):                          # buffer de 4 s a 30 fps
+    tracking._frame_buffer.append(
+        (100.0 + i / 30.0, np.full((4, 4, 3), i, np.uint8)))
+t0, t1 = tracking._clip_window(104.0)
+with contextlib.redirect_stdout(io.StringIO()):
+    tracking._publish_slowmo((104.0, None))
+quadros, dur = state.video_snapshot()
+assert quadros, "clipe vazio"
+primeiro = _identifica_quadro(quadros[0])
+esperado = int(round((t0 - 100.0) * 30.0))     # 1o quadro do intervalo [t0, t1]
+assert abs(primeiro - esperado) <= 3, (primeiro, esperado, t0)
+assert dur <= p.SLOWMO_SPAN_SEC + 1e-6, dur
+
 print("test_video_priming_OK (playback cronometrado sem congelar | MI com "
-      "tela AGORA IMAGINE | snapshot nao consome | fps de captura medido)")
+      "tela AGORA IMAGINE | snapshot nao consome | fps de captura medido | "
+      "clipe ancorado no INICIO DO MOVIMENTO)")

@@ -11,8 +11,8 @@ Programa 1 (gravacao offline). Um UNICO processo integra:
       [5 BLOCOS de 50 trials com 2 min de pausa entre eles] -> encerramento.
      Cada trial tem 12 s:
        REPOUSO 2 s (mao no home + ponto de fixacao)
-       CUE + ME 4 s (imagem do objeto - garrafa/bola/caneta - + seta do lado
-         da mao; o participante EXECUTA alcance/preensao)
+       CUE + ME 4 s (imagem do objeto - garrafa/bola/caneta - + simbolo da
+         MAO esquerda/direita; o participante EXECUTA alcance/preensao)
        PAUSA + VIDEO 2 s (video do proprio movimento em camera lenta 0,5x,
          com a trajetoria 3D desenhada sobre o quadro - priming visual)
        MI 4 s (BIPE sonoro no onset + tela neutra "AGORA IMAGINE"; --mi-desenho pulsa o texto e --mi-auto-onset inicia o timer no onset do movimento -- ambos opt-in)
@@ -72,7 +72,8 @@ Codigos de marcador (convensao BCI Competition IV 2a estendida):
   500/501 = inicio/fim da origem         813 bola+direita, 814 bola+esquerda,
   778/779 = inicio/fim da ME             815 caneta+direita, 816 caneta+esq
   780/781 = inicio/fim da MI
-  790/791 = inicio/fim do bloco      792/793 = inicio/fim da pausa
+  790/791 = inicio/fim do bloco      792/793 = inicio/fim da PAUSA ENTRE
+                                     BLOCOS (contagem + espera do ESPACO)
   794   = inicio do video em 0,5x     796 = TRIAL CANCELADO pelo experimentador
    789 = trial de PRATICA (instrucoes; TODOS os eventos da pratica levam pratica=1 no JSON)
 
@@ -82,7 +83,11 @@ offsets de 50/100 ms no inicio do cue para nao colidirem na coluna Marker
 fica no JSON de eventos.
 
 CONTROLE DA SESSAO (o que fazer quando algo da errado no meio do trial)
-  ESPACO      encerra a espera/pausa atual (segue para a proxima etapa);
+  ESPACO      encerra a espera/pausa atual (segue para a proxima etapa).
+              Na PAUSA ENTRE BLOCOS sao DOIS ESPACOS: o 1o encurta a contagem
+              (ou ja' esta' na tela "PRESSIONE ESPACO PARA CONTINUAR" quando o
+              timer zera) e o 2o INICIA o proximo bloco -- o timer zerado NAO
+              inicia o bloco sozinho;
   C           CANCELA o trial atual (marca 796 no CSV) e vai para o proximo;
   ESC         ABORTA a sessao: fecha CSV/JSON, imprime o resumo e sai;
   Ctrl+C      idem ESC (a saida e' garantida por os._exit, com tempo limite em
@@ -121,7 +126,7 @@ from collections import deque
 import numpy as np
 import gpype as gp
 from PySide6.QtCore import QObject, QPointF, QRectF, Qt, QTimer
-from PySide6.QtGui import (QBrush, QColor, QFont, QImage, QKeySequence,
+from PySide6.QtGui import (QColor, QFont, QFontMetricsF, QImage, QKeySequence,
                            QPainter, QPainterPath, QPen, QPixmap, QPolygonF,
                            QShortcut)
 from PySide6.QtWidgets import (QApplication, QLabel, QMainWindow, QPushButton,
@@ -189,7 +194,20 @@ TRIAL_SEC = HOME_SEC + CUE_ME_SEC + PAUSE_VIDEO_SEC + MI_SEC      # 12 s
 
 BLOCKS = 5                        # blocos por sessao
 TRIALS_PER_BLOCK = 50             # trials por bloco (10 min por bloco)
-BLOCK_PAUSE_SEC = 120.0           # pausa entre blocos (SPACE pula)
+BLOCK_PAUSE_SEC = 120.0           # pausa entre blocos (contagem + ESPACO)
+#: Pausa entre blocos (relato de 21/10/2026): a contagem e' so' o tempo de
+#: DESCANSO do participante. Ao zerar -- ou quando o ESPACO a encurta -- a tela
+#: PARA em "PRESSIONE ESPACO PARA CONTINUAR" e o proximo bloco so' comeca com um
+#: ESPACO NOVO do experimentador (antes o bloco comecava sozinho no fim do
+#: timer, sem ninguem confirmar).
+PAUSE_CONFIRM_TEXT = "PRESSIONE ESPACO PARA CONTINUAR"
+#: Dica da contagem em andamento (deixa claro que o ESPACO ainda nao inicia).
+PAUSE_SKIP_HINT = "(ESPACO encurta a contagem)"
+#: Tempo minimo na tela de confirmacao antes de aceitar o ESPACO. Um toque
+#: FISICO chega ao controlador DUAS vezes (atalho do Qt + vigia global de
+#: `hotkeys.py`); sem esta folga o MESMO ESPACO que encerra a contagem
+#: confirmaria o inicio do bloco (auto-continue de volta pela porta dos fundos).
+PAUSE_CONFIRM_DWELL_SEC = 0.4
 BASELINE_EYES_OPEN_SEC = 120.0    # baseline: 2 min olhos abertos
 BASELINE_EYES_CLOSED_SEC = 120.0  # baseline: 2 min olhos fechados
 BASELINE_REST_SEC = 60.0          # baseline: 1 min repouso ativo
@@ -213,9 +231,19 @@ SLOWMO_END_LAG_SEC = 1.0          # ignora o fim da ME (mao ja parada)
 #: detectado, e nao num instante fixo pos-cue:
 #:     python sand_traj_treino.py --data ... --event-code 795 \
 #:            --window-start-sec -0.5 --window-sec 2.0
-MOVE_ONSET_SPEED_MPS = 0.030      # limiar de velocidade do punho (m/s)
+MOVE_ONSET_SPEED_MPS = 0.030      # portao GROSSO de velocidade do punho (m/s)
 MOVE_ONSET_CONSEC = 3             # amostras acima do limiar (~100 ms a 30 fps)
-MOVE_ONSET_MIN_TRAVEL_M = 0.005   # deslocamento minimo desde a cue (anti-ruido)
+#: DESLOCAMENTO minimo DENTRO de `MOVE_ONSET_WINDOW_SEC` para aceitar o onset.
+#: 3,5 cm em 0,45 s (~8 cm/s de velocidade media) e' movimento REAL: o alcance
+#: do protocolo anda 15-25 cm. O criterio anterior (5 mm desde a cue, medido
+#: amostra a amostra) estava no chao de ruido do punho 3D e disparava com a MAO
+#: PARADA: medido na sessao de 21/10/2026 (mao apoiada, 30 Hz) o punho "anda"
+#: 0,8 cm (p50) / 1,7 cm (p90) / 3,2 cm (max) em 0,3 s, e o criterio antigo
+#: disparava 11 vezes em 6,2 s de mao parada. Efeito pratico: o clipe do priming
+#: comecava 0,2-0,8 s ANTES do movimento (a mao ainda estava parada no video).
+MOVE_ONSET_MIN_TRAVEL_M = 0.035   # 3,5 cm DENTRO da janela abaixo
+MOVE_ONSET_WINDOW_SEC = 0.45      # janela do deslocamento (s)
+MOVE_ONSET_SMOOTH = 3             # mediana movel (amostras) contra jitter
 #: Landmark do MediaPipe Hands usado como posicao da mao (9 = centro da palma,
 #: conforme a metodologia de aquisicao; 0 = pulso).
 HAND_TRACK_LANDMARK = 9
@@ -273,6 +301,14 @@ CODE_TRIAL_CANCEL = 796
 #: Trial de PRATICA (instrucoes, antes da sessao real): nao conta no balanco.
 #: Todos os eventos de uma pratica tambem levam `pratica=1` no JSON.
 CODE_TRIAL_PRACTICE = 789
+#: O detector de maos (MediaPipe) viu o lado OPOSTO ao cue durante a trial. A
+#: mao publicada CONTINUA sendo a do cue (nunca troca no meio), mas o lado
+#: gravado em KT_hand/IMU_hand/ARM_side veio do CUE e nao do rotulo: este
+#: marcador e' o unico rastro de que a medida daquele trecho pode ser da outra
+#: mao (bug relatado em 21/10/2026 -- "o Kinect trocou a mao no meio do video").
+#: Emitido UMA vez por trial, no primeiro quadro discordante; o JSON de eventos
+#: leva `lado_cue`, `lado_detector` e `quadros` (quantos quadros discordaram).
+CODE_HAND_SIDE_FLAG = 797
 #: Vigia do link (#15): queda/retorno da entrega de amostras do amplificador.
 CODE_LINK_LOST = 899
 CODE_LINK_OK = 898
@@ -298,6 +334,7 @@ CODE_NAMES = {
     CODE_MOVE_ONSET: "INICIO DO MOVIMENTO (onset detectado pelo Kinect)",
     CODE_TRIAL_CANCEL: "TRIAL CANCELADO pelo experimentador (descartado)",
     CODE_TRIAL_PRACTICE: "trial de PRATICA (instrucoes; nao conta na sessao)",
+    CODE_HAND_SIDE_FLAG: "mao ativa do CUE mantida (detector viu o lado oposto)",
     CODE_BASELINE_REST: "baseline repouso ativo",
     CODE_TRIAL: "inicio do trial (repouso/home)",
     CODE_ORIGIN_START: "inicio calibracao de origem",
@@ -435,6 +472,51 @@ ARM_WRIST_TRUST_M = 0.55
 # Velocidade (m/s) minima para considerar um lado "em movimento" na escolha
 # automatica da mao ativa quando a trial nao define lado (cue circulo/nada).
 ARM_ACTIVE_SPEED_MPS = 0.05
+#: Raio (px do RGB do Kinect) em que uma deteccao e' considerada a MESMA mao do
+#: quadro anterior. 25 cm a ~1,3 m de distancia ~ 200 px: MAIOR que o tremor do
+#: punho entre dois quadros (~10 px) e MENOR que a separacao tipica entre as duas
+#: maos no quadro (~40-60 cm ~ 320-480 px). E' o que impede a troca de mao NO
+#: MEIO da trial quando o rotulo do MediaPipe oscila entre quadros.
+ANCORA_MAO_RAIO_PX = 200.0
+#: Tempo maximo (s) SEM deteccao para a ancora ainda valer. Passado isso a
+#: proxima deteccao e' outra cena: a selecao volta a ser pelo rotulo do cue.
+ANCORA_MAO_TIMEOUT_S = 1.0
+#: Erro MEDIANO de reprojecao (px do Kinect) acima do qual a triangulacao
+#: Kinect+webcam e' DESCARTADA. Dois casos legitimos sobem o erro: webcam
+#: dessincronizada (~10-30 px no movimento rapido) e mao ERRADA casada entre as
+#: duas cameras (os raios nao se cruzam: centenas de px). 40 px separa os dois
+#: -- e, ao descartar, a medida cai no depth do Kinect (MESMO quadro) em vez de
+#: publicar um 3D errado como se fosse medido.
+TRI_MAX_ERRO_PX = 40.0
+
+
+def lado_publicado(lado_cue, lado_detector):
+    """Lado da mao ATIVA a publicar (KT_hand/IMU_hand/ARM_side) + flag de aviso.
+
+    REGRA DA TRIAL (bug de 21/10/2026): quem manda e' o CUE. O rotulo do
+    detector e' uma classificacao de APARENCIA do quadro -- com as duas maos
+    visiveis ele oscila (palma para baixo, oclusao, maos que se cruzam) e, como
+    a escolha era refeita a cada quadro, o ponto rastreado passava para a OUTRA
+    mao no meio da ME/video. O lado publicado passa a ser SEMPRE o do cue; o
+    detector so' decide quando a trial NAO define lado (repouso, origem,
+    calibracao -- `cue` vazio).
+
+    Devolve (lado, flag): `lado` e' "left"/"right"/"" e `flag` = 1 quando o
+    detector viu o lado oposto ao do cue (a amostra continua sendo publicada do
+    lado do cue; a flag serve para a analise descartar/flagrar a trial).
+
+        >>> lado_publicado("left", "right")
+        ('left', 1)
+        >>> lado_publicado("left", "left")
+        ('left', 0)
+        >>> lado_publicado("", "right")
+        ('right', 0)
+    """
+    cue = lado_cue if lado_cue in ("left", "right") else ""
+    detector = lado_detector if lado_detector in ("left", "right") else ""
+    if cue:
+        return cue, int(bool(detector) and detector != cue)
+    return detector, 0
 #: Periodo (ms) do tick que consome os HOTKEYS GLOBAIS (hotkeys.py) na thread do
 #: Qt e atualiza o painel do experimentador. 50 ms = resposta instantanea para
 #: quem aperta a tecla, e garante que haja bytecode Python rodando na thread
@@ -587,7 +669,7 @@ class SharedState:
 
     def set_phase(self, phase, cue=None, message=""):
         """Atualiza fase/cue. `cue=None` mantem o cue atual: a MI acontece
-        logo apos a ME, com a seta ainda na tela, entao o lado escolhido para
+        logo apos a ME, com o simbolo ainda na tela, entao o lado escolhido para
         a publicacao do braco (arm_cue_side) deve persistir na MI."""
         with self.lock:
             self.phase = phase
@@ -679,8 +761,83 @@ class SharedState:
             return self.quit_requested
 
 
+def _mediana_movel(pos, janela=3):
+    """Mediana movel (sem dependencia alem do numpy) de uma matriz (n, 3)."""
+    n = len(pos)
+    if janela <= 1 or n < 3:
+        return pos
+    suave = np.empty_like(pos)
+    suave[0] = np.median(pos[:2], axis=0)
+    for i in range(1, n - 1):
+        suave[i] = np.median(pos[i - 1:i + 2], axis=0)
+    suave[-1] = np.median(pos[n - 2:], axis=0)
+    return suave
+
+
+def movimento_onset(pontos, speed_mps=MOVE_ONSET_SPEED_MPS,
+                    consec=MOVE_ONSET_CONSEC,
+                    min_travel_m=MOVE_ONSET_MIN_TRAVEL_M,
+                    window_sec=MOVE_ONSET_WINDOW_SEC,
+                    smooth=MOVE_ONSET_SMOOTH):
+    """Inicio do movimento a partir da trajetoria 3D do punho [(t, pos), ...].
+
+    Motivo cientifico (protocolo): o planejamento motor comeca 500-1000 ms ANTES
+    do movimento visivel (potencial de prontidao) e ~500-350 ms antes o cortex
+    pre-motor / area motora suplementar organizam a sequencia do movimento. Por
+    isso a janela de EEG de interesse deve comecar ~0,5 s ANTES do onset
+    detectado -- e nao num instante fixo pos-cue (que depende de quanto o
+    participante demora para reagir).
+
+    Criterio (o MESMO em tempo real e no fechamento do clipe):
+      1. mediana movel de `smooth` amostras -- o punho medido salta 1-10 cm
+         entre quadros (troca de fonte: triangulado -> depth -> esqueleto), e um
+         salto isolado nao pode virar onset;
+      2. o punho tem que ter andado `min_travel_m` DENTRO de `window_sec`
+         (deslocamento entre a amostra atual e a de ~`window_sec` atras). Exigir
+         o deslocamento NUMA JANELA e' o que separa movimento de DERIVA: com a
+         mao parada o punho medido anda ~1 cm em 0,45 s (ruido), enquanto um
+         alcance anda 15-25 cm em ~1 s;
+      3. e `consec` amostras consecutivas acima de `speed_mps` (portao grosso);
+      4. o onset devolvido e' RETROATIVO: a primeira amostra, dentro da janela,
+         que ja' tinha saido 25% de `min_travel_m` da posicao do inicio dela.
+         Assim o clipe (e o marcador) comecam no MOVIMENTO, e nao no instante em
+         que ele foi confirmado (que e' ~0,15-0,25 s depois).
+
+    Devolve (onset_time, indice_da_confirmacao, deslocamento_confirmado) ou
+    (None, None, maior_deslocamento_visto_na_janela). Funcao PURA (nao le
+    relogio): da' para testar e para reancorar o clipe DEPOIS da ME, com a
+    trajetoria inteira (ver `TrackingThread._clip_window`).
+    """
+    n = len(pontos)
+    if n < max(int(consec) + 1, int(smooth)):
+        return None, None, 0.0
+    t = np.array([p[0] for p in pontos], dtype=float)
+    pos = np.array([p[1] for p in pontos], dtype=float)
+    pos = _mediana_movel(pos, int(smooth))
+    janela = max(float(window_sec), 1e-3)
+    volta = float(min_travel_m) * 0.25
+    j = 0
+    corrida = 0
+    maior = 0.0
+    for i in range(1, n):
+        while j < i and t[i] - t[j] > janela:
+            j += 1
+        desloc = float(np.linalg.norm(pos[i] - pos[j]))
+        maior = max(maior, desloc)
+        dt = t[i] - t[i - 1]
+        velocidade = (float(np.linalg.norm(pos[i] - pos[i - 1])) / dt
+                      if dt > 1e-6 else 0.0)
+        corrida = corrida + 1 if velocidade >= float(speed_mps) else 0
+        if corrida >= int(consec) and desloc >= float(min_travel_m):
+            k = j
+            while k < i and float(np.linalg.norm(pos[k] - pos[j])) < volta:
+                k += 1
+            return float(t[k]), int(i), desloc
+    return None, None, float(maior)
+
+
 class MovementOnsetDetector:
-    """Detecta o INICIO DO MOVIMENTO (onset) pela velocidade do punho 3D.
+    """Detecta o INICIO DO MOVIMENTO (onset) pela trajetoria do punho 3D.
 
     Motivo cientifico (protocolo): o planejamento motor comeca 500-1000 ms ANTES
     do movimento visivel (potencial de prontidao) e ~500-350 ms antes o cortex
@@ -691,33 +848,38 @@ class MovementOnsetDetector:
 
     Como funciona:
       - so' vale na fase ME (o chamador zera a deteccao nas fases HOME/origem);
-      - calcula a velocidade (m/s) entre amostras consecutivas do punho 3D;
-      - exige `consec` amostras consecutivas acima de `speed_mps` E um
-        deslocamento acumulado >= `min_travel_m` desde o inicio da ME (o que
-        rejeita ruido/piscadas de triangulacao com a mao parada);
-      - ao disparar, guarda o instante (relogio monotonic) e o numero de
-        amostras desde a cue, e nunca dispara de novo na mesma trial.
+      - guarda a trajetoria da trial (`self.track`: [(t, pos), ...]) porque ela
+        e' reutilizada DEPOIS da ME para ancorar o clipe do priming com a serie
+        inteira (ver `TrackingThread._clip_window`);
+      - a cada amostra aplica `movimento_onset` (criterio unico); dispara na
+        primeira em que o punho ANDOU o minimo dentro da janela;
+      - ao disparar guarda o instante RETROATIVO do inicio do movimento
+        (`onset_time`), o numero de amostras desde o inicio da ME
+        (`onset_index`) e nunca dispara de novo na mesma trial.
     """
 
     def __init__(self, speed_mps=MOVE_ONSET_SPEED_MPS,
                  consec=MOVE_ONSET_CONSEC,
-                 min_travel_m=MOVE_ONSET_MIN_TRAVEL_M):
+                 min_travel_m=MOVE_ONSET_MIN_TRAVEL_M,
+                 window_sec=MOVE_ONSET_WINDOW_SEC,
+                 smooth=MOVE_ONSET_SMOOTH):
         self._speed = float(speed_mps)
         self._consec = int(consec)
         self._min_travel = float(min_travel_m)
+        self._window = float(window_sec)
+        self._smooth = int(smooth)
         self.reset()
 
     def reset(self):
         """Reinicia para uma nova trial (chamar nas fases HOME/origem)."""
         self.armed = False          # ja' viu a fase ME?
         self.detected = False
-        self.onset_time = None      # time.monotonic() do onset
+        self.onset_time = None      # time.monotonic() do INICIO do movimento
         self.onset_index = 0        # amostras desde o inicio da ME
-        self._run = 0
-        self._last_time = None
-        self._last_position = None
-        self._first_position = None
         self.samples = 0
+        #: Trajetoria (t, posicao) da ME. Na fase VIDEO o TrackingThread copia
+        #: esta lista antes do reset (ver `_me_track`).
+        self.track = []
 
     def update(self, time_s, position, phase_me):
         """Recebe (t, posicao 3D ou None, esta' na fase ME?).
@@ -726,41 +888,33 @@ class MovementOnsetDetector:
         """
         if not phase_me:
             return False
-        if self.detected:
-            return False
         if not self.armed:
             self.armed = True
-            self._run = 0
-            self._last_time = None
-            self._last_position = None
-            self._first_position = None
+            self.track = []
+            self.samples = 0
         self.samples += 1
         if position is None or time_s is None:
-            self._last_time, self._last_position = None, None
             return False
         position = np.asarray(position, np.float64).reshape(3)
         if not np.isfinite(position).all():
-            self._last_time, self._last_position = None, None
             return False
-        if self._first_position is None:
-            self._first_position = position.copy()
-        travel = float(np.linalg.norm(position - self._first_position))
-        speed = 0.0
-        if self._last_time is not None and self._last_position is not None:
-            dt = float(time_s) - float(self._last_time)
-            if dt > 1e-6:
-                speed = float(np.linalg.norm(position - self._last_position)) / dt
-        self._last_time, self._last_position = float(time_s), position
-        if speed >= self._speed and travel >= self._min_travel:
-            self._run += 1
-        else:
-            self._run = 0
-        if self._run >= self._consec:
-            self.detected = True
-            self.onset_time = float(time_s)
-            self.onset_index = self.samples
-            return True
-        return False
+        # A trajetoria e' guardada na ME INTEIRA, inclusive DEPOIS do disparo:
+        # o clipe do priming e' ancorado nela quando a ME termina (ver
+        # `_clip_window`), com a serie completa -- e nao no pedaco que existia
+        # no instante do disparo.
+        self.track.append((float(time_s), position))
+        if self.detected:
+            return False
+        onset, _indice, _desloc = movimento_onset(
+            self.track, speed_mps=self._speed, consec=self._consec,
+            min_travel_m=self._min_travel, window_sec=self._window,
+            smooth=self._smooth)
+        if onset is None:
+            return False
+        self.detected = True
+        self.onset_time = float(onset)
+        self.onset_index = self.samples
+        return True
 
 
 class TrackingThread(threading.Thread):
@@ -798,6 +952,11 @@ class TrackingThread(threading.Thread):
         self.onset_detector = MovementOnsetDetector() if use_onset else None
         self.onset_time = None              # monotonic do onset da trial atual
         self._onset_flag_frames = 0
+        #: Trajetoria (t, posicao) da ULTIMA ME: copia de `onset_detector.track`
+        #: feita quando a fase vira VIDEO. O clipe do priming e' ancorado nela
+        #: (serie inteira, ver `_clip_window`), e nao no instante em que o
+        #: detector disparou em tempo real.
+        self._me_track = []
         self.running = True
         self.mode = "kinect" if with_kinect else "imu_only"
         self.tracker = None
@@ -824,6 +983,17 @@ class TrackingThread(threading.Thread):
         # Estatisticas dos clipes de priming gravados em disco (#7).
         self._clips_saved = 0
         self._clips_bytes = 0
+        # --- LADO DA MAO ATIVA: latch do CUE + ancora de identidade ----------
+        #: Lado da trial corrente, TRAVADO quando o cue aparece (nunca muda no
+        #: meio da trial): e' a unica fonte de KT_hand/IMU_hand/ARM_side.
+        self._lado_trial = ""
+        #: Palma (px do RGB) do ultimo quadro com a mao ativa: e' a identidade
+        #: FISICA da mao, independente do rotulo (que oscila).
+        self._ancora_px = None
+        self._ancora_ts = 0.0
+        #: Quadros da trial em que o detector viu o lado OPOSTO ao cue.
+        self._discord_frames = 0
+        self._discord_flag_emitida = False
 
     @property
     def clips_saved(self):
@@ -835,6 +1005,101 @@ class TrackingThread(threading.Thread):
         """Tamanho total (bytes) dos clipes de priming gravados (#7)."""
         return self._clips_bytes
 
+    # ------------------------------------------------ lado da mao ATIVA (cue)
+    def _lado_da_trial(self, lado_cue):
+        """TRAVA o lado da mao ativa no lado do CUE (bug de 21/10/2026).
+
+        Chamado a cada quadro com `state.arm_cue_side`, o lado do cue corrente
+        (o SharedState o mantem durante ME -> video -> MI). A troca de lado so'
+        acontece AQUI, quando o cue muda -- ou seja, no comeco de outra trial:
+        dentro de uma trial, nada (nem o rotulo do detector) muda o lado. Ao
+        trocar, a ancora da mao e os contadores sao zerados, porque a identidade
+        fisica de uma mao nova nao tem relacao com a da trial anterior.
+
+        Devolve o lado travado ("left"/"right") ou "" quando a trial nao define
+        lado (home/repouso/origem/calibracao).
+        """
+        if lado_cue in ("left", "right"):
+            if lado_cue != self._lado_trial:
+                self._lado_trial = lado_cue
+                self._ancora_px = None
+                self._ancora_ts = 0.0
+                self._discord_frames = 0
+                self._discord_flag_emitida = False
+            return self._lado_trial
+        self._lado_trial = ""
+        self._ancora_px = None
+        self._ancora_ts = 0.0
+        self._discord_frames = 0
+        self._discord_flag_emitida = False
+        return ""
+
+    def _ancora_valida(self):
+        """Ancora (px) que ainda vale como identidade da mao, ou None."""
+        if self._ancora_px is None:
+            return None
+        if time.monotonic() - self._ancora_ts > ANCORA_MAO_TIMEOUT_S:
+            return None
+        return self._ancora_px
+
+    def _mao_ativa(self, landmarks, lado_cue):
+        """Atualiza a ancora/contadores e devolve o lado a PUBLICAR.
+
+        `landmarks` e' a mao escolhida pelo detector no quadro (None se
+        nenhuma); a ancora passa a ser a palma (no' 9) desse quadro. O lado
+        publicado vem de `lado_publicado` (o CUE manda) e a discordancia com o
+        rotulo do detector conta para o marcador 797.
+        """
+        agora = time.monotonic()
+        if not lado_cue:
+            self._ancora_px = None
+            self._ancora_ts = 0.0
+            self._discord_frames = 0
+            self._discord_flag_emitida = False
+            return ""
+        if landmarks is not None and self.tracker is not None:
+            try:
+                palma = landmarks[9]
+                px = (float(palma.x) * float(self.tracker.color_width),
+                      float(palma.y) * float(self.tracker.color_height))
+            except (AttributeError, IndexError, TypeError, ValueError):
+                px = None
+            if px is not None:
+                self._ancora_px = px
+                self._ancora_ts = agora
+        lado_detector = (self.tracker.last_hand_side
+                         if self.tracker is not None else "")
+        lado, flag = lado_publicado(lado_cue, lado_detector)
+        if flag:
+            self._discord_frames += 1
+            if not self._discord_flag_emitida:
+                self._discord_flag_emitida = True
+                self._emit_hand_side_flag(lado, lado_detector)
+                print(f"[tracking] ATENCAO: o detector viu a mao "
+                      f"'{lado_detector}' mas a trial e' '{lado}' -- mantendo "
+                      f"o lado do CUE (marcador {CODE_HAND_SIDE_FLAG} no CSV)",
+                      flush=True)
+        return lado
+
+    def _emit_hand_side_flag(self, lado_cue, lado_detector):
+        """Publica o marcador 797 (detector viu o lado oposto ao do cue)."""
+        if self.marker_queue is None:
+            return
+        try:
+            self.marker_queue.put({
+                "code": CODE_HAND_SIDE_FLAG,
+                "nome": CODE_NAMES.get(CODE_HAND_SIDE_FLAG, "mao ativa do cue"),
+                "hora": time.strftime("%H:%M:%S"),
+                "monotonic_s": round(time.monotonic(), 6),
+                "origem": "tracking",
+                "lado_cue": lado_cue,
+                "lado_detector": lado_detector,
+                "quadros": self._discord_frames,
+            })
+        except Exception as exc:            # fila cheia/indisponivel: nao trava
+            print(f"[tracking] falha ao publicar o marcador "
+                  f"{CODE_HAND_SIDE_FLAG}: {exc}", flush=True)
+
     # ------------------------------------------------------------------ setup
     def _setup_tracking(self):
         import cv2
@@ -842,6 +1107,17 @@ class TrackingThread(threading.Thread):
         import kinect_imu_groundtruth as gt
         self.gt = gt
         self.tracker = gt.KinectHandTracker(aux_indices=self.aux_indices)
+        # CONFERENCIA DE 5 SEGUNDOS (obrigatoria na bancada): o rotulo do
+        # MediaPipe depende de o RGB chegar espelhado ou nao, e um erro aqui
+        # inverte a mao de TODAS as trials -- sem nenhum rastro nos dados (o
+        # KT_hand sai coerente com o rotulo). O aviso fica no console na
+        # abertura, antes da primeira trial.
+        print(f"[tracking] lateralidade: MEDIAPIPE_KINECT_HANDEDNESS_FLIP="
+              f"{gt.MEDIAPIPE_KINECT_HANDEDNESS_FLIP} -> assumindo o RGB do "
+              "Kinect SEM espelho. CONFERENCIA: levante a mao ESQUERDA; o "
+              "esqueleto VERDE tem de aparecer na mao que esta' a' DIREITA do "
+              "video. Se aparecer na mao da ESQUERDA, o rotulo esta' invertido "
+              "(MEDIAPIPE_KINECT_HANDEDNESS_FLIP deve ser False).", flush=True)
         self.alignment = gt.CameraAlignment(self.aux_indices)
         if self.use_ik:
             self.arm_model = gt.ArmLinkModel()
@@ -1043,7 +1319,11 @@ class TrackingThread(threading.Thread):
             # mao errada contaminaria o alvo do SAND em silencio.
             _motion, phase, _cue, message = self.state.snapshot()
             side_hint = self.state.arm_cue_side
-            want_side = side_hint or None
+            # LATCH do lado da mao ativa (bug de 21/10/2026): o lado do CUE
+            # vale para a trial INTEIRA e nunca e' reavaliado no meio dela.
+            lado_trial = self._lado_da_trial(side_hint)
+            want_side = lado_trial or None
+            ancora_px = self._ancora_valida() if want_side else None
             # ---- le TODAS as webcams configuradas ----
             aux_frames, aux_hands_all = {}, {}
             for index, capture in self.auxiliaries.items():
@@ -1061,15 +1341,20 @@ class TrackingThread(threading.Thread):
                 else:
                     aux_hands_all[index] = []
             display, palm_position, landmarks = self.tracker.detect_hand(
-                color, depth, want_side=want_side)
+                color, depth, want_side=want_side, ancora_px=ancora_px,
+                raio_px=ANCORA_MAO_RAIO_PX)
+            # Lado PUBLICADO (KT_hand/IMU_hand/ARM_side): o do CUE. Se o detector
+            # viu o lado oposto ele nao troca a mao (a ancora do quadro anterior
+            # a mantem) e a trial ganha o marcador 797.
+            lado_ativo_nome = self._mao_ativa(landmarks, lado_trial)
             if not any(aux_hands_all.values()) \
                     and self.alignment._hand_depth_ema_initialized:
                 self.alignment.reset_hand_depth_ema()
 
             wrist3d, source, aux_used, aux_hands = self._resolve_wrist3d(
-                palm_position, landmarks, aux_hands_all, side_hint)
+                palm_position, landmarks, aux_hands_all, lado_trial)
             joints_all = self.tracker.arm_joints_all()
-            arm, arm_side = self._resolve_arm(wrist3d, side_hint, joints_all)
+            arm, arm_side = self._resolve_arm(wrist3d, lado_trial, joints_all)
             palm = self._resolve_palm(landmarks)
             depths_for_projection = self._projection_depths(palm_position,
                                                             wrist3d)
@@ -1112,9 +1397,11 @@ class TrackingThread(threading.Thread):
                 self.onset_detector.reset()     # nova trial: zera a deteccao
                 self.onset_time = None
             if phase == PHASE_VIDEO and self.onset_detector:
-                # Fim da ME: REARMA o detector para a MI (--mi-auto-onset),
-                # sem mexer no onset_time -- o clipe de priming ainda usa o
-                # onset da ME que acabou de ser detectado.
+                # Fim da ME: guarda a trajetoria da ME (o clipe do priming vai
+                # ser ancorado NELA, com a serie inteira -- ver `_clip_window`)
+                # e REARMA o detector para a MI (--mi-auto-onset), sem mexer no
+                # onset_time (ele continua valendo como fallback).
+                self._me_track = list(self.onset_detector.track)
                 self.onset_detector.reset()
             onset_ativo = phase == PHASE_ME or (
                 phase == PHASE_MI and self.state.mi_auto_onset)
@@ -1125,7 +1412,9 @@ class TrackingThread(threading.Thread):
                 self._emit_onset_marker()
                 print(f"[onset] INICIO DO MOVIMENTO detectado "
                       f"({self.onset_detector.onset_index} amostras apos a cue, "
-                      f"limiar {MOVE_ONSET_SPEED_MPS:g} m/s)", flush=True)
+                      f"limiar {MOVE_ONSET_SPEED_MPS:g} m/s + "
+                      f"{MOVE_ONSET_MIN_TRAVEL_M * 100:g} cm em "
+                      f"{MOVE_ONSET_WINDOW_SEC:g} s)", flush=True)
                 if phase == PHASE_MI:
                     self.state.mark_mi_onset()
             if (phase == PHASE_ME and want_side and wrist3d is None
@@ -1151,7 +1440,10 @@ class TrackingThread(threading.Thread):
             if pedido is not None:
                 self._publish_slowmo(pedido)
 
-            lado_ativo = ARM_SIDE_CODE.get(self.tracker.last_hand_side, 0)
+            # Lado ATIVO para o IMU: o MESMO lado publicado (o do cue). Antes
+            # vinha do rotulo do detector, entao uma oscilacao de rotulo
+            # ancorava a camera no IMU da OUTRA mao.
+            lado_ativo = ARM_SIDE_CODE.get(lado_ativo_nome, 0)
             imu_fused, zero_lock, blocos_imu = None, 0, None
             if hasattr(self.imu, "blocos_motion"):
                 # DOIS IMUs (um por mao): cada lado tem receptor e fusao proprios
@@ -1177,7 +1469,10 @@ class TrackingThread(threading.Thread):
                 wrist3d, source, imu, arm=arm, arm_side=arm_side, palm=palm,
                 imu_fused=imu_fused, zero_lock=zero_lock, fusion=self.fusion,
                 aux_used=aux_used,
-                hand_side=self.tracker.last_hand_side,
+                # KT_hand: lado do CUE durante a trial (a mao ATIVA publicada),
+                # nao o rotulo do quadro -- era isso que escondia a troca de mao
+                # (com o lado do rotulo, KT_hand dava o cue por construcao).
+                hand_side=lado_ativo_nome,
                 onset_flag=onset_flag, imu_blocos=blocos_imu))
 
             if display is not None:
@@ -1239,6 +1534,13 @@ class TrackingThread(threading.Thread):
                 error = (float(np.nanmedian(reproj))
                          if reproj is not None and np.isfinite(reproj).any()
                          else float("inf"))
+                # GATE: triangulacao com erro ABSOLUTO grosseiro e' descartada.
+                # Se a webcam casou a mao ERRADA (rotulo invertido) ou o quadro
+                # esta' dessincronizado, os raios nao fecham e o erro explode --
+                # sem o gate o "menor erro entre as cameras" ainda era aceito e
+                # um 3D da mao errada entrava como medida VALIDA (KT_src=1).
+                if error > TRI_MAX_ERRO_PX:
+                    continue
                 if error < best_err:
                     best, best_err = tri3d, error
                     best_aux, best_hands = int(index), hands
@@ -1312,6 +1614,12 @@ class TrackingThread(threading.Thread):
             return None
         if prefer_side and prefer_side in joints_all:
             return joints_all[prefer_side]
+        if prefer_side in ("left", "right"):
+            # A trial DEFINE o lado: publicar o braco do outro lado e' pior do
+            # que nao publicar nada (era o `joints_all["right"]` do fallback
+            # final: ARM_side saia 1 numa trial da ESQUERDA e a IK recebia o
+            # punho da outra mao). Sem o braco do cue, ARM_valid=0.
+            return None
         if wrist3d is not None:
             target = np.asarray(wrist3d, np.float64)
             return min(joints_all.values(),
@@ -1637,13 +1945,49 @@ class TrackingThread(threading.Thread):
     def _clip_window(self, request_time):
         """Intervalo (t0, t1) do movimento mostrado no video de priming.
 
-        ANCORADO NO ONSET (opcao A do protocolo): o clipe comeca no INICIO DO
-        MOVIMENTO detectado pelo Kinect (nao num instante fixo pos-cue) e mostra
-        SLOWMO_SPAN_SEC segundos a partir dele; em 0,5x isso ocupa
-        ~2x o tempo real e cabe na pausa de 2 s. Se o onset nao foi detectado
-        (Kinect perdeu a mao, movimento muito lento), cai no recuo fixo do fim
-        da ME (comportamento antigo).
+        ANCORADO NO INICIO DO MOVIMENTO: o clipe comeca no onset e mostra
+        SLOWMO_SPAN_SEC segundos a partir dele; em 0,5x isso ocupa ~2x o tempo
+        real e cabe na pausa de 2 s.
+
+        O onset NAO e' o instante em que o detector disparou em tempo real: a ME
+        ja' acabou quando o clipe e' montado, entao o onset e' RECALCULADO sobre
+        a trajetoria INTEIRA da ME (`self._me_track`) com o mesmo criterio
+        (`movimento_onset`), que ja' back-data o instante para o inicio do
+        movimento. Motivo medido na sessao de 21/10/2026: o criterio antigo
+        (0,03 m/s + 5 mm desde a cue) disparava com a MAO PARADA (11x em 6,2 s
+        de mao apoiada), entao o clipe comecava 0,2-0,8 s antes do movimento --
+        em 29 clipes, 16 comecavam com a mao ainda parada e 6 nao tinham
+        movimento nenhum.
+
+        Fallbacks (nesta ordem): sem trajetoria utilizavel (--sem-onset, Kinect
+        mudo) -> `onset_time` da deteccao em tempo real, se houver; sem nenhum
+        dos dois, ou com a mao parada a ME inteira (deslocamento <
+        MOVE_ONSET_MIN_TRAVEL_M), -> recuo fixo do fim da ME (comportamento
+        antigo, avisado no console).
+
+        O fim da janela e' LIMITADO ao pedido (`request_time`): se o movimento
+        comecou muito tarde (ex.: 3,6 s apos a cue, com a ME de 4 s), os quadros
+        do fim ainda nao existem no buffer -- o clipe sai mais curto (o playback
+        estica, ver `_video_tick`) em vez de ficar com a cauda vazia.
         """
+        track = self._me_track or []
+        if self.onset_detector is not None and len(track) >= 4:
+            onset, _indice, desloc = movimento_onset(track)
+            if onset is not None:
+                print(f"[video] ancora: inicio do movimento a "
+                      f"{onset - track[0][0]:.2f} s do inicio da ME "
+                      f"(deslocamento confirmado {desloc * 100:.1f} cm)",
+                      flush=True)
+                t1 = min(onset + SLOWMO_SPAN_SEC, request_time - 0.02)
+                if t1 - onset < SLOWMO_SPAN_SEC - 0.05:
+                    print(f"[video] AVISO: movimento comecou tarde; clipe de "
+                          f"{t1 - onset:.2f} s (nao {SLOWMO_SPAN_SEC:g} s)",
+                          flush=True)
+                return onset, t1
+            print(f"[video] ancora: SEM movimento confirmado na ME "
+                  f"(maior deslocamento {desloc * 100:.1f} cm < "
+                  f"{MOVE_ONSET_MIN_TRAVEL_M * 100:g} cm) -> janela fixa do "
+                  "fim da ME", flush=True)
         if self.onset_time is not None:
             return self.onset_time, self.onset_time + SLOWMO_SPAN_SEC
         t1 = request_time - SLOWMO_END_LAG_SEC
@@ -1790,24 +2134,30 @@ class TrackingThread(threading.Thread):
 # Paradigma Qt (janela de estimulos + maquina de estados)
 # =============================================================================
 # ----------------------------------------------------------------------------
-# Geometria do cue (objeto + seta): funcoes PURAS, fora da classe, para o
+# Geometria do cue (objeto + simbolo da mao): funcoes PURAS, fora da classe,
 # teste travar a folga e a costura SEM renderizar (Qt).
 # ----------------------------------------------------------------------------
 CAIXA_OBJETO_FRAC = 0.30      # lado da caixa quadrada do objeto / menor lado
-LINHA_CUE_FRAC = 0.40         # cy do objeto e da seta (linha do cue)
-MARGEM_SETA_FRAC = 0.06       # margem da ponta da seta na borda da tela
-COMPRIMENTO_SETA_FRAC = 0.30  # comprimento "desejado" da seta
-FOLGA_CUE_FRAC = 0.05         # folga minima objeto <-> seta (menor lado)
+LINHA_CUE_FRAC = 0.40         # cy do objeto e do simbolo (linha do cue)
+MARGEM_SETA_FRAC = 0.06       # margem do simbolo na borda (era da seta)
+COMPRIMENTO_SETA_FRAC = 0.30  # comprimento da faixa reservada (era a seta)
+FOLGA_CUE_FRAC = 0.05         # folga minima objeto <-> simbolo (menor lado)
 
 
 def geometria_cue(width, height, mao=None):
-    """Caixa do objeto e span x da seta, em pixels (sem objetos Qt).
+    """Caixa do objeto e faixa x reservada ao lado, em pixels (sem Qt).
 
-    A seta e' ENCURTADA para respeitar `FOLGA_CUE_FRAC` de folga contra a
-    caixa do objeto em QUALQUER proporcao de tela. Motivo (medido em
-    30/09/2026): em telas quasi-quadradas a cauda da seta invadia o objeto
-    (900x900 = -9 px, 700x900 = -7 px; em 1920x1050 havia 372 px de folga),
-    e foi o que o usuario viu ("a seta sobreposta no icone").
+    A faixa (`seta_x`) e' o corredor entre a borda da tela e a folga do
+    objeto, ENCURTADO para respeitar `FOLGA_CUE_FRAC` em QUALQUER proporcao de
+    tela. Motivo (medido em 30/09/2026, quando ali estava a SETA): em telas
+    quasi-quadradas a cauda da seta invadia o objeto (900x900 = -9 px,
+    700x900 = -7 px; em 1920x1050 havia 372 px de folga), e foi o que o
+    usuario viu ("a seta sobreposta no icone").
+
+    Desde 21/10/2026 quem ocupa essa faixa e' o SIMBOLO DA MAO
+    (`geometria_mao`), nao mais a seta -- mas o calculo da faixa continua
+    sendo ele: e' a garantia de folga/margem que o teste trava (e a regressao
+    dos -9 px de 900x900).
 
     Retorna: `lado` da caixa, `cx`/`cy`, `objeto_x` (x_esq, x_dir),
     `folga`, `seta_x` (x_min, x_max; None se `mao` nao e' lateral) e
@@ -1833,6 +2183,220 @@ def geometria_cue(width, height, mao=None):
         seta_x = (ponta - comprimento, ponta)
     return {"lado": lado, "cx": cx, "cy": cy, "objeto_x": objeto_x,
             "folga": folga, "seta_x": seta_x, "comprimento": comprimento}
+
+
+# ----------------------------------------------------------------------------
+# SIMBOLO DA MAO (substituiu a SETA em 21/10/2026)
+#
+# Queixa do participante no trial real de 21/10: "a seta para a esquerda (mao
+# esquerda) deixa entender que a bola esta a esquerda, mas muitas vezes o
+# objeto esta no lado direito da mesa". A seta dizia o lado da MAO, mas era
+# lida como o lado do OBJETO -- e a leitura errada muda a interpretacao do
+# estimulo (a mao muda, o objeto nao). O simbolo da mao diz QUAL MAO usar e
+# nao tem leitura direcional: fica sempre AO LADO do objeto, com o dedao do
+# lado de dentro do icone (a mao direita vista de frente tem o dedao a
+# esquerda de quem olha, e a esquerda e' o ESPELHO) e um rotulo curto embaixo.
+#
+# Geometria PURA (sem Qt), como o resto do cue: o teste mede em 9 telas que o
+# simbolo nao encosta no objeto (mesma `FOLGA_CUE_FRAC` da seta), nao invade a
+# borda (mesma `MARGEM_SETA_FRAC`) e que o rotulo cabe no corredor que sobra.
+# ----------------------------------------------------------------------------
+CAIXA_MAO_FRAC = 0.62           # lado da caixa da mao / lado da caixa do objeto
+ALTURA_ROTULO_MAO_FRAC = 0.040  # altura "desejada" do rotulo / menor lado
+FOLGA_ROTULO_MAO_FRAC = 0.02    # folga vertical mao <-> rotulo / menor lado
+LINHA_ROTULO_EM = 1.6           # altura de UMA linha / tamanho da fonte Arial
+TAMANHO_MINIMO_ROTULO = 12      # abaixo disso nao se le de longe: sem rotulo
+MOSTRAR_ROTULO_MAO = True       # rotulo curto sob o simbolo (acessibilidade)
+#: avanco medido no Arial Bold do proprio Qt (QFontMetricsF, 100 pt):
+#: "MÃO ESQUERDA" = 0,9175 em/caractere e "MÃO DIREITA" = 0,7909. Usamos 0,95
+#: (~3% de folga) para a estimativa NUNCA subestimar a largura real -- e' ela
+#: que garante, sem Qt, que o rotulo desenhado nao invade o objeto.
+LARGURA_CARACTERE_EM = 0.95
+ROTULO_MAO = {"esquerda": "MÃO ESQUERDA", "direita": "MÃO DIREITA"}
+
+#: Palma/dedos/dedao em coordenadas NORMALIZADAS do viewBox 0..100 (y para
+#: BAIXO), com a mesma linguagem dos outros icones: traco branco de ponta
+#: redonda, SEM preenchimento. "M"/"L"/"C" = moveTo/lineTo/cubica (3 pontos) --
+#: exatamente os comandos que a pintura monta no QPainterPath.
+_MAO_VISTA = 100.0
+_MAO_PALMA = (("M", (26.0, 50.0)),
+              ("L", (25.0, 74.0)),
+              ("C", (24.0, 90.0), (34.0, 95.0), (50.0, 96.0)),
+              ("C", (66.0, 95.0), (76.0, 90.0), (75.0, 74.0)),
+              ("L", (74.0, 50.0)))
+_MAO_DEDOS = ((34.0, 22.0),      # indicador (o lado do dedao)
+              (45.5, 12.0),      # medio (o mais longo)
+              (57.0, 17.0),      # anelar
+              (67.5, 29.0))      # minimo (o mais curto)
+_MAO_BASE_DEDOS = 52.0           # os dedos entram por dentro da "boca" da palma
+_MAO_DEDAO = ((29.0, 58.0), (15.0, 39.0))
+#: espessura de cada traco / lado da caixa (11-15 px num icone de 167 px: o
+#: mesmo peso do traco do objeto, que e' 4,5% da caixa dele).
+_MAO_ESPESSURA = (0.070, 0.075, 0.095)     # palma, dedos, dedao
+
+
+def _mao_limites_vista():
+    """(x0, y0, x1, y1) da TINTA da mao DIREITA no viewBox 0..100.
+
+    Cada ponto cresce o RAIO da espessura do seu proprio traco (as pontas sao
+    redondas): e' o que prova que a tinta nao vaza da caixa.
+    """
+    palma, dedos, dedao = _MAO_ESPESSURA
+    pontos = [(p, palma) for comando in _MAO_PALMA for p in comando[1:]]
+    pontos += [((x, _MAO_BASE_DEDOS), dedos) for (x, _ponta) in _MAO_DEDOS]
+    pontos += [((x, ponta), dedos) for (x, ponta) in _MAO_DEDOS]
+    pontos += [(p, dedao) for p in _MAO_DEDAO]
+    raio = [(_MAO_VISTA * esp * 0.5) for (_p, esp) in pontos]
+    xs = [p[0] for (p, _esp) in pontos]
+    ys = [p[1] for (p, _esp) in pontos]
+    return (min(x - r for x, r in zip(xs, raio)),
+            min(y - r for y, r in zip(ys, raio)),
+            max(x + r for x, r in zip(xs, raio)),
+            max(y + r for y, r in zip(ys, raio)))
+
+
+def _mao_deslocamento():
+    """Deslocamento (dx, dy) que CENTRA a tinta na caixa do simbolo.
+
+    Sem ele a mao "andaria" para um lado dentro da caixa (o dedao puxa a tinta
+    para fora do centro) e o espelho esquerda/direita nao cairia na MESMA
+    caixa: a mao esquerda ficaria mais longe do objeto que a direita.
+    """
+    x0, y0, x1, y1 = _mao_limites_vista()
+    return (_MAO_VISTA * 0.5 - (x0 + x1) * 0.5,
+            _MAO_VISTA * 0.5 - (y0 + y1) * 0.5)
+
+
+#: calculados uma vez, na importacao (aritmetica pura, sem Qt)
+_MAO_DESLOCAMENTO = _mao_deslocamento()
+
+
+def _mao_tinta():
+    """(x0, y0, x1, y1) da tinta no viewBox, JA' centrada na caixa."""
+    dx, dy = _MAO_DESLOCAMENTO
+    x0, y0, x1, y1 = _mao_limites_vista()
+    return (x0 + dx, y0 + dy, x1 + dx, y1 + dy)
+
+
+_MAO_TINTA = _mao_tinta()
+
+
+def _mao_vista(mao):
+    """(palma, dedos, dedao) normalizados, CENTRADOS na caixa e espelhados.
+
+    A mao DIREITA e' o desenho da tabela acima (dedao a esquerda, que e' o que
+    ela mostra para quem olha de frente); a ESQUERDA e' o espelho em x.
+    """
+    dx, dy = _MAO_DESLOCAMENTO
+    espelhar = mao == "esquerda"
+
+    def ponto(p):
+        x = p[0] + dx
+        if espelhar:
+            x = _MAO_VISTA - x
+        return (x, p[1] + dy)
+
+    palma = tuple((c[0],) + tuple(ponto(p) for p in c[1:]) for c in _MAO_PALMA)
+    dedos = tuple((ponto((x, _MAO_BASE_DEDOS)), ponto((x, ponta)))
+                  for (x, ponta) in _MAO_DEDOS)
+    dedao = tuple(ponto(p) for p in _MAO_DEDAO)
+    return palma, dedos, dedao
+
+
+def geometria_mao(width, height, mao):
+    """Simbolo da mao ao lado da caixa do objeto, em pixels (sem Qt).
+
+    O simbolo fica ADJACENTE ao objeto (a `FOLGA_CUE_FRAC` de sempre, ou seja,
+    a mesma garantia anti-sobreposicao que a seta tinha) e o lado dele e'
+    limitado pelo CORREDOR que sobra ate' a `MARGEM_SETA_FRAC` da borda --
+    assim ele cabe entre o objeto e a borda em QUALQUER proporcao de tela.
+
+    Retorna (None se `mao` nao e' lateral): `lado` da caixa quadrada,
+    `caixa` (x0, y0, x1, y1), `centro`, `faixa` (corredor livre, para o
+    rotulo), `palma`/`dedos`/`dedao` JA' em pixels (`comando[0]` = "M"/"L"/"C"
+    e `comando[1:]` = os pontos), `espessuras` em pixels, `tinta` (contorno da
+    TINTA, ja' com a espessura) e `pontos` (todos os pontos, para o teste
+    provar que o desenho nao vaza da caixa).
+    """
+    if mao not in ("esquerda", "direita"):
+        return None
+    geo = geometria_cue(width, height, mao)
+    margem = width * MARGEM_SETA_FRAC
+    if mao == "esquerda":
+        faixa = (margem, geo["objeto_x"][0] - geo["folga"])
+        limite = faixa[1]              # x da borda DIREITA do simbolo
+    else:
+        faixa = (geo["objeto_x"][1] + geo["folga"], width - margem)
+        limite = faixa[0]              # x da borda ESQUERDA do simbolo
+    lado_mao = max(0.0, min(geo["lado"] * CAIXA_MAO_FRAC, faixa[1] - faixa[0]))
+    x0 = limite - lado_mao if mao == "esquerda" else limite
+    cx, cy = x0 + lado_mao * 0.5, geo["cy"]
+    caixa = (x0, cy - lado_mao * 0.5, x0 + lado_mao, cy + lado_mao * 0.5)
+    k = lado_mao / _MAO_VISTA
+    palma, dedos, dedao = _mao_vista(mao)
+
+    def converte(p):
+        return (x0 + p[0] * k, caixa[1] + p[1] * k)
+
+    pontos = tuple(converte(p) for comando in palma for p in comando[1:])
+    pontos += tuple(converte(p) for dedo in dedos for p in dedo)
+    pontos += tuple(converte(p) for p in dedao)
+    tinta0 = converte((_MAO_TINTA[0], _MAO_TINTA[1]))
+    tinta1 = converte((_MAO_TINTA[2], _MAO_TINTA[3]))
+    return {
+        "mao": mao,
+        "lado": lado_mao,
+        "caixa": caixa,
+        "centro": (cx, cy),
+        "faixa": faixa,
+        "palma": tuple((c[0],) + tuple(converte(p) for p in c[1:])
+                       for c in palma),
+        "dedos": tuple((converte(a), converte(b)) for (a, b) in dedos),
+        "dedao": tuple(converte(p) for p in dedao),
+        "espessuras": tuple(lado_mao * e for e in _MAO_ESPESSURA),
+        "tinta": (tinta0[0], tinta0[1], tinta1[0], tinta1[1]),
+        "pontos": pontos,
+    }
+
+
+def geometria_rotulo_mao(width, height, mao, texto=None):
+    """Caixa e tamanho do rotulo curto do simbolo (pixels), ou None.
+
+    O rotulo e' OPCIONAL (acessibilidade: quem nao reconhece o icone le a
+    palavra) e cabe INTEIRO no corredor livre entre a mao e o objeto: se o
+    texto nao couber legivel numa linha ele quebra nas palavras ("MÃO" /
+    "ESQUERDA"), e se nem assim couber nao e' desenhado.
+    """
+    if not MOSTRAR_ROTULO_MAO:
+        return None
+    texto = texto or ROTULO_MAO.get(mao, "")
+    geo = geometria_mao(width, height, mao)
+    if not texto or geo is None or geo["lado"] < 8:
+        return None
+    menor = min(width, height)
+    faixa = geo["faixa"]
+    corredor = faixa[1] - faixa[0]
+    desejado = ALTURA_ROTULO_MAO_FRAC * menor
+    palavras = texto.split()
+    em = len(texto) * LARGURA_CARACTERE_EM
+    linhas = 1
+    tamanho = int(min(desejado, corredor / em)) if em > 0 else 0
+    if tamanho < TAMANHO_MINIMO_ROTULO and len(palavras) > 1:
+        em = max(len(p) for p in palavras) * LARGURA_CARACTERE_EM
+        tamanho = int(min(desejado, corredor / em))
+        linhas = len(palavras)
+    if tamanho < TAMANHO_MINIMO_ROTULO:
+        return None
+    largura = min(corredor, em * tamanho)
+    altura = LINHA_ROTULO_EM * tamanho * linhas
+    y0 = geo["caixa"][3] + FOLGA_ROTULO_MAO_FRAC * menor
+    y1 = y0 + altura
+    if y1 > height - FOLGA_ROTULO_MAO_FRAC * menor:
+        return None                      # sem espaco vertical: sem rotulo
+    x0 = min(max(geo["centro"][0] - largura * 0.5, faixa[0]),
+             faixa[1] - largura)
+    return {"texto": texto, "caixa": (x0, y0, x0 + largura, y1),
+            "tamanho": tamanho, "linhas": linhas}
 
 
 #: Costuras da bola de tenis: portadas do SVG do Twemoji (U+1F3BE), em
@@ -1915,8 +2479,8 @@ class _StimulusCanvas(QWidget):
 
     Modos:
       home      -> ponto de fixacao + marca de "home" (mao na posicao inicial);
-      cue       -> fixacao + OBJETO alvo (garrafa/bola/caneta) + seta do lado
-                   da mao indicada (esquerda/direita);
+      cue       -> fixacao + OBJETO alvo (garrafa/bola/caneta) + simbolo da
+                   MAO indicada (esquerda/direita) ao lado do objeto;
       video     -> quadro do video do movimento em camera lenta (0,5x);
       message   -> texto grande (instrucoes, pausas, baseline);
       aviso     -> aviso centralizado de video indisponivel (sem clipe do
@@ -1956,7 +2520,7 @@ class _StimulusCanvas(QWidget):
         self.update()
 
     def show_mi(self, pulsante=False):
-        """MI: tela NEUTRA com MI_TEXTO (sem simbolo, sem seta, sem video).
+        """MI: tela NEUTRA com MI_TEXTO (sem simbolo, sem mao, sem video).
 
         (19/10/2026) O cue permanecia na tela durante a MI inteira e o
         participante ficava olhando para o ESTIMULO em vez de imaginar;
@@ -1970,7 +2534,7 @@ class _StimulusCanvas(QWidget):
         self.update()
 
     def pulse_tick(self):
-        """--mi-desenho: repinta para pulsar simbolo+seta durante a MI."""
+        """--mi-desenho: repinta para pulsar simbolo da mao durante a MI."""
         if getattr(self, "_pulsante", False):
             self.update()
 
@@ -2017,7 +2581,7 @@ class _StimulusCanvas(QWidget):
                 geo = geometria_cue(width, height)
                 self._aplica_pulso(painter, geo["cx"], geo["cy"])
             self._paint_object(painter, width, height)
-            self._paint_arrow(painter, width, height)
+            self._paint_hand(painter, width, height)
             if getattr(self, "_pulsante", False):
                 painter.restore()
         elif self.mode == "mi":
@@ -2075,7 +2639,7 @@ class _StimulusCanvas(QWidget):
 
     def _paint_object(self, painter, width, height):
         """Objeto alvo, grande e centralizado (garrafa / bola / caneta)."""
-        # mesma caixa/linha que `geometria_cue` usa para encaixar a seta
+        # mesma caixa/linha que `geometria_cue`/`geometria_mao` usam
         geo = geometria_cue(width, height)
         lado, cx, cy = geo["lado"], geo["cx"], geo["cy"]
         box = QRectF(cx - lado * 0.5, cy - lado * 0.5, lado, lado)
@@ -2135,36 +2699,69 @@ class _StimulusCanvas(QWidget):
                       box.width() * 0.06, body.height())
         painter.drawRect(clip)
 
-    def _paint_arrow(self, painter, width, height):
-        """Seta grande do lado da mao indicada (esquerda/direita).
+    def _paint_hand(self, painter, width, height):
+        """SIMBOLO DA MAO do lado pedido, ao lado do objeto (era uma seta).
 
-        O comprimento vem de `geometria_cue`: a seta e' encurtada para
-        respeitar a folga contra o objeto em QUALQUER proporcao de tela (a
-        cauda invadia o icone em telas quasi-quadradas -- ver geometria_cue).
+        Substituiu a seta em 21/10/2026: a seta dizia o lado da MAO, mas o
+        participante lia como o lado do OBJETO na mesa ("a seta para a
+        esquerda deixa entender que a bola esta a esquerda"). Quem decide
+        onde o simbolo fica e' `geometria_mao` (pura): adjacente ao objeto,
+        com a folga e a margem de borda de sempre, em qualquer proporcao de
+        tela. Os tracos vem em PIXELS, entao aqui so' se desenha.
         """
-        if self.hand not in ("esquerda", "direita"):
+        geo = geometria_mao(width, height, self.hand)
+        if geo is None or geo["lado"] < 8:
             return
-        geo = geometria_cue(width, height, self.hand)
-        x_min, x_max = geo["seta_x"]
-        cy = geo["cy"]
-        length = geo["comprimento"]
-        thickness = length * 0.16
-        if self.hand == "esquerda":
-            head, tail = QPointF(x_min, cy), QPointF(x_max, cy)
-        else:
-            head, tail = QPointF(x_max, cy), QPointF(x_min, cy)
-        painter.setPen(QPen(self.WHITE, thickness, Qt.SolidLine, Qt.RoundCap))
-        painter.drawLine(tail, head)
-        painter.setPen(Qt.NoPen)
-        painter.setBrush(QBrush(self.WHITE))
-        wing = length * 0.34
-        if self.hand == "esquerda":
-            points = [head, QPointF(head.x() + wing, cy - wing * 0.8),
-                      QPointF(head.x() + wing, cy + wing * 0.8)]
-        else:
-            points = [head, QPointF(head.x() - wing, cy - wing * 0.8),
-                      QPointF(head.x() - wing, cy + wing * 0.8)]
-        painter.drawPolygon(QPolygonF(points))
+        e_palma, e_dedo, e_dedao = geo["espessuras"]
+        caminho = QPainterPath()
+        for comando in geo["palma"]:
+            tipo, pontos = comando[0], comando[1:]
+            if tipo == "M":
+                caminho.moveTo(QPointF(*pontos[0]))
+            elif tipo == "L":
+                caminho.lineTo(QPointF(*pontos[0]))
+            else:
+                caminho.cubicTo(QPointF(*pontos[0]), QPointF(*pontos[1]),
+                                QPointF(*pontos[2]))
+        painter.setBrush(Qt.NoBrush)
+        painter.setPen(QPen(self.WHITE, e_palma, Qt.SolidLine,
+                            Qt.RoundCap, Qt.RoundJoin))
+        painter.drawPath(caminho)
+        painter.setPen(QPen(self.WHITE, e_dedo, Qt.SolidLine, Qt.RoundCap))
+        for base, ponta in geo["dedos"]:
+            painter.drawLine(QPointF(*base), QPointF(*ponta))
+        painter.setPen(QPen(self.WHITE, e_dedao, Qt.SolidLine, Qt.RoundCap))
+        painter.drawLine(QPointF(*geo["dedao"][0]),
+                         QPointF(*geo["dedao"][1]))
+        self._paint_rotulo_mao(painter, width, height)
+
+    def _paint_rotulo_mao(self, painter, width, height):
+        """Rotulo curto sob o simbolo ("MÃO ESQUERDA"), sempre dentro da faixa.
+
+        A caixa vem de `geometria_rotulo_mao` (pura, corredor entre a mao e o
+        objeto); aqui a fonte ainda ENCOLHE pelo `_ajusta_tamanho_fonte` com a
+        metrica REAL do Qt -- se o Arial for substituido por uma fonte mais
+        larga, o texto cabe na caixa mesmo assim (a caixa nao cresce).
+        """
+        rotulo = geometria_rotulo_mao(width, height, self.hand)
+        if rotulo is None:
+            return
+        x0, y0, x1, y1 = rotulo["caixa"]
+        rect = QRectF(x0, y0, x1 - x0, y1 - y0)
+        flags = Qt.AlignLeft | Qt.AlignTop | Qt.TextWordWrap
+
+        def medida(texto, tamanho):
+            fonte = QFont("Arial", int(tamanho), QFont.Bold)
+            caixa = QFontMetricsF(fonte).boundingRect(rect, flags, texto)
+            return caixa.width(), caixa.height()
+
+        tamanho = _ajusta_tamanho_fonte(rotulo["texto"], rect.width(),
+                                        rect.height(), rotulo["tamanho"],
+                                        TAMANHO_MINIMO_ROTULO, medida)
+        painter.setPen(QPen(self.WHITE))
+        painter.setFont(QFont("Arial", int(tamanho), QFont.Bold))
+        painter.drawText(rect, Qt.AlignCenter | Qt.TextWordWrap,
+                         rotulo["texto"])
 
     def _paint_text(self, painter, width, height):
         """Mensagem grande (instrucoes, pausas, preparacao) SEM cortar.
@@ -2218,6 +2815,11 @@ class _StimulusCanvas(QWidget):
         SEMPRE (inclusive com a janela do OpenCV na frente) sao os hotkeys
         globais de `hotkeys.py` + o painel do experimentador.
         """
+        if event.isAutoRepeat():
+            # Tecla SEGURADA nao repete a acao: um ESPACO segurado na pausa
+            # entre blocos confirmaria o proximo bloco sozinho (e um C
+            # segurado cancelaria varias trials de uma vez).
+            return
         if event.key() == Qt.Key_Space:
             if self.on_skip is not None:
                 self.on_skip()
@@ -2267,6 +2869,10 @@ class StimulusWindow(QMainWindow):
         """Registra um atalho de APLICACAO (funciona com qualquer janela Qt)."""
         atalho = QShortcut(QKeySequence(tecla), self)
         atalho.setContext(Qt.ApplicationShortcut)
+        # Segurar a tecla NAO repete: na pausa entre blocos o ESPACO e' a
+        # CONFIRMACAO do proximo bloco -- com auto-repeat o mesmo toque
+        # segurado confirmaria sozinho depois do PAUSE_CONFIRM_DWELL_SEC.
+        atalho.setAutoRepeat(False)
         atalho.activated.connect(callback)
         return atalho
 
@@ -2332,9 +2938,10 @@ class ExperimenterPanel(QMainWindow):
         layout = QVBoxLayout(corpo)
         layout.addWidget(self._status)
         layout.addWidget(self._botao(
-            "Pular espera  [ESPACO]", on_skip,
-            dica="Encerra a espera/pausa atual (preparacao, baseline, pausa "
-                 "entre blocos). Nao descarta a trial."))
+            "Pular/continuar  [ESPACO]", on_skip,
+            dica="Encerra a espera/pausa atual (preparacao, baseline). Na "
+                 "PAUSA ENTRE BLOCOS: o 1o ESPACO encurta a contagem, o 2o "
+                 "INICIA o proximo bloco. Nao descarta a trial."))
         layout.addWidget(self._botao(
             "Cancelar trial  [C]", on_cancel_trial,
             dica="Descarta a trial em andamento (marca 796 no CSV) e segue "
@@ -2379,7 +2986,7 @@ class _ParadigmController(QObject):
 
     Sequencia por trial (total ~13,25 s + ITI aleatorio 1-2 s):
       fixacao 3 s (768) -> beep em -1 s -> cue 1.25 s (769/770/771)
-      -> ME 4 s (778; seta permanece; execucao do braco + fechar a mao)
+      -> ME 4 s (778; simbolo permanece; execucao do braco + fechar a mao)
       -> pausa 1 s (779) -> MI 4 s (780; BIPE + tela "AGORA IMAGINE";
         overlay do Kinect so' na tela de tracking)
       -> fim MI (781) -> ITI 1-2 s -> proximo trial.
@@ -2400,6 +3007,20 @@ class _ParadigmController(QObject):
         self._pause_end = 0.0
         self._pause_skip = False
         self._pause_prefix = ""
+        #: Pausa que NAO termina sozinha (a pausa entre blocos): ao zerar a
+        #: contagem a tela pede ESPACO e so' um ESPACO NOVO chama `on_end`.
+        self._pause_confirmar = False
+        self._pause_confirmar_texto = PAUSE_CONFIRM_TEXT
+        #: True = contagem encerrada, esperando o ESPACO de confirmacao.
+        self._pause_esperando = False
+        #: monotonic em que a tela de confirmacao abriu (ver dwell).
+        self._pause_confirm_t0 = 0.0
+        self._pause_confirm_dwell = PAUSE_CONFIRM_DWELL_SEC
+        #: monotonic do inicio da pausa e do fim da CONTAGEM (para o 793).
+        self._pause_inicio = 0.0
+        self._pause_fim_contagem = 0.0
+        #: O que encerrou a contagem: "tempo" (zerou) ou "espaco" (encurtada).
+        self._pause_motivo = "tempo"
         # navegacao
         self._baseline_steps = []
         self._trial_index = 0
@@ -2460,12 +3081,16 @@ class _ParadigmController(QObject):
         QTimer.singleShot(int(delay_ms), self._begin_preparation)
 
     def skip(self):
-        """ESPACO do experimentador: encerra a pausa/espera atual.
+        """ESPACO do experimentador: encerra/encurta a espera atual.
 
-        Nao mexe no trial: so' encurta a espera corrente (preparacao, baseline,
+        Nao mexe no trial: so' mexe na espera corrente (preparacao, baseline,
         pausa entre blocos) e o paradigma segue normalmente. Durante a
         contagem/video nao ha' espera para pular -- para descartar a trial
         inteira use `cancel_trial` (tecla C).
+
+        PAUSA ENTRE BLOCOS: sao DOIS ESPACOS (relato de 21/10/2026). O 1o
+        encurta a contagem e a tela PARA em "PRESSIONE ESPACO PARA CONTINUAR";
+        o 2o inicia o proximo bloco. Zerar o timer nao inicia nada sozinho.
         """
         if self._pause_on_end is not None:
             self._pause_skip = True
@@ -2485,6 +3110,13 @@ class _ParadigmController(QObject):
         """
         if self._finished or self._aborting:
             return
+        if self._pause_on_end is not None:
+            # Nao ha' trial em andamento: a tela e' uma espera/pausa (e o
+            # proximo bloco so' comeca com ESPACO). Deixar o C passar aqui
+            # iniciaria o bloco por um caminho que NAO e' a confirmacao.
+            print("[paradigma] C ignorado: espera/pausa em andamento "
+                  "(use ESPACO para continuar)", flush=True)
+            return
         trial = self._trial_index
         # Mata TUDO o que estava agendado para o trial atual (fim da ME, video,
         # fim da MI...) antes de comecar o proximo: sem isso o fim da MI antiga
@@ -2492,6 +3124,7 @@ class _ParadigmController(QObject):
         self._generation += 1
         self._pause_on_end = None
         self._pause_skip = False
+        self._pause_esperando = False
         self._state.clear_video()
         self._state.set_phase(PHASE_IDLE, cue="")
         total = len(self._cfg["trials"])
@@ -2535,9 +3168,16 @@ class _ParadigmController(QObject):
         """Linha de status para o painel: fase, trial e o que cada tecla faz."""
         cfg = self._cfg
         total = len(cfg["trials"])
+        if self._pause_esperando:
+            # A pausa entre blocos so' termina com o ESPACO: o painel avisa
+            # (e' o caminho "a prova de foco" do experimentador).
+            fase = "PAUSA: ESPACO inicia o proximo bloco"
+        elif self._pause_on_end is not None:
+            fase = "espera em andamento (ESPACO pula)"
+        else:
+            fase = f"fase {self._state.phase or 'idle'}"
         return (f"bloco {self._bloco + 1}/{cfg['blocos']} | "
-                f"trial {self._trial_index + 1}/{total} | "
-                f"fase {self._state.phase or 'idle'}")
+                f"trial {self._trial_index + 1}/{total} | {fase}")
 
     def set_panel(self, panel):
         """Liga (ou desliga, com None) o painel do experimentador.
@@ -2579,6 +3219,8 @@ class _ParadigmController(QObject):
     def stop(self):
         self._generation += 1
         self._pause_on_end = None
+        self._pause_skip = False
+        self._pause_esperando = False
         self._mi_pulse_active = False
 
     def _emit(self, code, **extra):
@@ -2597,20 +3239,50 @@ class _ParadigmController(QObject):
         self._queue.put(evento)
 
     # ------------------------------------------------------------- pausas
-    def _start_pause_phase(self, seconds, prefix, on_end):
-        """Pausa com contagem na tela (ESPACO pula). Usada na preparacao,
-        no baseline e entre blocos."""
-        self._pause_end = time.monotonic() + float(seconds)
+    def _start_pause_phase(self, seconds, prefix, on_end, confirmar=False,
+                           confirmar_texto=None):
+        """Pausa com contagem na tela.
+
+        Args:
+            seconds: duracao da contagem (s).
+            prefix: texto fixo do topo (ex.: "PAUSA\\nBloco 1 de 5 concluido").
+            on_end: callback chamado quando a espera REALMENTE termina.
+            confirmar: True = a pausa NAO termina sozinha. Zerada a contagem
+                (ou encurtada com ESPACO), a tela PARA em
+                "PRESSIONE ESPACO PARA CONTINUAR" e so' um ESPACO NOVO chama
+                `on_end`. E' o caso da pausa entre blocos.
+            confirmar_texto: texto da tela de espera (None = PAUSE_CONFIRM_TEXT).
+
+        Sem `confirmar` (preparacao, baseline) a fase segue sozinha ao zerar a
+        contagem: sao trechos CRONOMETRADOS do protocolo, e o ESPACO so' os
+        encurta como antes.
+        """
+        agora = time.monotonic()
+        self._pause_inicio = agora
+        self._pause_end = agora + float(seconds)
+        self._pause_fim_contagem = 0.0
+        self._pause_motivo = "tempo"
         self._pause_skip = False
         self._pause_prefix = prefix
         self._pause_on_end = on_end
+        self._pause_confirmar = bool(confirmar)
+        self._pause_confirmar_texto = (confirmar_texto or PAUSE_CONFIRM_TEXT)
+        self._pause_esperando = False
+        self._pause_confirm_t0 = 0.0
         self._pause_tick()
 
     def _pause_tick(self):
         if self._pause_on_end is None:
             return
+        if self._pause_esperando:
+            self._pause_confirmacao_tick()
+            return
         remaining = self._pause_end - time.monotonic()
-        if remaining <= 0 or self._pause_skip:
+        venceu = remaining <= 0
+        if venceu or self._pause_skip:
+            if self._pause_confirmar:
+                self._abra_confirmacao("tempo" if venceu else "espaco")
+                return
             callback = self._pause_on_end
             self._pause_on_end = None
             callback()
@@ -2619,8 +3291,55 @@ class _ParadigmController(QObject):
         if self._pause_prefix:
             self._window.show_message(
                 f"{self._pause_prefix}\n\n{minutos:02d}:{segundos:02d}\n\n"
-                "(ESPACO pula)")
+                f"{PAUSE_SKIP_HINT}")
         self._schedule(250, self._pause_tick)
+
+    def _abra_confirmacao(self, motivo):
+        """Contagem encerrada (tempo ou ESPACO): PARA e espera o ESPACO.
+
+        O `_pause_skip` que encerrou a contagem e' CONSUMIDO aqui: ele NAO vale
+        como confirmacao (e' o mesmo toque que abriu esta tela). O proximo bloco
+        so' comeca com um ESPACO NOVO, depois de `_pause_confirm_dwell` s com a
+        tela "PRESSIONE ESPACO PARA CONTINUAR" a' vista.
+        """
+        agora = time.monotonic()
+        self._pause_skip = False
+        self._pause_esperando = True
+        self._pause_end = 0.0
+        self._pause_fim_contagem = agora
+        self._pause_confirm_t0 = agora
+        self._pause_motivo = motivo
+        print(f"[paradigma] pausa encerrada pelo {motivo.upper()} "
+              f"({agora - self._pause_inicio:.1f} s de contagem): aguardando "
+              "ESPACO para iniciar o proximo bloco", flush=True)
+        texto = self._pause_confirmar_texto
+        if self._pause_prefix:
+            texto = f"{self._pause_prefix}\n\n{texto}"
+        self._window.show_message(texto)
+        self._schedule(150, self._pause_tick)
+
+    def _pause_confirmacao_tick(self):
+        """Tela "PRESSIONE ESPACO": espera o ESPACO do experimentador.
+
+        Um toque FISICO de ESPACO chega aqui DUAS vezes (atalho do Qt do
+        `StimulusWindow` + vigia global de `hotkeys.py`), entao os pedidos de
+        pular que chegarem nos primeiros `_pause_confirm_dwell` segundos sao
+        DESCARTADOS: a confirmacao tem de ser um ESPACO novo, com a tela ja'
+        visivel. Nada aqui inicia o bloco por tempo.
+        """
+        if self._pause_skip:
+            self._pause_skip = False          # todo pedido e' consumido
+            if (time.monotonic() - self._pause_confirm_t0
+                    >= self._pause_confirm_dwell):
+                callback = self._pause_on_end
+                self._pause_on_end = None
+                self._pause_esperando = False
+                callback()
+                return
+            print("[paradigma] pausa: ESPACO ignorado (chegou junto com o que "
+                  "encerrou a contagem; confirme com um ESPACO novo)",
+                  flush=True)
+        self._schedule(150, self._pause_tick)
 
     # --- abertura da sessao ---
     def _begin_preparation(self):
@@ -2757,6 +3476,7 @@ class _ParadigmController(QObject):
         self._window.show_message(texto)
         self._pause_on_end = callback
         self._pause_skip = False
+        self._pause_esperando = False     # esta tela nao e' a de confirmacao
         self._espaco_tick()
 
     def _espaco_tick(self):
@@ -3013,7 +3733,7 @@ class _ParadigmController(QObject):
         # (19/10) A janela estava em modo "video" (quadro do clipe da
         # pausa); `show_mi` troca o modo -- o bug antigo do quadro
         # CONGELADO na MI inteira (30/09) morria aqui e continua morto.
-        # A MI mostra APENAS o texto (sem cue/seta/objeto): olhar para o
+        # A MI mostra APENAS o texto (sem cue/mao/objeto): olhar para o
         # estimulo distrai a imaginacao. O bipe marca o onset; com
         # --mi-auto-onset ele so' toca quando o Kinect ve o MOVIMENTO
         # (o inicio real da janela da imaginacao).
@@ -3077,21 +3797,48 @@ class _ParadigmController(QObject):
             self._run_trial(proximo)
 
     def _end_block(self, index):
-        """Fim do bloco -> pausa de 2 min (ESPACO pula) -> proximo bloco."""
+        """Fim do bloco -> pausa (contagem) + CONFIRMACAO -> proximo bloco.
+
+        A contagem e' so' o tempo de descanso do participante: quando ela zera
+        (ou quando o ESPACO a encurta) a tela PARA em "PRESSIONE ESPACO PARA
+        CONTINUAR" e o proximo bloco NAO comeca sozinho -- so' um ESPACO NOVO
+        chama `_finish_block_pause` (relato do trial de 21/10/2026).
+        """
         self._emit(CODE_BLOCK_END)
-        self._emit(CODE_PAUSE_START)
-        self._window.show_message("PAUSA entre blocos")
         bloco = index // self._cfg["trials_por_bloco"]
+        # 792/793 delimitam a espera REAL (contagem + confirmacao): o JSON
+        # leva os tempos para a analise cortar o trecho sem EEG util.
+        self._emit(CODE_PAUSE_START, bloco=bloco,
+                   duracao_prevista_s=float(self._cfg["pausa_bloco_sec"]))
+        self._window.show_message("PAUSA entre blocos")
         print(f"[paradigma] bloco {bloco}/{self._cfg['blocos']} concluido "
               f"({index} trials) | pausa de "
-              f"{self._cfg['pausa_bloco_sec']:g} s", flush=True)
+              f"{self._cfg['pausa_bloco_sec']:g} s + ESPACO para iniciar o "
+              f"bloco {bloco + 1}", flush=True)
         self._start_pause_phase(
             self._cfg["pausa_bloco_sec"],
             f"PAUSA\n\nBloco {bloco} de {self._cfg['blocos']} concluido",
-            lambda: self._finish_block_pause(index))
+            lambda: self._finish_block_pause(index),
+            confirmar=True,
+            confirmar_texto=("Contagem encerrada.\n"
+                             "PRESSIONE ESPACO PARA CONTINUAR\n"
+                             f"(inicia o bloco {bloco + 1})"))
 
     def _finish_block_pause(self, index):
-        self._emit(CODE_PAUSE_END)
+        """ESPACO de confirmacao: fecha a pausa REAL e inicia o proximo bloco."""
+        agora = time.monotonic()
+        fim_contagem = self._pause_fim_contagem or agora
+        inicio = self._pause_inicio or fim_contagem
+        contagem = max(0.0, fim_contagem - inicio)
+        espera = max(0.0, agora - fim_contagem)
+        self._emit(CODE_PAUSE_END,
+                   duracao_s=round(agora - inicio, 3),
+                   contagem_s=round(contagem, 3),
+                   espera_confirmacao_s=round(espera, 3),
+                   contagem_encerrada_por=self._pause_motivo)
+        print(f"[paradigma] pausa encerrada por ESPACO: {contagem:.1f} s de "
+              f"contagem + {espera:.1f} s de espera pela confirmacao",
+              flush=True)
         self._start_block(index // self._cfg["trials_por_bloco"])
 
     def _start_block(self, bloco):
@@ -3575,13 +4322,19 @@ class MotionRecorder(threading.Thread):
         return self._path
 
     def run(self):
+        # Um `open()` novo comeca com 4 kB de buffer: `header.write` + `flush`
+        # garante o cabecalho no DISCO antes da 1a linha (senao ele so' sai no
+        # `stop()` normal; num `os._exit` o arquivo ficaria sem cabecalho).
+        handle = None
+        erros = 0
         try:
             with open(self._path, "w", encoding="utf-8", newline="") as handle:
+                handle.write("t_mono_s,t_epoch_s," + ",".join(MOTION_COLUMNS)
+                             + "\n")
+                handle.flush()
                 # Tempos ABSOLUTOS, no mesmo relogio do JSON de eventos (que
                 # grava monotonic_s em cada evento): e' isso que permite
                 # alinhar o movimento de 30 Hz com a EEG de 500 Hz depois.
-                handle.write("t_mono_s,t_epoch_s," + ",".join(MOTION_COLUMNS)
-                             + "\n")
                 print(f"[movimento] gravando {os.path.basename(self._path)} a "
                       f"{1.0 / self._dt:.0f} Hz ({N_MOTION_COLS} colunas)",
                       flush=True)
@@ -3589,21 +4342,66 @@ class MotionRecorder(threading.Thread):
                 while not self._stop_event.is_set():
                     now = time.monotonic()
                     if now < next_t:
+                        # Espera curta + FLUSH PERIODICO: com o buffer cheio o
+                        # `os._exit` (abort do CancelamentoGarantido) descarta
+                        # ate' 8 kB de usuario-space -- era o que engolia as
+                        # trials no meio da sessao.
+                        self._flush_quieta(handle)
                         time.sleep(min(0.005, next_t - now))
                         continue
                     next_t += self._dt
                     if next_t < now - 1.0:      # atraso grande: realinha
                         next_t = now + self._dt
-                    motion, _phase, _cue, _msg = self._state.snapshot()
-                    origin, orpy = self._state.origin_snapshot()
-                    row = build_motion_row(motion, origin, orpy)
-                    handle.write(f"{now:.6f},{time.time():.6f},")
-                    handle.write(",".join(_fmt_num(v) for v in row) + "\n")
-                    self._rows += 1
+                    try:
+                        # Origem lida com `origin_ready` (mesma regra do
+                        # RecordingMuxer :3420-3421): `origin_snapshot()` devolve
+                        # o par SEM o flag e, se a calibracao estiver no meio,
+                        # x/y/z saem absolutos e o KT vira relativo a uma origem
+                        # que nao vale para a linha -- coluna quebrada. O guard
+                        # tambem cobre a corrida em que `origin_xyz` vira array
+                        # entre a checagem e a leitura.
+                        motion, _phase, _cue, _msg = self._state.snapshot()
+                        if getattr(self._state, "origin_ready", False):
+                            origin, orpy = self._state.origin_snapshot()
+                        else:
+                            origin = orpy = None
+                        row = build_motion_row(motion, origin, orpy)
+                        handle.write(f"{now:.6f},{time.time():.6f},")
+                        handle.write(",".join(_fmt_num(v) for v in row) + "\n")
+                        self._rows += 1
+                        erros = 0
+                    except Exception as exc:   # uma linha NAO mata o gravador
+                        # Motivo (sessao 21/10 13:57): o `except` ENVOLVIA o laco
+                        # inteiro -- uma unica `KeyError`/`ValueError` em
+                        # `build_motion_row` encerrava a thread e o resto da
+                        # sessao ficava sem movimento, em silencio.
+                        erros += 1
+                        self.error = exc
+                        print(f"[movimento] ERRO na linha {self._rows + 1} "
+                              f"(#{erros}): {type(exc).__name__}: {exc}",
+                              flush=True)
         except Exception as exc:            # nunca derruba a sessao
             self.error = exc
-            print(f"[movimento] FALHA ao gravar {self._path}: {exc}",
+            print(f"[movimento] FALHA ao gravar {self._path}: "
+                  f"{type(exc).__name__}: {exc}",
                   flush=True)
+        finally:
+            # `flush()` no fim + `handle` guardado fora do `with`: no caminho
+            # normal fecha o arquivo; num `os._exit` o `finally` roda com o
+            # handle ainda aberto e o `_flush_quieta` do ultimo ciclo ja' deixou
+            # o conteudo no disco.
+            if handle is not None:
+                self._flush_quieta(handle)
+
+    @staticmethod
+    def _flush_quieta(handle):
+        """`flush()` engolido por `try`: uma falha de disco nao mata a thread."""
+        if handle is None:
+            return
+        try:
+            handle.flush()
+        except Exception:                     # noqa: BLE001 - disco cheio/USB
+            pass
 
     def stop(self):
         self._stop_event.set()
@@ -3686,13 +4484,15 @@ def slides_instrucao():
         "Você verá símbolos na tela e fará movimentos de alcance e "
         "preensão com as mãos.\n\nESPAÇO para continuar",
         "OS SIMBOLOS\n\n"
-        "SETA ESQUERDA = use a MAO ESQUERDA\n"
-        "SETA DIREITA = use a MAO DIREITA\n\n"
+        "SIMBOLO DA MAO ESQUERDA = use a MAO ESQUERDA\n"
+        "SIMBOLO DA MAO DIREITA = use a MAO DIREITA\n\n"
+        "O simbolo da mao diz QUAL MAO usar: ele NAO indica de que lado da "
+        "mesa o objeto esta.\n\n"
         "Objetos: GARRAFA, BOLA e CANETA\n"
         "(os 3 desenhos aparecem a seguir)\n\nESPACO",
         "CADA TRIAL (12 s) TEM 4 ETAPAS\n\n"
         "1) MAO NO HOME (descanse)\n"
-        "2) SETA + OBJETO: EXECUTE o movimento\n"
+        "2) SIMBOLO DA MAO + OBJETO: EXECUTE o movimento\n"
         "3) VIDEO: veja seu movimento em camera lenta\n"
         "4) Um BIPE toca e a tela mostra AGORA IMAGINE: "
         "IMAGINE o movimento (sem executar)",
@@ -4259,7 +5059,7 @@ def parse_args():
                              "(0 = nenhuma; cada condicao aparece ao menos "
                              "uma vez; marcadores com pratica=1 + codigo 789)")
     parser.add_argument("--mi-desenho", action="store_true",
-                        help="Durante a MI, pulsa o simbolo+seta (ajuda a "
+                        help="Durante a MI, pulsa o simbolo da mao (ajuda a "
                              "mentalizacao; padrao desligado para manter a "
                              "MI 'limpa' visualmente)")
     parser.add_argument("--mi-auto-onset", action="store_true",
@@ -4291,7 +5091,10 @@ def parse_args():
                         help="Imaginacao motora (s)")
     parser.add_argument("--pausa-bloco-sec", type=float,
                         default=BLOCK_PAUSE_SEC,
-                        help="Pausa entre blocos (s; ESPACO pula)")
+                        help="Pausa entre blocos (s). Zerada a contagem, a "
+                             "tela pede ESPACO para iniciar o proximo bloco "
+                             "(nada comeca sozinho); ESPACO durante a "
+                             "contagem encurta os minutos restantes")
     parser.add_argument("--olhos-abertos", type=float,
                         default=BASELINE_EYES_OPEN_SEC,
                         help="Baseline olhos abertos (s; 0 desativa)")
@@ -4779,7 +5582,7 @@ def main():
                         for (obj, mao), n in sorted(contagem.items()))
     print(f"Condicoes   : {detalhe}")
     print(f"Duracao estimada ~{estimated / 60:.1f} min "
-          f"(+ preparacao e pausas)")
+          f"(+ preparacao e pausas; cada pausa so' termina com ESPACO)")
 
     marker_queue = queue.Queue()
     state = SharedState()

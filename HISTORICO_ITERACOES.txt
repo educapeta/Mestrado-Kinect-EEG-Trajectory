@@ -5958,3 +5958,147 @@ paralelo; patches serao aplicados e testados aqui)
      deveria comecar no onset (CODE_MOVE_ONSET/KT_onset).
   Painel de impedancias: CONFIRMADO funcionando pelo usuario ("tudo certinho").
 
+
+================================================================================
+ITEM 94 (21/10/2026) - PACOTE DE CORRECOES DO TRIAL REAL (5 questoes) APLICADO
+    E TESTADO: cue com simbolo de mao, pausa com confirmacao, latch da ma
+    rastreada, video de priming ancorado no onset REAL e gravador de movimento
+================================================================================
+CONTEXTO: trial real de 21/10 (sessao gravacao_MEMI_20261021_135730_*). O
+usuario relatou 5 problemas; 5 subagentes (MiMo 2.6 flash via OpenRouter)
+entregaram diagnostico+patch; o Lead aplicou tudo em serie, revisou e testou.
+
+=== 1) CUE: SETA -> SIMBOLO DE MAO + OBJETO ===
+PROBLEMA: a seta dizia o lado da MAO, mas o participante lia como o lado do
+OBJETO ("seta p/ esquerda faz entender que a bola esta a esquerda, mas o objeto
+muitas vezes esta a direita da mesa").
+CAUSA: cue = objeto + `_paint_arrow` (eeg_motor_paradigm.py:2138-2167, chamado
+em :2020); a seta nunca codificou a POSICAO do objeto, so' a mao.
+FIXO: geometria PURA nova `geometria_mao`/`geometria_rotulo_mao` (palma+4
+dedos+dedao, esquerda = espelho exato da direita, dedao do lado de dentro;
+mesma FOLGA_CUE_FRAC da seta e mesma margem de borda; rotulo "MAO ESQUERDA/
+DIREITA" opcional que encolhe/ some se nao couber). `_paint_hand` +
+`_paint_rotulo_mao`; `geometria_cue` ficou INTACTA (a garantia anti-
+sobreposicao e' a mesma e o teste antigo nao mudou). Slides atualizados
+explicam que o simbolo diz a MAO, nao o lado do objeto. `test_cue_estimulos`
++5 blocos (9 telas x 2 maos, espelho/anatomia, rotulo, sem `_paint_arrow`,
+slides sem SETA). Evidencia visual gerada em PNG (900x900/700x900/1920x1050).
+
+=== 2) PAUSA ENTRE BLOCOS: EXIGE ESPACO DE CONFIRMACAO ===
+PROBLEMA: o timer de 2 min era ilustrativo; ao zerar o proximo bloco comecava
+sozinho.
+CAUSA: `_pause_tick` (:2609-2617) tratava `remaining <= 0` e `_pause_skip` no
+MESMO ramo e chamava `on_end` direto -> `_finish_block_pause` -> `_start_block`.
+FIXO: 1o ESPACO durante a contagem ENCURTA; zerada/encurtada a contagem, a tela
+para em "PRESSIONE ESPACO PARA CONTINUAR" e SO' um ESPACO NOVO inicia o bloco.
+Preparacao/baseline continuam automaticas (fases cronometradas). Dwell 0,4 s +
+`setAutoRepeat(False)` + descarte de auto-repeat (um toque fisico chega 2x ao
+controlador: atalho do Qt + vigia global de hotkeys) para o mesmo toque nao
+confirmar. `C` durante a pausa NAO inicia mais o bloco (bypass antigo).
+Marcadores 792/793 delimitam a espera REAL e o 793 leva duracao_s,
+contagem_s, espera_confirmacao_s, contagem_encerrada_por no JSON.
+Teste novo `test_pausa_confirmacao.py` 9 cenarios (por relogio/janela falsos).
+ATENCAO DE BANCADA: agora sao DOIS ESPACOS entre blocos.
+
+=== 3) LATERALIDADE: O CUE MANDA NA MAO RASTREADA (latch) ===
+PROBLEMA: Kinect trocava a mao no meio da trial (cue esquerda, tracking direita
+durante o video). Os dados das duas maos sao gravados; o problema era QUAL mao
+e' publicada como ativa.
+CAUSA: a mao ativa era REESCOLHIDA A CADA QUADRO pelo rotulo de lateralidade do
+MediaPipe (`_pick_hand_index`, kinect_imu_groundtruth.py:3066-3081, chamado em
+eeg_motor_paradigm.py:1063-1064); nao havia latch nem continuidade. E
+`KT_hand` (:1180) saia do MESMO rotulo que escolheu a mao => a troca era
+INVISIVEL no log. EVIDENCIA (29 clipes de priming de 21/10): 6/29 (21%)
+rastrearam a mao OPOSTA ao cue; t032 saltou 92 px entre 2 quadros; rotulo do
+mesmo lado do quadro oscilou em 11/29 clipes (69 trocas, max 19); nos 3 clipes
+com as 2 maos detectadas, 3/3 tinham o MESMO rotulo nas duas (impossivel).
+FIXO: `lado_publicado(cue, detector)` puro + LATCH por trial em
+`TrackingThread._lado_da_trial` (o lado so' muda quando o cue muda); continuidade
+fisica por ancora da palma (raio 200 px, timeout 1 s) para o rotulo so' decidir
+no 1o quadro da trial/ao perder a mao; `KT_hand`/`IMU_hand`/`ARM_side`/lado do
+IMU seguem o cue; marcador novo **797** (CODE_HAND_SIDE_FLAG, 1x/trial, JSON com
+lado_cue x lado_detector); `_select_arm` nunca publica o braco oposto; gate
+TRI_MAX_ERRO_PX=40 descarta triangulacao grosseira (cai no depth do Kinect).
+PENDENCIA GLOBAL (importante): ha' indicio de que o RGB do Kinect e' ESPELHADO
+(logo "DELL" aparece espelhado num frame cru `_hb_kinect.png`) -> se for isso,
+`MEDIAPIPE_KINECT_HANDEDNESS_FLIP=True` esta' invertido em TODAS as trials (o
+latch nao corrige erro global). Foi adicionado print de diagnostico na abertura
+(conferencia de 5 s: levantar a mao ESQUERDA e ver para que lado vai o
+esqueleto). CONFERIR NA PROXIMA BANCADA.
+Testes: `test_paradigm_lado_cue.py` (novo, 7 blocos) + caso 15 em
+`test_lateralidade_maos.py`.
+
+=== 4) VIDEO DE PRIMING: ANCORADO NO ONSET *REAL* ===
+PROBLEMA: o video comecava antes do movimento e em momentos diferentes.
+CAUSA: o clipe JA era ancorado no onset (:1647), mas o "onset" nao era o inicio
+do movimento: `MOVE_ONSET_SPEED_MPS=0.030` e `MOVE_ONSET_MIN_TRAVEL_M=0.005`
+(5 mm) ficavam no chao de ruido do punho 3D (passo mediano 3,3 mm = 0,095 m/s a
+30 Hz; 62,7% das amostras acima de 0,03 m/s; o criterio antigo disparou 11x em
+6,2 s COM A MAO PARADA). O instante era da DETECCAO, nao do inicio. Resultado:
+clipe [falso onset, +1 s] comecava com a mao parada e cortava o movimento; o
+mesmo falso onset ia para 795/KT_onset (janela de EEG errada).
+MEDIDO nos 29 clipes de 21/10 (fluxo optico): 7/29 corretos; 16/29 com a mao
+parada no inicio (movimento 0,20-0,85 s depois); 6/29 sem movimento nenhum =>
+22/29 (76%) comecaram antes do movimento.
+FIXO: funcao pura `movimento_onset()` = mediana-3 (mata 1 quadro de salto) +
+deslocamento >= 3,5 cm DENTRO de 0,45 s + 3 amostras >0,03 m/s, com onset
+RETROATIVO; o detector em tempo real usa o mesmo criterio e guarda a trajetoria
+inteira da ME; `_clip_window` REEANCORA o clipe sobre a serie completa
+(fallback: onset_time legado; sem movimento confirmado -> janela fixa antiga,
+com log "[video] ancora:"). Protocolo de 12 s/playback/codigos intocados;
+`--sem-onset` continua desligando.
+Testes: `test_move_onset.py` 9/9 (+ruido real de bancada e onset retroativo, que
+FALHAM no codigo antigo) e `test_video_priming.py` +6 casos.
+NOTA DE ANALISE: o 795 continua gravado na amostra da CONFIRMACAO (~0,15-0,25 s
+depois do inicio real; antes era 0,17-2,8 s aleatorio) - documentar mudanca de
+semantica entre sessoes.
+
+=== 5) GRAVADOR DE MOVIMENTO: MORRIA EM SILENCIO (achado critico) ===
+PROBLEMA DESCOBERTO PELO LEAD: o `_movimento.csv` da sessao de 21/10 tem SO'
+186 linhas (6,2 s, t_mono 430975.8-430981.98, mtime 13:58:21) - parou na
+calibracao de origem e nao gravou NENHUM dos 49 trials. O EEG (129 MB), o
+JSON de eventos e os 29 clipes continuaram normais. Mesmo padrao em 16/10 e
+19/10 (KT_* NaN/0), ou seja: as trajetorias dos trials NAO estao nos CSVs.
+CAUSA: `MotionRecorder.run` (:3577-3606) tinha o `except` envolvendo o LACO
+INTEIRO: UMA excecao em qualquer linha de `build_motion_row` encerrava a
+thread para sempre (em silencio: o print ia para um console que nao era salvo).
+Fragilidades: `origin_snapshot()` sem `origin_ready` (o RecordingMuxer ja' usa
+o guard em :3420-3421; no recorder podia relativizar KT por origem ainda nao
+valida) e nenhum flush (o `os._exit` do abort descartava o buffer de texto).
+FIXO: try/except POR LINHA com log "[movimento] ERRO na linha N (#K)" e
+`self.error`; guard de `origin_ready`; header+flush na abertura e flush
+periodico + flush final em `finally`; `_flush_quieta` nunca mata a thread por
+falha de disco. Teste novo `test_motion_recorder.py` 4/4 (sobrevive a excecao,
+origin_ready, flush em disco, stop prematuro) - FALHA no codigo antigo.
+RECOMENDACAO: na proxima bancada rodar o paradigma com
+`... 2>&1 | Tee-Object _sessao.log` para termos o console em disco.
+
+=== VALIDACAO (Lead, nesta arvore) ===
+Novos/modificados: test_motion_recorder 4/4, test_pausa_confirmacao OK,
+test_cue_estimulos OK (+5 blocos), test_move_onset 9/9, test_video_priming OK,
+test_lateralidade_maos OK (+caso 15), test_paradigm_lado_cue 7/7.
+Regressao (18 suites): paradigm_protocol 11/11, paradigm_abort 8/8,
+paradigm_melhorias, trial_feedback, paradigm_aux_pair 5/5, imu_gravacao_dual
+5/5, arm_csv 6/6, parada_threads, imu_bank, palm_alignment 9/9,
+overlay_auxiliares 9/9, triangulation, casamento_eeg, aux_pair_stereo,
+body_anchor, arm_ik, anatomical_reg, imu_serial_bridge => TUDO OK
+(25 suites no total, nenhuma falha).
+
+=== PENDENCIAS PARA A PROXIMA BANCADA ===
+ 1) CONFERIR O ESPELHAMENTO DO KINECT (a mais critica): novo print na abertura
+    do tracking pede para levantar a mao ESQUERDA e ver se o esqueleto verde vai
+    para a mao que aparece a DIREITA no video. Se estiver invertido em todas as
+    trials, virar `MEDIAPIPE_KINECT_HANDEDNESS_FLIP` (kinect_imu_groundtruth.py:161).
+ 2) VALIDAR O NOVO CUE na tela (simbolo de mao + rotulo) e o fluxo de DOIS
+    ESPACOS na pausa entre blocos.
+ 3) Sessao real nova com `--imu-portas "4210,4211"` (gravar as DUAS maos) e
+    `2>&1 | Tee-Object _sessao.log`; conferir que o _movimento.csv cresce
+    durante os trials (o fix do recorder).
+ 4) Dados de 21/10: NAO ha' trajetorias nos CSVs (so' os 29 AVIs de priming e
+    o EEG/JSON); para casar EEG x groundtruth dessa sessao usar os AVIs.
+ 5) HOTSPOT: com um unico ESP32 (2 MPUs) ha' UM IP no hotspot
+    (192.168.137.83) e as DUAS portas UDP (4210=direita, 4211=esquerda) vem do
+    MESMO IP. O "0 pacotes" visto no 4210 era o proprio paradigma com a porta
+    4210 aberta (default 1 IMU); e o hotspot do Windows pode DESLIGAR sozinho
+    quando fica sem clientes - desativar essa opcao nas configuracoes.
+

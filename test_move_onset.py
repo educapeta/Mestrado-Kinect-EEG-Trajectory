@@ -14,7 +14,12 @@ Casos:
 4. fora da fase ME -> nunca dispara;
 5. amostras None/NaN -> nao travam e nao disparam;
 6. reset() entre trials: cada trial dispara uma vez;
-7. coluna KT_onset presente e valendo 1 apenas na amostra publicada.
+7. coluna KT_onset presente e valendo 1 apenas na amostra publicada;
+8. DERIVA/ruido reais da bancada (mao parada, medidos em 21/10/2026) nao podem
+   disparar -- o criterio antigo (5 mm / 0,03 m/s) disparava 11x em 6,2 s de
+   mao apoiada e era a causa do video de priming comecar antes do movimento;
+9. o onset devolvido e' RETROATIVO (inicio do movimento, nao o instante da
+   confirmacao) e a trajetoria da trial fica guardada em `track` para o clipe.
 """
 import sys
 
@@ -88,6 +93,48 @@ assert len(linha_1) == p.N_MOTION_COLS
 assert linha_1[coluna] == 1.0 and linha_0[coluna] == 0.0
 assert p.CODE_MOVE_ONSET in p.CODE_NAMES
 
-print("MOVE_ONSET_OK: 7/7 casos (parada, movimento, pico de ruido, fase, NaN, "
-      "reset entre trials, coluna KT_onset)")
+# 8) DERIVA/ruido REAIS da bancada (medido em 21/10/2026, mao apoiada a 30 Hz:
+#    passo mediano 3,3 mm; deriva lenta de +-1,5 cm) -> o criterio NOVO nao
+#    pode disparar. O ANTIGO (0,03 m/s + 5 mm) disparava 11x em 6,2 s com a mao
+#    parada -- e era essa a causa do video de priming comecar antes do
+#    movimento. Este caso falha sem o patch.
+d = p.MovementOnsetDetector()
+RU2 = np.random.default_rng(7)
+
+
+def mao_parada(t):
+    decorrido = t - T0
+    deriva = np.array([0.015 * np.sin(2 * np.pi * decorrido / 3.0),
+                       0.010 * np.cos(2 * np.pi * decorrido / 4.0), 0.0])
+    return deriva + RU2.normal(0, 0.0033, 3)
+
+
+parado_real = [passo(T0 + i * DT, mao_parada(T0 + i * DT), d)
+               for i in range(180)]                      # 6 s a 30 Hz
+assert not any(parado_real), "mao parada (ruido real) nao pode disparar onset"
+
+# 9) onset RETROATIVO: mao parada 1,5 s + alcance de 18 cm -> o instante
+#    devolvido e' o INICIO do movimento (nao a amostra em que o deslocamento
+#    minimo foi confirmado, ~0,2 s depois). Sem o criterio por janela o onset
+#    sairia no primeiro jitter (~0,1 s).
+d = p.MovementOnsetDetector()
+RU3 = np.random.default_rng(3)
+disparos = []
+for i in range(45):                                       # 1,5 s parado
+    disparos.append(passo(T0 + i * DT, RU3.normal(0, 0.002, 3), d))
+for i in range(30):                                       # 0,6 s de alcance
+    s = i / 29.0
+    suave = 3 * s ** 2 - 2 * s ** 3
+    disparos.append(passo(T0 + (45 + i) * DT,
+                          np.array([0.0, 0.0, -0.18 * suave])
+                          + RU3.normal(0, 0.002, 3), d))
+assert sum(disparos) == 1, f"deveria disparar 1x (disparou {sum(disparos)})"
+assert d.onset_time is not None
+erro = (d.onset_time - T0) - 45 * DT                      # + = antes do real
+assert -0.12 <= erro <= 0.25, f"onset {erro:+.2f} s fora do inicio real"
+assert len(p.MovementOnsetDetector().track) == 0
+
+print("MOVE_ONSET_OK: 9/9 casos (parada, movimento, pico de ruido, fase, NaN, "
+      "reset entre trials, coluna KT_onset, ruido real de bancada, onset "
+      "retroativo)")
 sys.exit(0)

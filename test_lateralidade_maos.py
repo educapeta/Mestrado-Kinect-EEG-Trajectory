@@ -671,6 +671,91 @@ print("14) OK: o aprendizado so' conta frame conferivel INTEIRO e com erro "
       "apertado (a correcao do frame continua valendo)")
 
 # =============================================================================
+# 15) CONTINUIDADE: o rotulo oscila, a mao rastreada NAO troca
+# =============================================================================
+# Cena real de bancada: as duas maos no quadro, a DIREITA do usuario em x menor
+# (0,30) e a ESQUERDA em x maior (0,75). O rotulo e' aplicado com flip=False
+# para o teste falar a lingua do rotulo BRUTO do MediaPipe.
+X_DIR, X_ESQ = 0.30, 0.75
+
+
+class MaoEm:
+    """Landmarks com a PALMA (no' 9) em (x, y) normalizados."""
+
+    def __init__(self, x, y=0.5):
+        self.x, self.y = x, y
+
+
+class ResultadoEspacial:
+    """Resultado minimo do MediaPipe com POSICAO por deteccao."""
+
+    def __init__(self, entradas):
+        self.handedness = [
+            [type("Categoria", (), {"category_name": rotulo})()]
+            for rotulo, _x in entradas
+        ]
+        self.hand_landmarks = [[MaoEm(x)] * 21 for _rotulo, x in entradas]
+
+
+def palma_em_px(x):
+    return (x * LARGURA, 0.5 * ALTURA)
+
+
+# (a) sem ancora (inicio da trial): o ROTULO decide -- esquerda = indice 1.
+primeiro = ResultadoEspacial([("Right", X_DIR), ("Left", X_ESQ)])
+assert gt.KinectHandTracker._pick_hand_index(primeiro, "left", False) == 1
+assert gt.KinectHandTracker._pick_hand_index(primeiro, "right", False) == 0
+assert gt.KinectHandTracker._pick_hand_index(primeiro, None, False) == 0
+
+# (b) O BUG: no quadro seguinte os DOIS rotulos trocam (mesmas maos, mesmas
+#     posicoes). Pelo rotulo, `left` passaria a ser a mao de x=0,30 -- a OUTRA
+#     mao fisica -- e o rastreamento trocaria de lado no meio da trial.
+virado = ResultadoEspacial([("Left", X_DIR), ("Right", X_ESQ)])
+assert gt.KinectHandTracker._pick_hand_index(virado, "left", False) == 0, \
+    "sem ancora o rotulo manda (comportamento antigo, o bug)"
+# Com a ancora da mao de x=0,75 (a que estava sendo rastreada), a MESMA mao
+# continua sendo a escolhida, apesar do rotulo agora dizer "Right".
+ancora = palma_em_px(X_ESQ)
+assert gt.KinectHandTracker._pick_hand_index(
+    virado, "left", False, ancora_px=ancora, tamanho=TAMANHO_KINECT,
+    raio_px=200.0) == 1, "a continuidade tem de manter a mao rastreada"
+# O mesmo vale para o outro lado (simetria): ancora na mao de x=0,30.
+assert gt.KinectHandTracker._pick_hand_index(
+    virado, "right", False, ancora_px=palma_em_px(X_DIR), tamanho=TAMANHO_KINECT,
+    raio_px=200.0) == 0
+
+# (c) ancora LONGE (> raio): nao prende o rastreamento -- volta ao rotulo.
+assert gt.KinectHandTracker._pick_hand_index(
+    virado, "left", False, ancora_px=palma_em_px(0.99), tamanho=TAMANHO_KINECT,
+    raio_px=200.0) == 0
+# Raio 0 desliga a continuidade (compatibilidade com chamadas antigas).
+assert gt.KinectHandTracker._pick_hand_index(
+    virado, "left", False, ancora_px=ancora, tamanho=TAMANHO_KINECT) == 0
+
+# (d) o lado pedido nao existe e NAO ha ancora -> None (nada de mao errada).
+so_uma = ResultadoEspacial([("Left", X_ESQ)])
+assert gt.KinectHandTracker._pick_hand_index(so_uma, "right", False) is None
+# ... mas se a mao da ancora esta' ali, ela e' mantida (o rotulo dela e' que
+# estava errado: antes o rastreamento simplesmente PERDIA a mao e a trial saia
+# sem KT_* nenhum).
+assert gt.KinectHandTracker._pick_hand_index(
+    so_uma, "right", False, ancora_px=palma_em_px(X_ESQ),
+    tamanho=TAMANHO_KINECT, raio_px=200.0) == 0
+# Sem deteccao nenhuma: None.
+assert gt.KinectHandTracker._pick_hand_index(ResultadoEspacial([]), "left",
+                                             False) is None
+
+# (e) `_nearest_hand`: raio respeitado e distancia medida na PALMA (no' 9).
+assert gt.KinectHandTracker._nearest_hand(
+    primeiro, palma_em_px(X_ESQ), TAMANHO_KINECT, 50.0) == 1
+assert gt.KinectHandTracker._nearest_hand(
+    primeiro, palma_em_px(0.99), TAMANHO_KINECT, 50.0) is None
+assert gt.KinectHandTracker._palm_pixel(primeiro, 0, TAMANHO_KINECT) == \
+    (X_DIR * LARGURA, 0.5 * ALTURA)
+assert gt.KinectHandTracker._palm_pixel(primeiro, 7, TAMANHO_KINECT) is None
+print("15) OK: continuidade da mao (rotulo oscila, o rastreamento NAO troca)")
+
+# =============================================================================
 # Limpeza: o arquivo de trabalho nao pode sobrar no projeto.
 # =============================================================================
 ARQUIVO_TESTE.unlink(missing_ok=True)

@@ -3063,22 +3063,68 @@ class KinectHandTracker:
         return label
 
     @staticmethod
-    def _pick_hand_index(result, want_side=None, flip=False):
-        """Indice da mao desejada (None se o lado pedido nao estiver visivel).
+    def _palm_pixel(result, index, tamanho):
+        """(x, y) em px da PALMA (no' 9) da deteccao `index`, ou None."""
+        try:
+            palma = result.hand_landmarks[index][9]
+            return (float(palma.x) * float(tamanho[0]),
+                    float(palma.y) * float(tamanho[1]))
+        except (AttributeError, IndexError, TypeError, ValueError):
+            return None
+
+    @staticmethod
+    def _nearest_hand(result, ancora_px, tamanho, raio_px, indices=None):
+        """Indice da deteccao cuja PALMA esta' mais perto da ancora (px).
+
+        Devolve None quando a mais perto esta' FORA de `raio_px` -- mao que saiu
+        do quadro e voltou longe e' outra cena, e prender o rastreamento nela
+        seria pior do que reescolher pelo rotulo.
+        """
+        melhor, melhor_dist = None, float(raio_px)
+        for index in (range(len(result.hand_landmarks))
+                      if indices is None else indices):
+            pixel = KinectHandTracker._palm_pixel(result, index, tamanho)
+            if pixel is None:
+                continue
+            dist = float(np.hypot(pixel[0] - ancora_px[0],
+                                  pixel[1] - ancora_px[1]))
+            if dist <= melhor_dist:
+                melhor, melhor_dist = index, dist
+        return melhor
+
+    @staticmethod
+    def _pick_hand_index(result, want_side=None, flip=False,
+                         ancora_px=None, tamanho=None, raio_px=0.0):
+        """Indice da mao a rastrear (None se nao houver candidata).
 
         Sem `want_side`, escolhe a mao mais confiante (o MediaPipe devolve a
         lista ordenada por escore), que era o comportamento anterior.
+
+        `ancora_px` + `tamanho` (largura, altura do RGB) ativam a CONTINUIDADE:
+        quando a deteccao da ancora ainda esta' no quadro (dentro de `raio_px`),
+        e' ELA que vale, mesmo que o rotulo dela agora diga o lado oposto. O
+        rotulo do MediaPipe e' uma classificacao de APARENCIA do quadro: com as
+        duas maos visiveis ele oscila (palma virada, oclusao, maos que se
+        cruzam) e, como a escolha era refeita a cada quadro, o rastreamento
+        trocava de mao NO MEIO DA TRIAL (relato de 21/10/2026). A continuidade
+        so' vale DENTRO do raio: mao perdida/reaparecida longe volta a ser
+        escolhida pelo rotulo.
         """
         total = len(getattr(result, "hand_landmarks", None) or [])
         if total == 0:
             return None
-        if want_side in ("left", "right"):
-            for index in range(total):
-                if KinectHandTracker._handedness_of(result, index,
-                                                    flip) == want_side:
-                    return index
-            return None
-        return 0
+        if want_side not in ("left", "right"):
+            return 0
+        if ancora_px is not None and tamanho is not None and raio_px > 0:
+            index = KinectHandTracker._nearest_hand(result, ancora_px,
+                                                    tamanho, raio_px)
+            if index is not None:
+                return index
+        for index in range(total):
+            if KinectHandTracker._handedness_of(result, index,
+                                                flip) == want_side:
+                return index
+        return None
 
     def _order_hands(self, result, want_side, flip=False):
         """Maos detectadas com a desejada em PRIMEIRO lugar (usada em [0]).
@@ -3735,13 +3781,20 @@ class KinectHandTracker:
             )
         ])
 
-    def detect_hand(self, color_frame, depth_frame, want_side=None):
+    def detect_hand(self, color_frame, depth_frame, want_side=None,
+                    ancora_px=None, raio_px=0.0):
         """Detecta a mao no RGB do Kinect.
 
         `want_side` ('left'/'right') seleciona a mao DAQUELE lado (necessario
         com as duas maos visiveis: a trial define a mao do movimento). Sem
         `want_side` escolhe a mais confiante. A lateralidade e' corrigida pela
         convencao de espelho do MediaPipe (o RGB do Kinect nao e' espelhado).
+
+        `ancora_px`/`raio_px` mantem a MESMA mao do quadro anterior mesmo que o
+        rotulo dela tenha oscilado (ver `_pick_hand_index`). Nesse caso
+        `last_hand_side` devolve o rotulo ATUAL da mao escolhida -- que pode ser
+        o lado oposto ao pedido: e' assim que o chamador sabe que o detector
+        discordou (e pode marcar a trial).
         """
         if color_frame is None or depth_frame is None:
             self.last_hand_reason = "sem frame Kinect"
@@ -3756,8 +3809,10 @@ class KinectHandTracker:
             self.kinect_frame_timestamp_ms + 1, int(time.monotonic() * 1000)
         )
         result = self.hands.detect_for_video(image, self.kinect_frame_timestamp_ms)
-        index = self._pick_hand_index(result, want_side,
-                                      MEDIAPIPE_KINECT_HANDEDNESS_FLIP)
+        index = self._pick_hand_index(
+            result, want_side, MEDIAPIPE_KINECT_HANDEDNESS_FLIP,
+            ancora_px=ancora_px, raio_px=raio_px,
+            tamanho=(self.color_width, self.color_height))
         if index is None:
             self.last_hand_reason = (
                 f"lado pedido ({want_side}) nao visivel no Kinect"
