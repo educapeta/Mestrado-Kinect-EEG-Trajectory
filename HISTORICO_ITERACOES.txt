@@ -6190,3 +6190,65 @@ ITEM 95 (21/10/2026) - POS-TRIAL: baseline com instrucao+bips, causa raiz da
    d) Rodar sessao real com `2>&1 | Tee-Object _sessao.log` (o console salvou a
       vida: foi o que faltou em 21/10 para ver o MotionRecorder morrer).
 
+
+================================================================================
+ITEM 96 (21/10/2026) - SETA DA PALMA: patches de ROBUSTEZ aplicados (backup do
+    alinhamento no tool + secao "ALINHAMENTO SALVO" no analisador + teste
+    discriminante test_palm_seta_pose)
+================================================================================
+CONTEXTO: o item 95 registrou a causa raiz (JSON de alinhamento sobrescrito pela
+tecla O de 21/10; seta invertida) e restaurou o refit validado. O subagente de
+cinematica entregou o restante e o Lead aplicou/revisou/testou:
+
+1) tools/kinect_groundtruth_tool.py `save_palm_alignment` (:245-281): o arquivo
+   ANTERIOR vai para `.json.bak` ANTES de gravar, com aviso do residuo anterior
+   (mesma politica do `analisa_diag_palma.py --salvar`). Motivo: em 21/10 a
+   captura da O sobrescreveu o refit de 19/10 SEM backup e o bom ficou
+   irrecuperavel; agora nenhuma captura da O apaga um refit validado.
+2) tools/analisa_diag_palma.py: nova `erro_alinhamento_salvo(linhas, lado,
+   settle, pasta)` + secao "ALINHAMENTO SALVO (o que a seta usa quando o tool
+   reinicia)" impressa ANTES do `--salvar`. Ela compara a PREDICAO do arquivo
+   carregado com a verdade ANATOMICA pose por pose -- porque o `residual_deg`
+   NAO certifica o sinal: o modelo v = T R f tem liberdade de calibre
+   (T->TQ, f->Q^T f deixa toda previsao igual) e a verdade NEGADA da' o MESMO
+   residuo com f -> -f (medido: 14.418 graus nos dois). Um `f` invertido mantem
+   o residuo "OK" e aponta a seta 180 graus fora.
+   Saida com os JSONs atuais: right PREPARO 13.0 | MESA 4.8 | REZANDO 10.9 |
+   KINECT 10.6 -> OK; left 8.5 | 8.1 | 1.7 | 4.5 -> OK.
+3) `test_palm_seta_pose.py` (novo, 6 grupos): fisica das poses; alinhamento e'
+   rotacao propria e f unitario; seta x verdade <= 20 graus nas 4 poses nos DOIS
+   lados; sinal na MESA (dot >= 0.90) + NEGATIVO DE CONTROLE (o `.json.bak`
+   antigo TEM de falhar -- dot direito -0.177, esquerdo -0.294); sentido do giro
+   MESA->REZANDO igual ao da palma. Com os JSONs atuais: PASS (right
+   13.0/4.8/10.9/10.6; left 8.5/8.1/1.7/4.5). Com o `.bak`: FAIL (discrimina).
+   Regressao `test_palm_alignment.py` 9/9 verde.
+
+POR QUE O BUG PASSOU (registro estrutural): o tool imprime "alinhamento SALVO
+(residuo X)" ao carregar e isso da' falsa seguranca -- o residuo mede o MODELO,
+nao o ARQUIVO; com `f` invertido o residuo e' o mesmo e a seta erra 180 graus.
+A unica prova e' pose a pose (agora o analisador mostra e o teste trava).
+
+DESCARTES MEDIDOS (para nao reabrir): NAO existe sinal por lado na predicao/
+desenho (so' na verdade anatomica: right=+cross, left=-cross, correta: MESA R x
+L 4.7 graus, REZANDO 156.8 opostas); a convencao de Euler (`rotation_matrix` =
+Rz Ry Rx) e' a mesma nos dois lados e o modelo FECHA na direita com um T/f; um
+yaw global corrigido ainda deixaria a MESA da direita em ~100 graus (nao e' yaw
+nem boot).
+
+PENDENCIAS (bancada / proximas)
+  a) Se as luvas foram REMONTADAS depois de 19/10 18:07 (risco item 92), o refit
+     de 19/10 nao vale para a montagem atual (o f muda, T nao): rodar D (21 s,
+     maos SEM encostar) + `analisa_diag_palma.py <csv> --salvar` e conferir com
+     `test_palm_seta_pose.py` (1 min).
+  b) Yaw do IMU e' arbitrario por BOOT (filtro 6 eixos): o T absorve o heading,
+     mas o JSON pode envelhecer num power-cycle -- a secao nova do analisador
+     detecta (>15 graus => refazer).
+  c) Caso literal "palma para o TETO" nao existe nas 4 poses do D (MESA = palma
+     para baixo, REZANDO = palmas frente a frente): o teste cobre o sintoma pela
+     imagem espelhada (MESA). Se quiser o caso literal, acrescentar fase TETO ao
+     D ou conferir na bancada.
+  d) `PALM_*` do CSV do PARADIGMA ainda usa o sinal LEGADO (nz<0) - pendencia 3
+     do item 79: a sessao de 21/10 NAO serve como verdade para a palma (o sinal
+     inverte quando a palma cruza o plano da camera). Fixar no writer do
+     paradigma (passar o lado para `palm_normal_from_points`) num proximo passo.
+

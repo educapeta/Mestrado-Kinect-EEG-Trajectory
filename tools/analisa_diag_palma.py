@@ -434,6 +434,34 @@ def angulo_medio_normal(linhas, settle=SETTLE_PADRAO_S):
     return saida
 
 
+def erro_alinhamento_salvo(linhas, lado, settle=SETTLE_PADRAO_S, pasta=None):
+    """{fase: mediana(graus)} do erro do alinhamento SALVO (o que a seta usa).
+
+    Por que existe: o `residual_deg` gravado no JSON NAO prova que a seta aponta
+    para a palma. O modelo `v = T R f` tem liberdade de calibre (`T -> T Q` e
+    `f -> Q^T f` deixam TODA previsao igual) e, pior, ajustar a verdade NEGADA
+    devolve o MESMO residuo com `f -> -f` (medido em 21/10/2026 na sessao de
+    19/10 18:07:02: 14.418 graus nos dois sentidos). Um `f` invertido NAO muda o
+    residuo e muda a seta em 180 graus -- foi assim que a direita passou a
+    apontar para o lado OPOSTO da palma ("palma para o teto, seta para o chao")
+    com o arquivo dizendo "residuo 14.45 OK". A unica prova e' comparar a
+    PREDICAO com a verdade ANATOMICA pose por pose: e' o que esta funcao faz,
+    offline, com o arquivo que o tool vai carregar.
+    """
+    caminho = Path(pasta or ".") / f"imu_palm_alignment_{lado}.json"
+    if not caminho.exists():
+        return None
+    try:
+        dados = json.loads(caminho.read_text(encoding="utf-8"))
+        alinhamento = np.asarray(dados["rotation"], np.float64).reshape(3, 3)
+        corpo = np.asarray(dados["body"], np.float64).reshape(3)
+    except (OSError, KeyError, TypeError, ValueError):
+        return None
+    estatisticas = erro_refit_por_fase(linhas, lado, alinhamento, corpo, settle)
+    return {fase: estatisticas[(fase, lado)]["mediana"] for fase in ORDEM_FASES
+            if (fase, lado) in estatisticas}
+
+
 def refitar(linhas, lado):
     """(T, f, residuo) resolvido SO' com o CSV, ou None.
 
@@ -725,6 +753,26 @@ def analisar(caminho, settle=None, limite=None, salvar=False):
                                f"{novo['mediana']:.1f}")
         if comparacoes:
             print(f"    {lado}: " + " | ".join(comparacoes) + " (mediana, graus)")
+
+    # ------------------------ o alinhamento que a SETA usa HOJE (o do disco)
+    # O residuo do refit mede o MODELO, nao o ARQUIVO que esta' carregado: um
+    # `f` invertido tem o mesmo residuo e a seta 180 graus fora. Por isso o
+    # arquivo salvo e' conferido contra a verdade anatomica, pose por pose.
+    print()
+    print("ALINHAMENTO SALVO (o que a seta usa quando o tool reinicia)")
+    for lado in ("right", "left"):
+        medias = erro_alinhamento_salvo(linhas, lado, settle)
+        if not medias:
+            print(f"  {lado}: sem imu_palm_alignment_{lado}.json na pasta -- a "
+                  "seta vai rodar SEM alinhamento salvo")
+            continue
+        pior = max(medias.values())
+        texto = " | ".join(f"{fase} {valor:.1f}"
+                           for fase, valor in medias.items())
+        print(f"  {lado}: {texto} graus -> "
+              + ("OK" if pior <= limite else
+                 "SETA ERRADA: rode o refit com --salvar (o arquivo salvo nao "
+                 "explica estas poses)"))
 
     # ------------------------------------ gravar o alinhamento do REFIT
     if salvar:

@@ -243,16 +243,39 @@ def load_palm_alignment(fusion, lado, avisar=print):
 
 
 def save_palm_alignment(fusion, lado, avisar=print):
-    """Grava o alinhamento atual da luva `lado` (False se nao ha' o que gravar)."""
+    """Grava o alinhamento atual da luva `lado` (False se nao ha' o que gravar).
+
+    O ARQUIVO ANTERIOR vai para `.json.bak` ANTES de gravar (mesma politica de
+    `tools/analisa_diag_palma.py --salvar`). Por que: em 21/10/2026 a captura da
+    tecla O sobrescreveu o T/f do REFIT de 19/10 (erro ao vivo 2-13 graus) por um
+    ajuste que errava ~100 graus quando o punho girava, e o anterior ficou
+    irrecuperavel -- o analisador so' faz backup do que encontra no disco e
+    `save_palm_alignment` nao fazia nenhum. Com o backup aqui, NENHUMA captura da
+    O apaga um refit validado (e o aviso mostra o residuo anterior x o novo).
+    """
     estado = fusion.palm_alignment_state()
     if estado is None:
         return False
     caminho = palm_alignment_path(lado)
+    backup = caminho.with_suffix(".json.bak")
+    anterior = None
+    if caminho.exists():
+        try:
+            anterior = json.loads(caminho.read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            anterior = None
     try:
         caminho.write_text(json.dumps(estado, indent=2), encoding="utf-8")
     except OSError as exc:
         avisar(f"IMU {lado}: nao consegui gravar {caminho.name} ({exc})")
         return False
+    if anterior is not None:
+        try:
+            backup.write_text(json.dumps(anterior, indent=2), encoding="utf-8")
+            avisar(f"IMU {lado}: {caminho.name} anterior (residuo "
+                   f"{anterior.get('residual_deg')}) guardado em {backup.name}")
+        except OSError as exc:
+            avisar(f"IMU {lado}: AVISO backup de {caminho.name} falhou ({exc})")
     return True
 
 
