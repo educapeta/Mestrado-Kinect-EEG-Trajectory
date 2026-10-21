@@ -6322,3 +6322,101 @@ PENDENTE/EM ABERTO
      MONTAGEM da luva muda ou quando o erro com a mao parada passa de ~15-20
      graus mesmo apos reancorar (a secao ALINHAMENTO SALVO do analisador mostra).
 
+
+================================================================================
+ITEM 98 (21/10/2026) - FECHAMENTO DO DIA: 7 commits, suite 56/56 verde e o
+    estado exato para retomar (leia este item primeiro amanha)
+================================================================================
+SUITE FINAL: 56/56 test_*.py OK (0 falhas, 138 s; sem o test_freeze_kinect_
+direto, que e' lento e segura minutos). `git status` limpo; nenhum agente/job
+rodando; `import tools.kinect_groundtruth_tool` OK com a reancoragem no
+namespace.
+
+COMMITS DO DIA (mais antigo -> mais novo)
+  4bd33cb  item 91: esqueleto auxiliar "desgovernado" quando a mao se perde
+                  (profundidade nominal 1,0 m -> None) + teste caso 9.
+  8f4afb4  item 93: novo processo (desenvolvimento do paradigma/firmware passa
+                  a ser feito NESTA sessao; revisao do Cline nao bloqueia) +
+                  typo do slide de boas-vindas.
+  109f7af  item 94: pacote de 5 correcoes do trial real (cue com simbolo de mao;
+                  pausa com ESPACO de confirmacao; lateralidade com latch do cue
+                  + 797; priming ancorado no ONSET real; MotionRecorder robusto
+                  que nao perde mais os trials).
+  23b332c  item 95: baseline com tela de INSTRUCAO + BIP de inicio/fim em cada
+                  etapa (ordem FECHADOS -> ABERTOS).
+  1ba0dac  item 95: trajetoria do clipe desenhada em TRECHOS (fim do
+                  zigue-zague quando a fonte do KT_* ou o lado troca).
+  8daa0ff  item 96: tool faz BACKUP (.json.bak) antes de salvar o alinhamento da
+                  tecla O + secao "ALINHAMENTO SALVO" no analisador (residuo nao
+                  certifica sinal) + test_palm_seta_pose (discriminante).
+  b5cabb0  item 97: REANCORAGEM DO YAW DO BOOT (`imu.reancorar_yaw` +
+                  `AncoradorYawBoot` + tool reancora automatico ao abrir; flag
+                  --sem-ancora-yaw; mensagens antigas do analisador corrigidas).
+
+TESTES QUE PROTEGEM O QUE FOI FEITO HOJE (rodar ao mexer nesses arquivos)
+  test_baseline_instrucoes.py, test_trajetoria_limpa.py, test_reancora_yaw.py,
+  test_palm_seta_pose.py, test_pausa_confirmacao.py, test_motion_recorder.py,
+  test_paradigm_lado_cue.py (novos) + test_cue_estimulos/test_move_onset/
+  test_video_priming/test_lateralidade_maos (ampliados).
+
+ESTADO DOS IMUs/PALMA (o que estava valendo no fim do dia)
+  - Alinhamento carregado: refit do D de 19/10 (right residual 14.42, left
+    10.64; erros por pose 4.8-13 / 1.7-8.5 graus). `.json.bak` = captura O de
+    21/10 (ruim, foi ela que inverteu a seta; o tool agora faz backup antes de
+    gravar).
+  - D de hoje (153910 / 154202 / 154416): NAO aprovados como calibracao -- as
+    poses sairam erradas/inconsistentes (REZANDO com 34-58 graus entre as maos
+    quando deveriam ser ~157; refit da direita 22-32 graus; a direita se mexeu
+    em MESA/REZANDO). Nada foi regravado (o D nao salva; so' D+--salvar salva).
+  - A REANCORAGEM do yaw do boot foi implementada justamente para o alinhamento
+    de 19/10 voltar a valer depois que o ESP32 e' religado; na proxima abertura
+    do tool o console deve mostrar "yaw do BOOT reancorado por +-X graus".
+  - Ainda PENDENTE de medir: deriva do yaw DENTRO da sessao com a mao realmente
+    parada (as duas escutas de hoje pegaram movimento/teclado). Se deriva existir,
+    e' filtro/firmware (a reancoragem de boot nao corrige deriva intra-sessao).
+
+ESTADO DO PARADIGMA (para a proxima sessao de validacao)
+  - Cue novo (simbolo de mao + objeto), pausa com DOIS ESPACOS, baseline com
+    instrucao + bips (ordem fechados->abertos), priming ancorado no onset real,
+    MotionRecorder robusto, marcador 797 quando o detector ve o lado oposto.
+  - Continua PENDENTE de validacao VISUAL na bancada (nao foi possivel hoje).
+  - PENDENTE: espelhamento do Kinect (indicio do logo "DELL" espelhado; conferir
+    levantando a mao ESQUERDA -> esqueleto verde deve ir para a mao que aparece a
+    DIREITA no video; se invertido, virar MEDIAPIPE_KINECT_HANDEDNESS_FLIP).
+  - PENDENTE (semantica de dado): `PALM_*` do CSV do PARADIGMA ainda usa o sinal
+    LEGADO (nz<0, item 79 pendencia 3) -- por isso a sessao 145700 nao serve como
+    verdade de palma; corrigir no writer (passar o lado) e subir
+    `protocolo_versao` num proximo item (muda so' o sinal das colunas de palma).
+
+SESSOES/DADOS DE HOJE EM `gravacoes/` (NAO apagar)
+  - gravacao_MEMI_20261021_135730_*: primeira tentativa (49 trials, ~8 min);
+    _movimento.csv com so' 186 linhas (MotionRecorder morria na calibracao -
+    corrigido no item 94); EEG/JSON/29 clipes OK.
+  - gravacao_MEMI_20261021_145700_*: sessao de validacao (6 trials: 2 pratica +
+    4 reais); _movimento.csv com 6015 linhas (fix funcionou!); IMU_L/R valid=1
+    em 98%; 5x marcador 797; 1 link EEG perdido/recuperado. ATENCAO: foi rodada
+    SEM os dois IMUs? Nao: chegou os dois lados (98%), mas o PALM_* tem sinal
+    legado (ver acima).
+  - palm_diag_20261021_153910/154202/154416 + _meta.json/_resumo.txt: D de hoje
+    (nao aprovados como calibracao).
+  - kinect_imu_groundtruth.csv de 15:10:48: da execucao do tool que sobrescreveu
+    o alinhamento.
+
+RETOMAR AMANHA (ordem)
+  1) Ligar bancada, hotspot e ESP32; abrir o TOOL: conferir no console a linha
+     "yaw do BOOT reancorado por +-X graus" e a seta (palma para cima => seta
+     para cima; girar o punho => seta no mesmo sentido).
+  2) Se a seta ainda errar COM A MAO PARADA: D limpo (congelar as fases; na
+     REZANDO as palmas uma de frente para a outra ~15 cm) + `--salvar`; conferir
+     "ALINHAMENTO SALVO" <= 15 graus nas 4 fases; rodar `test_palm_seta_pose.py`.
+  3) Conferir o espelhamento do Kinect (logo DELL) e, se invertido, virar o flip.
+  4) Sessao de validacao do paradigma com log:
+     `.venv\Scripts\python.exe eeg_motor_paradigm.py --source gnautilus
+      --imu-portas "4210,4211" --mi-desenho --impedancia --blocos 1
+      --trials-por-bloco 4 --trials-teste 2 --sem-questionario 2>&1 |
+      Tee-Object _sessao.log`
+     e depois conferir: cue novo, 2 ESPACOS na pausa, baseline (instrucao+bips),
+     trajetoria do clipe sem zigue-zague, IMU_L/IMU_R no CSV de movimento.
+  5) So' entao o TRIAL REAL (g.Nautilus + 5 itens do item 65 + casamento
+     groundtruth x EEG).
+
