@@ -6252,3 +6252,73 @@ PENDENCIAS (bancada / proximas)
      inverte quando a palma cruza o plano da camera). Fixar no writer do
      paradigma (passar o lado para `palm_normal_from_points`) num proximo passo.
 
+
+================================================================================
+ITEM 97 (21/10/2026) - REANCORAGEM DO YAW DO BOOT: o alinhamento da palma
+    volta a valer em QUALQUER boot do ESP32 (sem refazer O/D a cada sessao)
+================================================================================
+PROBLEMA (diagnostico do item 96 + sessoes de 21/10): a seta da palma acertava a
+MESA e errava ~100 graus com a palma de frente para o sensor. Nem sinal, nem
+Euler, nem montagem: o YAW ABSOLUTO do IMU de 6 eixos e' ARBITRARIO a cada boot
+(sem magnetometro; so' roll/pitch vem do acelerometro). O `T` (mundo do IMU ->
+camera) do JSON absorve o yaw daquele boot, entao o alinhamento salvo de 19/10
+deixa de valer assim que o ESP32 e' religado/reflashado -- mesmo com a luva
+montada igual (o `f`, no corpo, NAO muda). E' por isso que "refazer a O" nunca
+resolvia de forma duradoura.
+
+SOLUCAO IMPLEMENTADA
+  1) imu.py: `reancorar_yaw(alinhamento, corpo, rotacoes, normais_camera, ...)`
+     -- resolve o delta de yaw do boot por busca (grade 0,5 graus + refino) que
+     minimiza o angulo entre `T Rz(-delta) R_i f` e a normal da palma medida
+     pelo Kinect. `T_novo = T_salvo Rz(-delta)`. Se a palma ficar ~VERTICAL o
+     tempo todo (apoiada/levantada) o yaw nao e' observavel: devolve None em vez
+     de chutar (sensibilidade = componente horizontal de R f, limiar 0,35).
+     Nao precisa de pose especial nem de mao parada: o delta e' o MESMO em todas
+     as orientacoes.
+  2) imu.py: `AncoradorYawBoot` -- junta as amostras (rotacao atual + normal do
+     Kinect), chama `reancorar_yaw`, aplica o T corrigido na `PositionFusion` EM
+     MEMORIA (o JSON salvo NAO e' reescrito: continua valendo para os outros
+     boots), avisa no console ("yaw do BOOT reancorado por X graus"), nao ancora
+     duas vezes e tem `timeout_s` (avisa e segue com o alinhamento salvo).
+  3) tools/kinect_groundtruth_tool.py: REANCORAGEM AUTOMATICA AO ABRIR quando ha
+     alinhamento salvo. Hook ANTES de calcular a seta (o frame que ancora ja' sai
+     com o T novo); grava `yaw_boot_delta_deg` na mao; flag `--sem-ancora-yaw`
+     para comparar com o comportamento antigo.
+  4) tools/analisa_diag_palma.py: mensagens desatualizadas CORRIGIDAS (elas ainda
+     culpavam o firmware antigo "yaw so' no eixo Z", item 78 -- o firmware novo
+     e' quaternion + Mahony, item 83). Agora explica: o yaw absoluto muda a cada
+     boot (o tool reancora sozinho); rotacao do IMU diferente com a MESMA normal
+     pode ser TORCAO do punho em torno da normal (o Kinect nao ve) ou DERIVA do
+     filtro (medir com a mao parada antes de mexer no firmware).
+
+TESTES
+  - test_reancora_yaw.py (novo, 5 grupos): recupera o delta para +0/+45/-120/+175
+    graus (T novo = T_salvo Rz(-delta), seta antes 41-140 graus -> 0); ruido de
+    2,5 graus na normal tolerado (delta dentro de 3); palma vertical = None;
+    AncoradorYawBoot aplica na fusao, nao ancora 2x, respeita timeout; e a
+    integracao no tool esta' ligada (import, hook antes da seta, flag, delta na
+    mao). PASS.
+  - Regressao: test_palm_alignment 9/9, test_palm_seta_pose PASS, test_imu_bank,
+    test_imu_gravacao_dual, test_imu_serial_bridge, test_paradigm_protocol,
+    test_pausa_confirmacao -- todas verdes.
+
+COMO USAR NA BANCADA (1 min)
+  - Abra o tool normalmente: com o alinhamento salvo ele reancora sozinho nas
+    primeiras amostras em que a palma nao estiver ~vertical; o console mostra
+    "IMU right/left: yaw do BOOT reancorado por +-X graus (N amostras, erro Y
+    graus)". O JSON nao e' alterado.
+  - Depois confira a seta: palma para CIMA -> seta para CIMA; girar o punho num
+    sentido -> seta no MESMO sentido. Se ainda errar com a mao PARADA, ai sim e'
+    deriva do filtro ou montagem nova (refit: D limpo + --salvar).
+  - `--sem-ancora-yaw` desliga (so' para comparar A/B).
+
+PENDENTE/EM ABERTO
+  a) MEDIR DERIVA intra-sessao com a mao PARADA: as duas janelas de 50-60 s que
+     gravei pegaram movimento/teclado (roll variou ate' 355 graus, pitch 120),
+     entao nao concluem nada. Precisa de uma janela sem tocar em nada; se o yaw
+     andar com roll/pitch parados, e' deriva do filtro (investigar firmware
+     depois; a reancoragem de boot NAO corrige deriva dentro da sessao).
+  b) O refit do D (RELATORIO anterior) continua sendo necessario quando a
+     MONTAGEM da luva muda ou quando o erro com a mao parada passa de ~15-20
+     graus mesmo apos reancorar (a secao ALINHAMENTO SALVO do analisador mostra).
+

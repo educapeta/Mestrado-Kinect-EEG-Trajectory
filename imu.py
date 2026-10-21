@@ -270,6 +270,179 @@ def solve_palm_alignment(rotations, palm_directions,
     return alinhamento, f_body, float(np.mean(residuos))
 
 
+def reancorar_yaw(alinhamento, corpo, rotacoes, normais_camera,
+                  passo_deg=0.5, min_amostras=5, sensibilidade_min=0.35):
+    """Reancora `T` no YAW DO BOOT atual usando a normal da palma do Kinect.
+
+    Por que existe: o IMU de 6 eixos nao tem magnetometro -- o yaw do filtro e'
+    ARBITRARIO a cada boot (roll/pitch vem do acelerometro e nao mudam). O `T`
+    (mundo do IMU -> camera) do alinhamento salvo absorve o yaw daquele boot,
+    entao o arquivo deixa de valer depois de religar/reflashar o ESP32, mesmo
+    com a luva montada igual (o `f`, no corpo do sensor, NAO muda). E' o que
+    explica a seta certa na MESA e ~100 graus fora na palma de frente para o
+    sensor (o yaw muda o vetor horizontal, nao o vertical).
+
+    Modelo: `R_boot = Rz(delta) R_antigo` => `T_novo = T_antigo Rz(-delta)`.
+    `delta` e' escolhido por busca na grade `passo_deg` minimizando o angulo
+    medio entre `T_antigo Rz(-delta) R_i f` e a normal `v_i` medida pelo
+    Kinect; depois ha' um refino fino.
+
+    Args:
+        alinhamento: (3,3) `T` salvo (mundo do IMU -> camera).
+        corpo: (3,) `f` salvo (direcao da palma no corpo do sensor).
+        rotacoes: lista de (3,3) atitude atual do IMU (uma por amostra).
+        normais_camera: lista de (3,) normal da palma medida pelo Kinect no
+            MESMO instante de cada rotacao.
+        passo_deg: passo da grade de yaw (graus).
+        min_amostras: minimo de pares validos para resolver.
+        sensibilidade_min: minimo (mediana) da componente HORIZONTAL de `R f`
+            no mundo do IMU. Palma ~vertical (apoiada/levantada) gira pouco com
+            yaw: nesse caso o problema e' degenerado e devolvemos None -- o
+            chamador deve pedir uma pose com a palma mais horizontal.
+
+    Returns:
+        (T_novo, delta_deg, erro_medio_deg, n_amostras) ou None.
+    """
+    matriz = np.asarray(alinhamento, np.float64).reshape(3, 3)
+    direcao = np.asarray(corpo, np.float64).reshape(3)
+    norma_f = np.linalg.norm(direcao)
+    if not (np.isfinite(matriz).all() and np.isfinite(direcao).all()):
+        return None
+    if abs(np.linalg.det(matriz)) < 1e-6 or norma_f < 1e-9:
+        return None
+    direcao = direcao / norma_f
+
+    pares = []                       # (rotacao @ f, normal unitaria)
+    for rotacao, normal in zip(rotacoes, normais_camera):
+        if rotacao is None or normal is None:
+            continue
+        rot = np.asarray(rotacao, np.float64).reshape(3, 3)
+        nrm = np.asarray(normal, np.float64).reshape(3)
+        if not (np.isfinite(rot).all() and np.isfinite(nrm).all()):
+            continue
+        norma_n = np.linalg.norm(nrm)
+        if norma_n < 1e-9:
+            continue
+        pares.append((rot @ direcao, nrm / norma_n))
+    if len(pares) < int(min_amostras):
+        return None
+
+    horizontais = [float(np.hypot(rf[0], rf[1])) for rf, _v in pares]
+    if float(np.median(horizontais)) < float(sensibilidade_min):
+        return None                  # palma ~vertical: yaw nao observavel
+
+    def erro_para(delta_deg):
+        """Angulo medio (graus) entre a seta prevista e a normal medida."""
+        rz = rotation_matrix(0.0, 0.0, -float(delta_deg))
+        t_rot = matriz @ rz
+        erros = [angle_between(t_rot @ rf, normal) for rf, normal in pares]
+        return float(np.mean(erros))
+
+    def melhor_na_grade(inicio, fim, passo):
+        deltas = np.arange(inicio, fim + 1e-9, passo)
+        erros = [erro_para(delta) for delta in deltas]
+        indice = int(np.argmin(erros))
+        return float(deltas[indice]), float(erros[indice])
+
+    delta, erro = melhor_na_grade(-180.0, 180.0, float(passo_deg))
+    delta, erro = melhor_na_grade(delta - passo_deg, delta + passo_deg,
+                                  float(passo_deg) / 10.0)
+    t_novo = matriz @ rotation_matrix(0.0, 0.0, -delta)
+    return t_novo, delta, erro, len(pares)
+
+
+class AncoradorYawBoot:
+    """Reancora o yaw do boot numa `PositionFusion` com alinhamento salvo.
+
+    Uso no tool/paradigma (depois de `load_palm_alignment`):
+        ancora = AncoradorYawBoot(fusion, lado="right")
+        ...
+        resultado = ancora.amostra(rotacao_atual, normal_do_kinect)
+        if resultado is not None:
+            print(...)        # (delta_deg, erro_deg, n) no frame que ancorou
+
+    Nao precisa de pose especial: o delta de yaw e' o MESMO em todas as
+    orientacoes, entao qualquer movimento serve; o que importa e' a palma nao
+    ficar ~vertical o tempo todo (nesse caso `reancorar_yaw` devolve None e ele
+    segue juntando amostras). O T corrigido vale SO' para este boot; o JSON
+    salvo continua intocado (pode ser usado em qualquer boot, com ou sem nova
+    ancoragem). Se nao conseguir ancorar em `timeout_s`, marca `falhou` e avisa
+    uma vez -- o T salvo fica valendo como antes.
+    """
+
+    def __init__(self, fusion, lado="", amostras_min=8,
+                 sensibilidade_min=0.35, timeout_s=90.0, avisar=print):
+        self.fusion = fusion
+        self.lado = str(lado)
+        self.amostras_min = int(amostras_min)
+        self.sensibilidade_min = float(sensibilidade_min)
+        self.timeout_s = float(timeout_s)
+        self.avisar = avisar
+        self.delta_deg = None
+        self.erro_deg = None
+        self.n = 0
+        self.falhou = False
+        self._rot = []
+        self._nrm = []
+        self._t0 = time.monotonic()
+
+    @property
+    def pronto(self):
+        """True depois de ancorar (ou de desistir: ver `falhou`)."""
+        return self.delta_deg is not None
+
+    def amostra(self, rotacao, normal_camera):
+        """Recebe UMA amostra; devolve (delta, erro, n) no frame que ancorou."""
+        if self.pronto or self.falhou:
+            return None
+        if rotacao is None or normal_camera is None:
+            return None
+        rot = np.asarray(rotacao, np.float64).reshape(3, 3)
+        nrm = np.asarray(normal_camera, np.float64).reshape(3)
+        if not (np.isfinite(rot).all() and np.isfinite(nrm).all()):
+            return None
+        norma = np.linalg.norm(nrm)
+        if norma < 1e-9:
+            return None
+        self._rot.append(rot)
+        self._nrm.append(nrm / norma)
+        if len(self._rot) > self.amostras_min * 6:
+            self._rot = self._rot[-self.amostras_min * 4:]
+            self._nrm = self._nrm[-self.amostras_min * 4:]
+
+        if len(self._rot) >= self.amostras_min:
+            resolvido = reancorar_yaw(
+                self.fusion.imu_to_camera,
+                self.fusion.palm_reference_body,
+                self._rot, self._nrm,
+                min_amostras=self.amostras_min,
+                sensibilidade_min=self.sensibilidade_min)
+            if resolvido is not None:
+                t_novo, delta, erro, n = resolvido
+                if self.fusion.set_palm_alignment(
+                        t_novo, self.fusion.palm_reference_body,
+                        self.fusion.palm_alignment_residual_deg) is False:
+                    self.falhou = True
+                    return None
+                self.delta_deg = float(delta)
+                self.erro_deg = float(erro)
+                self.n = int(n)
+                self.avisar(
+                    f"IMU {self.lado}: yaw do BOOT reancorado por "
+                    f"{delta:+.1f} graus ({n} amostras, erro {erro:.1f} "
+                    "graus) -- vale para ESTE boot; o alinhamento salvo "
+                    "continua valendo para os outros")
+                return self.delta_deg, self.erro_deg, self.n
+        if time.monotonic() - self._t0 > self.timeout_s:
+            self.falhou = True
+            self.avisar(
+                f"IMU {self.lado}: nao consegui reancorar o yaw do boot "
+                f"({len(self._rot)} amostras sem palma 'fora da vertical' "
+                f"em {self.timeout_s:g} s) -- seguindo com o alinhamento "
+                "salvo como estava")
+        return None
+
+
 class PositionFusion:
     """Fusao IMU + camera com ZERAGEM quando ha medida de camera valida.
 

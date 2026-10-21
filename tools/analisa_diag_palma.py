@@ -827,10 +827,19 @@ def analisar(caminho, settle=None, limite=None, salvar=False):
                   f"{dados['imu_deg']:.0f} graus | o Kinect diz que a palma "
                   f"girou {dados['kinect_deg']:.0f} graus")
             if dados["imu_deg"] > dados["kinect_deg"] + 40.0:
-                print(f"    {lado}: IMPOSSIVEL para um corpo rigido -> o yaw do "
-                      "IMU nao representa a atitude (o firmware integra o "
-                      "giroscopio so' no eixo Z do corpo). Refazer a tecla O "
-                      "NAO resolve; a correcao e' de firmware/filtro (item 78).")
+                print(f"    {lado}: mesma normal da palma com rotacao MUITO "
+                      "diferente no IMU: pode ser (a) TORCAO do punho em torno "
+                      "da propria normal (girar a mao 'como um volante' nao "
+                      "muda a normal que o Kinect ve) ou (b) DERIVA do yaw do "
+                      "IMU (filtro 6 eixos, sem magnetometro). Nao e' o bug "
+                      "antigo do firmware (yaw no eixo do corpo; o firmware "
+                      "novo e' quaternion + Mahony, item 83). O yaw ABSOLUTO "
+                      "muda a cada BOOT: o tool agora REANCORA o yaw "
+                      "automaticamente ao abrir; se a seta ainda errar, refit "
+                      "com --salvar.")
+                print(f"    {lado}: para separar (a) de (b), repita a fase com "
+                      "a mao PARADA (sem girar o punho): IMU parado = era "
+                      "torcao; IMU andando com a mao parada = deriva do filtro.")
 
     # ------------------------------------------------------------ veredito
     print()
@@ -864,20 +873,28 @@ def analisar(caminho, settle=None, limite=None, salvar=False):
         dados_repetida = repetida.get(lado)
         if (dados_repetida is not None
                 and dados_repetida["imu_deg"] > dados_repetida["kinect_deg"] + 40.0):
-            print(f"  {lado}: o YAW do IMU e' INCONSISTENTE para um corpo "
-                  f"rigido (mesma pose: IMU {dados_repetida['imu_deg']:.0f} x "
-                  f"Kinect {dados_repetida['kinect_deg']:.0f} graus)")
+            print(f"  {lado}: a ROTACAO do IMU nao acompanha a normal da palma "
+                  f"entre a MESMA pose (IMU {dados_repetida['imu_deg']:.0f} x "
+                  f"Kinect {dados_repetida['kinect_deg']:.0f} graus): torcao do "
+                  "punho em torno da normal e/ou deriva do yaw do filtro (6 "
+                  "eixos). Nao e' o bug antigo do firmware (item 83)")
             problemas.append("yaw do IMU")
 
     # ------------------------------------------------------- proximos passos
     print()
     print("PROXIMOS PASSOS")
     if "yaw do IMU" in problemas:
-        print("  0) PRIORIDADE: o yaw do IMU (firmware) NAO e' consistente -- "
-              "nenhuma captura da tecla O vai fechar enquanto isso. Corrigir o "
-              "firmware (integrar o giroscopio TAMBEM nos eixos gx/gy, pela "
-              "atitude atual) ou aplicar o filtro no PC; detalhes no item 78 do "
-              "historico.")
+        print("  0) O yaw ABSOLUTO do IMU muda a cada BOOT (filtro de 6 eixos "
+              "sem magnetometro): um alinhamento salvo de outra sessao deixa de "
+              "valer mesmo com a luva montada igual -- por isso o T acerta a "
+              "MESA e erra ~100 graus com a palma de frente. O tool agora "
+              "REANCORA o yaw automaticamente ao abrir (pose com a palma 'fora "
+              "da vertical', qualquer movimento serve). Se a seta ainda errar "
+              "com a mao PARADA, ai sim e' deriva do filtro (medir antes de "
+              "mexer no firmware).")
+        print("  0b) Se a pose PREPARO x KINECT (mesma pose) mostrou IMU girando "
+              "muito e o Kinect nao, repita a fase sem girar o punho (torcao "
+              "sobre a propria normal tambem nao muda a normal do Kinect).")
     print("  1) refaca a tecla O GIRANDO a mao devagar e em varias direcoes (com "
           "a palma virada para o Kinect, sem virar o dorso) -- captura quase "
           "parada ou sempre na mesma orientacao 'decora' uma pose so'.")

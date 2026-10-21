@@ -119,6 +119,13 @@ globals().update({nome: valor for nome, valor in vars(_gt).items()
 from camera_uvc import (define_modo, le_fourcc, parse_controle_por_camera,  # noqa: E402
                            trava_exposicao, valor_por_camera)
 
+# Reancoragem do YAW DO BOOT (item 97): o yaw absoluto do IMU e' arbitrario a
+# cada boot (filtro de 6 eixos sem magnetometro), entao o T de um alinhamento
+# salvo so' vale no boot em que foi resolvido. O `AncoradorYawBoot` resolve o
+# delta de yaw nas primeiras amostras com a palma "fora da vertical" e corrige
+# o T EM MEMORIA (o JSON salvo continua valendo para qualquer boot).
+from imu import AncoradorYawBoot  # noqa: E402
+
 #: Landmark do MediaPipe Hands usado como POSICAO DA MAO (9 = centro da palma,
 #: conforme a metodologia; 0 = pulso). Mesmo valor do paradigma
 #: (`eeg_motor_paradigm.HAND_TRACK_LANDMARK`), mas definido aqui: a biblioteca
@@ -1193,6 +1200,17 @@ def parse_cli():
               "invertido: e' assim que se confere se a luva que aparece como "
               "'esquerda' e' mesmo a mao esquerda."),
     )
+    parser.add_argument(
+        "--sem-ancora-yaw", action="store_true",
+        help=("desliga a REANCORAGEM AUTOMATICA do yaw do boot. Com alinhamento "
+              "salvo, o tool resolve nas primeiras amostras (palma fora da "
+              "vertical) o giro de yaw que o IMU ganha a cada BOOT -- o filtro "
+              "de 6 eixos nao tem magnetometro, o yaw absoluto e' arbitrario -- "
+              "e corrige o T do alinhamento EM MEMORIA (o JSON salvo nao muda e "
+              "continua valendo para os outros boots). Desligue para comparar "
+              "com o comportamento antigo (seta certa na MESA e ~100 graus fora "
+              "com a palma de frente)."),
+    )
     return parser.parse_args()
 
 
@@ -1889,6 +1907,24 @@ def main():
         if not alinhamento_carregado[lado]:
             print(f"IMU {lado}: sem alinhamento da palma salvo -- aperte O para "
                   "medir (gire a mao com a palma virada para o Kinect)")
+    # --- REANCORAGEM DO YAW DO BOOT (item 97) ------------------------------
+    # O yaw ABSOLUTO do IMU e' arbitrario a cada boot (filtro de 6 eixos, sem
+    # magnetometro); o `T` do alinhamento salvo absorve o yaw do boot em que foi
+    # resolvido. Sem reancorar, a seta acerta a MESA (normal ~vertical, insensivel
+    # ao yaw) e erra ~100 graus com a palma de frente para o sensor -- o sintoma
+    # "IMU da mao direita invertido" que sobrevivia a refits. Aqui o delta e'
+    # resolvido com as primeiras amostras em que a palma nao esta' ~vertical e o
+    # T e' corrigido EM MEMORIA (o JSON salvo nao muda: continua valendo para
+    # qualquer boot). `--sem-ancora-yaw` desliga (para comparar o antigo).
+    ancoras_yaw = {}
+    if not getattr(args, "sem_ancora_yaw", False):
+        for lado in ("right", "left"):
+            if not alinhamento_carregado[lado]:
+                continue
+            ancoras_yaw[lado] = AncoradorYawBoot(fusions[lado], lado=lado)
+            print(f"IMU {lado}: alinhamento salvo carregado; reancorando o YAW "
+                  "DO BOOT automaticamente (mova a mao -- a palma nao pode ficar "
+                  "o tempo todo apoiada/vertical para o yaw ser observavel)")
     captura_palma = CapturaAlinhamentoPalma()
     # Diagnostico da palma por MOVIMENTO PROGRAMADO (tecla D): grava
     # palm_diag_<data>_<hora>.csv e, no fim, o resumo por (fase, lado). E' o
@@ -2852,6 +2888,18 @@ def main():
                     else tracker.palm_normal_camera(landmarks_lado, lado)
                 )
                 mao["palm_normal_kinect"] = normal_lado
+                # Reancoragem do yaw do boot (item 97): alimenta o ancorador
+                # ANTES de calcular a seta, para o frame que ancora ja' sair com
+                # o T corrigido. Nao precisa de pose especial: o delta de yaw e'
+                # o mesmo em todas as orientacoes; so' exige normais validas.
+                ancora_yaw = ancoras_yaw.get(lado)
+                if ancora_yaw is not None and normal_lado is not None:
+                    rotacao_imu = (None if sample_lado is None
+                                   else rotation_matrix(sample_lado.roll_deg,
+                                                        sample_lado.pitch_deg,
+                                                        sample_lado.yaw_deg))
+                    if ancora_yaw.amostra(rotacao_imu, normal_lado) is not None:
+                        mao["yaw_boot_delta_deg"] = ancora_yaw.delta_deg
                 mao["palm_direction"] = (
                     fusion.palm_direction(sample_lado)
                     if landmarks_lado is not None else None
