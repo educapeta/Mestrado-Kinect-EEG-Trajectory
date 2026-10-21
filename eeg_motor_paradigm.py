@@ -6,8 +6,8 @@ Programa 1 (gravacao offline). Um UNICO processo integra:
      -> Bandpass 1-30 Hz -> Notch 50/60 Hz -> RecordingMuxer -> CSV.
   2. Paradigma Qt (thread principal), protocolo final da dissertacao:
      [PREPARACAO ~10 min: EEG, calibracao do Kinect e teste de sinal; ESPACO
-      inicia] -> [INSTRUCAO: slides + demo dos simbolos + --trials-teste trials de PRATICA (padrao 6; 789 + pratica=1; --sem-instrucoes pula)] -> [BASELINE 5 min: 2 min olhos abertos, 2 min olhos fechados,
-      1 min repouso ativo] -> calibracao de origem (10 s) -> contagem ->
+      inicia] -> [INSTRUCAO: slides + demo dos simbolos + --trials-teste trials de PRATICA (padrao 6; 789 + pratica=1; --sem-instrucoes pula)] -> [BASELINE 5 min: TELA DE INSTRUCAO (ESPAÇO inicia) + 2 min olhos FECHADOS, 2 min olhos ABERTOS,
+      1 min repouso ativo; BIP no INICIO e no FIM de cada etapa] -> calibracao de origem (10 s) -> contagem ->
       [5 BLOCOS de 50 trials com 2 min de pausa entre eles] -> encerramento.
      Cada trial tem 12 s:
        REPOUSO 2 s (mao no home + ponto de fixacao)
@@ -260,6 +260,22 @@ BEEP_LEAD_SEC = 0.0        # beep antes da cue (protocolo final: sem beep)
 #: MI_TEXTO (neutra -- olhar para DENTRO).
 MI_BEEP_FREQ = 880
 MI_BEEP_MS = 250
+#: Baseline (pedido do experimentador no trial real de 21/10/2026):
+#:  - uma tela de INSTRUCAO antes de comecar (ordem: olhos FECHADOS e depois
+#:    ABERTOS), com ESPACO para iniciar;
+#:  - um BIP no INICIO e outro no FIM de CADA etapa do baseline.
+#:    inicio = tom agudo (880 Hz), fim = tom mais grave (660 Hz) para o
+#:    participante distinguir sem olhar a tela.
+BASELINE_BEEP_INICIO_HZ = 880
+BASELINE_BEEP_FIM_HZ = 660
+BASELINE_BEEP_MS = 200
+BASELINE_GAP_SEC = 0.6          # pausa entre o BIP de fim e o inicio da proxima
+BASELINE_INSTRUCAO = (
+    "A SEGUIR: CALIBRAÇÃO DE OLHOS FECHADOS E DEPOIS ABERTOS.\n\n"
+    "Quando clicar ESPAÇO vamos começar.\n\n"
+    "O BIP indicará o INÍCIO e o FINAL de cada etapa: 2 min de olhos "
+    "FECHADOS e depois 2 min de olhos ABERTOS (+ 1 min de repouso ativo).\n\n"
+    "ESPAÇO para começar")
 MI_TEXTO = "AGORA IMAGINE"
 ITI_MIN_SEC = 0.0          # sem ITI: o repouso do proximo trial e' a pausa
 ITI_MAX_SEC = 0.0
@@ -3491,7 +3507,7 @@ class _ParadigmController(QObject):
         self._schedule(150, self._espaco_tick)
 
     def _begin_session(self):
-        """Baseline (olhos abertos, fechados e repouso ativo) -> origem."""
+        """Baseline (olhos FECHADOS, ABERTOS e repouso ativo) -> origem."""
         callback = self._cfg.get("on_session_start")
         if callback is not None:
             try:
@@ -3505,15 +3521,30 @@ class _ParadigmController(QObject):
               f"{cfg['blocos']} blocos de {cfg['trials_por_bloco']} | "
               f"trial {cfg['home_sec'] + cfg['me_sec'] + cfg['video_sec'] + cfg['mi_sec']:g} s",
               flush=True)
+        # 21/10/2026 (pedido do experimentador no trial real): o baseline tem
+        # uma TELA DE INSTRUCAO antes de comecar (explica a ordem -- olhos
+        # FECHADOS e depois ABERTOS -- e os bips) e ESPACO para iniciar; os
+        # passos so' sao montados/armados no callback `_preparar_baseline`.
+        self._espaco_avanca(self._preparar_baseline, BASELINE_INSTRUCAO)
+
+    def _preparar_baseline(self):
+        """Monta e inicia as etapas do baseline.
+
+        Ordem pedida pelo experimentador em 21/10/2026: olhos FECHADOS e
+        DEPOIS olhos ABERTOS (antes era ABERTOS -> FECHADOS); a tela de
+        `BASELINE_INSTRUCAO` anuncia exatamente esta ordem. Cada etapa tem um
+        BIP no inicio e outro no fim (ver `_run_next_baseline`).
+        """
+        cfg = self._cfg
         self._baseline_steps = []
-        if cfg["olhos_abertos"] > 0:
-            self._baseline_steps.append(
-                ("olhos ABERTOS (olhe o ponto de fixacao)",
-                 CODE_EYES_OPEN, cfg["olhos_abertos"]))
         if cfg["olhos_fechados"] > 0:
             self._baseline_steps.append(
                 ("olhos FECHADOS (relaxe, sem dormir)",
                  CODE_EYES_CLOSED, cfg["olhos_fechados"]))
+        if cfg["olhos_abertos"] > 0:
+            self._baseline_steps.append(
+                ("olhos ABERTOS (olhe o ponto de fixacao)",
+                 CODE_EYES_OPEN, cfg["olhos_abertos"]))
         if cfg["repouso_ativo"] > 0:
             self._baseline_steps.append(
                 ("repouso ATIVO (maos na posicao inicial)",
@@ -3528,8 +3559,20 @@ class _ParadigmController(QObject):
         self._emit(code)
         self._state.set_phase(PHASE_IDLE, cue="", message=label)
         print(f"[paradigma] baseline: {label} por {seconds:g} s", flush=True)
-        self._start_pause_phase(seconds, f"BASELINE\n{label}",
-                                self._run_next_baseline)
+        # BIP de INICIO da etapa (tom agudo): o participante sabe que comecou
+        # sem precisar olhar a tela (que fica sem contagem, so' o texto).
+        _beep_async(BASELINE_BEEP_INICIO_HZ, BASELINE_BEEP_MS)
+        prefixo = (f"BASELINE\n\n{label.upper()}\n\n"
+                   "O BIP marcou o INÍCIO desta etapa.\n"
+                   "Aguarde o BIP do FINAL.")
+
+        def _terminou_etapa():
+            # BIP de FIM (tom mais grave) e breve espera para nao colar no BIP
+            # de INICIO da proxima etapa.
+            _beep_async(BASELINE_BEEP_FIM_HZ, BASELINE_BEEP_MS)
+            self._schedule(BASELINE_GAP_SEC * 1000, self._run_next_baseline)
+
+        self._start_pause_phase(seconds, prefixo, _terminou_etapa)
 
     # --- calibracao de origem (mao apoiada na mesa = 0,0,0) ---
     def _origin_calibration(self):
