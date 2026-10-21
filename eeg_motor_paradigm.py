@@ -223,6 +223,16 @@ SLOWMO_BUFFER_SEC = 4.0           # buffer circular de quadros (s) - PRECISA
                                   # 640x360x3 B ~ 83 MB.
 SLOWMO_SPAN_SEC = 1.0             # trecho do movimento mostrado (s reais)
 SLOWMO_END_LAG_SEC = 1.0          # ignora o fim da ME (mao ja parada)
+#: Trajetoria do punho desenhada sobre o clipe: o historico recebe a posicao de
+#: QUALQUER fonte (depth do Kinect, esqueleto do SDK, triangulacao) e de
+#: QUALQUER lado; quando a fonte alterna ou a mao troca, o caminho salta dezenas
+#: de cm entre dois quadros e a polilinha vira um zigue-zague. NAO desenhar a
+#: reta entre esses pontos: quebrar o caminho em TRECHOS.
+#: Motivo (trial real de 21/10/2026): 47 saltos >10 cm na sessao (27 >25 cm);
+#: na ME2 o KT_src alternou 2<->3 (depth <-> esqueleto) com saltos de 74-90 cm
+#: e o video de priming mostrou a trajetoria "contorcida" (queixa do usuario).
+TRAJ_MAX_PASSO_M = 0.15           # salto fisico maximo entre quadros (~30 Hz)
+TRAJ_MAX_GAP_S = 0.5              # gap de tempo que quebra o trecho (mao perdida)
 #: Deteccao do INICIO DO MOVIMENTO (onset) pela velocidade do punho 3D.
 #: Motivo cientifico: o planejamento motor comeca 500-1000 ms ANTES do
 #: movimento visivel (potencial de prontidao) e, ~500-350 ms antes, o cortex
@@ -931,6 +941,56 @@ class MovementOnsetDetector:
         self.onset_time = float(onset)
         self.onset_index = self.samples
         return True
+
+
+def separa_trajetoria(pontos, max_passo_m=TRAJ_MAX_PASSO_M,
+                      max_gap_s=TRAJ_MAX_GAP_S):
+    """Separa a trajetoria do punho em TRECHOS fisicamente plausiveis.
+
+    `pontos` = [(t_monotonic, (x, y, z)), ...] em ordem cronologica (o buffer
+    `TrackingThread._traj_history`). Um trecho termina quando:
+
+      - o passo entre dois pontos passa de `max_passo_m` -- e' o que acontece
+        quando a FONTE do KT_* troca (depth do Kinect <-> esqueleto do SDK <->
+        triangulacao) ou quando o lado rastreado troca: o salto chega a dezenas
+        de cm entre dois quadros seguidos;
+      - o intervalo entre dois quadros passa de `max_gap_s` (mao perdida).
+
+    Devolve uma lista de trechos (cada um com >= 2 pontos). O clipe de priming
+    desenha UM `polylines` por trecho: o zigue-zague do historico bruto nao
+    aparece na tela.
+
+    Motivo (trial real de 21/10/2026): o historico misturava as medidas de
+    qualquer fonte/lado; na ME2 o `KT_src` alternou 2<->3 (depth <-> esqueleto)
+    com saltos de 74-90 cm e a trajetoria desenhada no video de priming virou um
+    zigue-zague (47 saltos >10 cm na sessao, 27 >25 cm). O certo e' QUEBRAR o
+    caminho na descontinuidade, nao inventar uma reta entre dois pontos de
+    fontes diferentes.
+    """
+    trechos = []
+    atual = []
+    anterior_t = None
+    anterior_pos = None
+    for item in pontos:
+        try:
+            quando, posicao = item
+            t = float(quando)
+            pos = np.asarray(posicao, np.float64).reshape(3)
+        except (TypeError, ValueError):
+            continue
+        if not (np.isfinite(t) and np.isfinite(pos).all()):
+            continue
+        if anterior_pos is not None:
+            passo = float(np.linalg.norm(pos - anterior_pos))
+            if passo > max_passo_m or (t - anterior_t) > max_gap_s:
+                if len(atual) >= 2:
+                    trechos.append(atual)
+                atual = []
+        atual.append((t, pos))
+        anterior_t, anterior_pos = t, pos
+    if len(atual) >= 2:
+        trechos.append(atual)
+    return trechos
 
 
 class TrackingThread(threading.Thread):
@@ -2010,23 +2070,34 @@ class TrackingThread(threading.Thread):
         return t1 - SLOWMO_SPAN_SEC, t1
 
     def _trajectory_pixels(self, t0, t1):
-        """Trajetoria do punho no intervalo, em pixels do quadro reduzido."""
+        """Trechos da trajetoria do punho no intervalo, em pixels do quadro.
+
+        Devolve uma LISTA de arrays (um por trecho fisicamente plausivel -- ver
+        `separa_trajetoria`) ou None. Antes devolvia um array unico: quando a
+        fonte do KT_* ou o lado rastreado trocava, o salto de dezenas de cm
+        entrava como uma RETA no desenho e a trajetoria do clipe virava um
+        zigue-zague (trial real de 21/10/2026).
+        """
         if self.alignment is None or self.tracker is None:
             return None
-        pontos = [posicao for quando, posicao in self._traj_history
+        pontos = [(quando, posicao) for quando, posicao in self._traj_history
                   if t0 <= quando <= t1]
-        if len(pontos) < 2:
-            return None
-        try:
-            full = self.alignment.project_camera_points(
-                np.vstack(pontos), (self.tracker.color_width,
-                                    self.tracker.color_height))
-        except Exception:
-            return None
-        if not np.isfinite(full).all():
+        trechos = separa_trajetoria(pontos)
+        if not trechos:
             return None
         escala = self._clip_size[0] / float(self.tracker.color_width)
-        return np.round(full * escala).astype(np.int32)
+        pixels = []
+        for trecho in trechos:
+            try:
+                full = self.alignment.project_camera_points(
+                    np.vstack([pos for _t, pos in trecho]),
+                    (self.tracker.color_width, self.tracker.color_height))
+            except Exception:
+                continue
+            if not np.isfinite(full).all():
+                continue
+            pixels.append(np.round(full * escala).astype(np.int32))
+        return pixels or None
 
     def _publish_slowmo(self, pedido):
         """Monta e publica o clipe em camera lenta (0,5x) do movimento."""
@@ -2038,16 +2109,23 @@ class TrackingThread(threading.Thread):
         t0, t1 = self._clip_window(request_time)
         frames = [(quando, quadro) for quando, quadro in self._frame_buffer
                   if t0 <= quando <= t1]
-        pixels = self._trajectory_pixels(t0, t1)
+        trechos = self._trajectory_pixels(t0, t1)
         repeticoes = max(1, int(round(1.0 / SLOWMO_SPEED)))
         clipe = []
         for _quando, quadro in frames:
             copia = quadro.copy()
-            if pixels is not None and len(pixels) > 1:
-                self.cv2.polylines(copia,
-                                   [pixels.reshape(-1, 1, 2).astype(np.int32)],
-                                   False, (0, 255, 255), 3)
-                self.cv2.circle(copia, tuple(pixels[-1]), 7, (0, 0, 255), -1)
+            if trechos:
+                # Um `polylines` POR TRECHO (ver `separa_trajetoria`): os
+                # saltos de fonte/lado NAO viram retas no meio do desenho.
+                for trecho in trechos:
+                    if len(trecho) < 2:
+                        continue
+                    self.cv2.polylines(
+                        copia,
+                        [trecho.reshape(-1, 1, 2).astype(np.int32)],
+                        False, (0, 255, 255), 3)
+                self.cv2.circle(copia, tuple(trechos[-1][-1]), 7,
+                                (0, 0, 255), -1)
             clipe.extend([copia] * repeticoes)
         # Duracao REAL coberta pelo clipe: o intervalo entre o 1o e o ultimo
         # quadro escolhido do buffer. E' ela que define o 0,5x do playback --

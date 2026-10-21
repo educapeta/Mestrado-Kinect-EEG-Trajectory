@@ -6102,3 +6102,91 @@ body_anchor, arm_ik, anatomical_reg, imu_serial_bridge => TUDO OK
     4210 aberta (default 1 IMU); e o hotspot do Windows pode DESLIGAR sozinho
     quando fica sem clientes - desativar essa opcao nas configuracoes.
 
+
+================================================================================
+ITEM 95 (21/10/2026) - POS-TRIAL: baseline com instrucao+bips, causa raiz da
+    SETA INVERTIDA (JSON sobrescrito) e trajetoria "contorcida" do clipe
+================================================================================
+0) DADOS DA SESSAO DE VALIDACAO (145700, flags novas: --imu-portas "4210,4211"
+   --mi-desenho --impedancia --blocos 1 --trials-por-bloco 4 --trials-teste 2):
+   movimento AGORA tem 6015 linhas (200,7 s) - o fix do MotionRecorder (item 94)
+   funcionou; IMU_L/IMU_R valid=1 em 98% das linhas (os DOIS IMUs chegaram e no
+   lado certo); 6 ME (2 pratica + 4 reais); 5x marcador 797 (o detector viu o
+   lado OPOSTO ao cue e o latch manteve o cue - ver pendencia de espelhamento);
+   1 LINK EEG PERDIDO + recuperado (eventos 899/898).
+
+1) BASELINE: TELA DE INSTRUCAO + BIP NO INICIO E NO FIM DE CADA ETAPA
+   PEDIDO (trial real): "A seguir faremos a calibracao de olhos fechados e depois
+   abertos. Quando clicar ESPACO vamos comecar. O bip ira indicar o inicio e
+   depois o final."
+   FEITO (eeg_motor_paradigm.py):
+     - nova tela `BASELINE_INSTRUCAO` mostrada ANTES de comecar, com ESPACO para
+       iniciar (via `_espaco_avanca`); os passos so' sao armados no callback
+       `_preparar_baseline`;
+     - ORDEM TROCADA para olhos FECHADOS -> ABERTOS -> repouso ativo (antes era
+       ABERTOS -> FECHADOS) - MUDANCA DE PROTOCOLO pedida pelo experimentador;
+       a tela de instrucao anuncia exatamente essa ordem;
+     - BIP de INICIO (880 Hz) e BIP de FIM (660 Hz, tom diferente) em CADA etapa,
+       com `BASELINE_GAP_SEC`=0,6 s entre o fim e o inicio da proxima;
+     - tela da etapa mostra "O BIP marcou o INICIO... Aguarde o BIP do FINAL";
+     - marcadores 277/276/784 preservados na ordem e ESPACO continua encurtando
+       a etapa (baseline e' cronometrado, nao tem confirmacao).
+   Teste novo `test_baseline_instrucoes.py` (6 blocos, harness de relogio/janela
+   falsos); 13 suites de regressao verdes. Commit "Baseline (item 95)".
+
+2) SETA DA PALMA INVERTIDA: O JSON DE ALINHAMENTO FOI SOBRESCRITO PELA TECLA O
+   ACHADO: os `imu_palm_alignment_{right,left}.json` foram reescritos em
+   21/10 15:09:46 (o tool rodou as 15:10: `kinect_imu_groundtruth.csv` de
+   15:10:48) - a tecla O do groundtruth_tool salva o alinhamento SEM backup
+   (`save_palm_alignment`, tool:2904/245) e substituiu o refit validado de 19/10.
+   PROVA POSE A POSE (verdade anatomica reconstruida dos pontos crus de
+   palm_diag_20261019_180702.csv, right=+cross/left=-cross, via
+   PositionFusion.set_palm_alignment/palm_direction):
+     JSON antigo (o que estava no repo): direita PREPARO 18,6 / MESA 99,8 /
+       REZANDO 98,1 / KINECT 20,6; esquerda 126,8/106,7/117,5/130,8 graus.
+       Na MESA (palmas apoiadas para baixo) dot(seta, verdade) = -0,177: a seta
+       apontava para CIMA com a palma para BAIXO = imagem espelhada do sintoma
+       "palma para o teto -> seta para o chao"; e o erro so' aparecia quando o
+       punho girava - o "a seta gira ao contrario".
+     JSON restaurado (refit de 180702): direita 13,0/4,8/10,9/10,6; esquerda
+       8,5/8,1/1,7/4,5 graus (dot +0,997 na MESA).
+   RESTAURADO com `analisa_diag_palma.py palm_diag_20261019_180702.csv --salvar`
+   (backup do estado ruim em `*.json.bak`; right residual 14.42, left 10.64).
+   LICAO (por que passou): o RESIDUO NAO CERTIFICA O SINAL - o modelo v=T R f tem
+   liberdade de calibre (T->TQ, f->Q^T f) e ajustar a verdade NEGADA devolve o
+   MESMO residuo com f->-f (medido: 14.418 nos dois). A unica prova e' comparar
+   a seta com a verdade POSE A POSE.
+   PENDENTE do subagente em andamento (nao interrompido): patch para o tool fazer
+   BACKUP antes de salvar o alinhamento + secao "alinhamento salvo" no analisador
+   + `test_palm_seta_pose.py` (falha com o JSON antigo, passa com o novo).
+
+3) TRAJETORIA "CONTORCIDA" NO VIDEO DO KINECT (clipe de priming)
+   CAUSA MEDIDA: `_traj_history` recebe a posicao de QUALQUER fonte/lado; quando
+   a fonte troca (KT_src 2=depth do Kinect <-> 3=esqueleto do SDK) ou o lado muda,
+   a posicao salta dezenas de cm entre dois quadros e o desenho ligava os pontos
+   com uma RETA. Sessao 145700: 47 saltos >10 cm, 27 >25 cm, max 135 cm; na ME2
+   o KT_src alternou 2<->3 com saltos de 74-90 cm (10 saltos >10 cm so' na ME2);
+   10 saltos coincidem com mudanca de fonte, 8 com troca de lado, 10 com
+   PALM_valid=0.
+   FEITO: funcao pura `separa_trajetoria(pontos, max_passo_m=0,15 m,
+   max_gap_s=0,5 s)` que quebra o caminho em TRECHOS fisicamente plausiveis;
+   `_trajectory_pixels` devolve a LISTA de trechos e `_publish_slowmo` desenha
+   UM `cv2.polylines` por trecho (+ bolinha no ultimo ponto do ultimo trecho) -
+   nunca uma reta entre pontos de fontes/lados diferentes. Teste novo
+   `test_trajetoria_limpa.py` (8 blocos: reta=1 trecho, salto=2 trechos, gap,
+   NaN/None ignorados, limite exato do passo, alternancia depth<->SDK nao
+   desenha nada, codigo do clipe usa a separacao). 9 suites verdes.
+   Commit "Trajetoria (item 95)".
+
+4) PENDENCIAS DE BANCADA APOS ESTE ITEM
+   a) ESPELHAMENTO DO KINECT (indicio do logo DELL espelhado): confirmar com o
+      print novo do tracking (levantar a mao ESQUERDA; esqueleto verde deve ir
+      para a mao que aparece a DIREITA do video). Se estiver invertido em todas
+      as trials, virar MEDIAPIPE_KINECT_HANDEDNESS_FLIP (1 linha).
+   b) Validar na tela: cue com simbolo de mao, pausa com DOIS ESPACOS, baseline
+      novo (instrucao + bips) e a trajetoria do clipe sem zigue-zague.
+   c) Aplicar o patch pendente do subagente (backup do alinhamento no tool +
+      test_palm_seta_pose).
+   d) Rodar sessao real com `2>&1 | Tee-Object _sessao.log` (o console salvou a
+      vida: foi o que faltou em 21/10 para ver o MotionRecorder morrer).
+
