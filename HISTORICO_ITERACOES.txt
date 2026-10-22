@@ -6906,3 +6906,45 @@ aceitavel; se oscilar >50 ms na proxima sessao, e' a fonte restante do cambaleio
 e ai adicionamos rejeicao do par. O "erro plano R -- / L --" no primeiro status
 e' so' a janela da media estavel aquecendo.
 
+
+================================================================================
+ITEM 108 (22/10/2026) - CRASH KeyError 'middle' (frame com mapping falho) e
+    estabilidade do plano no status (diagnostico do Kinect sem luva na mao)
+================================================================================
+CRASH RELATADO: o tool morreu em `palm_normal_from_plane` com
+  KeyError: 'middle'
+  File kinect_imu_groundtruth.py line 847: longitudinal = por_nome["middle"] - por_nome["wrist"]
+CAUSA (bug meu, item 105): a referencia robusta transversal x longitudinal usa o
+MCP MEDIO, mas a funcao so' garantia wrist/index/pinky. Naquele frame o lookup
+de depth do MCP medio falhou ("mapeo color->depth falhou para a palma
+(1172, 337)"), o ponto nao entrou no dict e a referencia estourou. CORRECAO:
+`middle` e' OPCIONAL -- se faltar, a funcao cai na CONTINUIDADE (normal do
+quadro anterior) ou na referencia antiga de 3 pontos; se nada decidir, devolve
+(None, None) e o frame e' simplesmente ignorado (antes derrubava o programa).
+Teste novo (grupo 7 do test_palma_plano): sem middle nao estoura (com/sem
+normal anterior) e sem ring (4 pontos) continua funcionando.
+
+DIAGNOSTICO DO KINECT SEM LUVA: o usuario tirou os IMUs da mao para nao
+introduzir movimento e rodou o tool. Nesse modo J/V/erro palma NAO fazem sentido
+(comparam IMU com Kinect; sem luva na mao a comparacao e' vazia), mas o lado
+Kinect pode ser avaliado. Para isso o [status] ganhou a coluna
+  "estab. plano: R <RMS>mm/<spread>graus | L ..."
+= RMS do plano do dorso + spread da janela de 7 normais (item 105). Com a mao
+parada espera-se RMS ~1-3 mm e spread pequeno (<= 3 graus); valores grandes
+significam Kinect ruidoso/mao na borda/luz estourada. Serve para fechar o
+diagnostico "o Kinect e' o culpado?" sem precisar da luva.
+
+O QUE O LOG DESSA RODADA MOSTROU:
+  - ritual de bias OK (settle + retry funcionaram): porta 4210 (-0,02, 0,00,
+    +0,01) e 4211 (+0,01, +0,01, -0,01) dps;
+  - sync color-depth **3 ms** (excelente; antes 30 ms);
+  - um "mapeo color->depth falhou" pontual -- era o frame do KeyError; agora e'
+    tratado (frame ignorado);
+  - reanchor do right -18,8 com erro 35,2 graus: SEM LUVA na mao esse numero nao
+    significa nada (o vetor do IMU nao tem relacao com a mao no frame).
+
+TESTES: test_palma_plano grupo 7 PASS; demais regressoes verdes.
+PROXIMO PASSO: com a luva DE VOLTA na mao, reiniciar o tool (codigo novo), J com
+pausas (~20 s) e V; a coluna "estab. plano" acompanha a qualidade do Kinect
+durante o J/V (se o spread/RMS estourar, a captura daquela pose nao vale).
+

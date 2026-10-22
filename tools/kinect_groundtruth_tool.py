@@ -3010,6 +3010,7 @@ def main():
                 mao["palm_normal_plano"] = normal_plano_lado
                 mao["palm_plano_estavel"] = plano_estavel
                 mao["palm_plano_rms_m"] = rms_plano_lado
+                mao["palm_plano_spread_deg"] = spread_plano
                 mao["palm_erro_plano_deg"] = (
                     None
                     if (plano_estavel is None
@@ -3324,6 +3325,7 @@ def main():
                 alinhamentos = []
                 erros_palma = []
                 erros_plano = []
+                estabilidade_plano = []
                 for lado in ("right", "left"):
                     sigla = lado[0].upper()
                     estado = fusions[lado].palm_alignment_state()
@@ -3341,11 +3343,21 @@ def main():
                     erros_plano.append(
                         f"{sigla} " + ("--" if erro_plano is None
                                        else f"{erro_plano:.1f} graus"))
+                    rms_p = (None if mao_l is None
+                             else mao_l.get("palm_plano_rms_m"))
+                    spread_p = (None if mao_l is None
+                                else mao_l.get("palm_plano_spread_deg"))
+                    estabilidade_plano.append(
+                        f"{sigla} " + ("--" if rms_p is None
+                                       else f"{rms_p*1000:.1f}mm"
+                                       + ("/--" if spread_p is None
+                                          else f"/{spread_p:.1f}graus")))
                 falta_o = "NAO" in " ".join(alinhamentos)
                 print(f"[status] IMU R {taxas[0]} | L {taxas[1]} | "
                       f"alinhamento O: {' / '.join(alinhamentos)} | "
                       f"erro palma: {' | '.join(erros_palma)} | "
-                      f"erro plano: {' | '.join(erros_plano)}"
+                      f"erro plano: {' | '.join(erros_plano)} | "
+                      f"estab. plano: {' | '.join(estabilidade_plano)}"
                       + (" | SEM ALINHAMENTO -- aperte O (14 s girando a mao)"
                          if falta_o else ""),
                       flush=True)

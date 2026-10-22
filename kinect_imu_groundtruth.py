@@ -842,17 +842,21 @@ def palm_normal_from_plane(pontos, lado=None, normal_anterior=None,
 
     por_nome = {nome: valor for nome, valor in validos}
     referencia = None
-    # 1) referencia NOVA: transversal x longitudinal (robusta com a mao plana)
+    # 1) referencia NOVA: transversal x longitudinal (robusta com a mao plana).
+    #    `middle` e' OPCIONAL: se o lookup de depth do MCP medio falhar naquele
+    #    quadro (borda/oclusao), NAO pode estourar KeyError -- cai na
+    #    continuidade/antiga (item 108).
     transversal = por_nome["index"] - por_nome["pinky"]
-    longitudinal = por_nome["middle"] - por_nome["wrist"]
     norma_t = float(np.linalg.norm(transversal))
-    norma_l = float(np.linalg.norm(longitudinal))
-    if norma_t > 0.030 and norma_l > 0.030:
-        cruzado = np.cross(transversal, longitudinal)
-        norma_c = float(np.linalg.norm(cruzado))
-        seno = norma_c / (norma_t * norma_l)
-        if seno > 0.45:                           # vetores nao quase paralelos
-            referencia = cruzado / norma_c
+    if "middle" in por_nome:
+        longitudinal = por_nome["middle"] - por_nome["wrist"]
+        norma_l = float(np.linalg.norm(longitudinal))
+        if norma_t > 0.030 and norma_l > 0.030:
+            cruzado = np.cross(transversal, longitudinal)
+            norma_c = float(np.linalg.norm(cruzado))
+            seno = norma_c / (norma_t * norma_l)
+            if seno > 0.45:                       # vetores nao quase paralelos
+                referencia = cruzado / norma_c
     # 2) continuidade temporal: sinal do quadro anterior
     if referencia is None and normal_anterior is not None:
         anterior = np.asarray(normal_anterior, np.float64).reshape(3)

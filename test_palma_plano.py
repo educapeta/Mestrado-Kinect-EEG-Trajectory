@@ -344,6 +344,31 @@ check("tool usa a media estavel e a sincronia color-depth",
 check("tool NAO usa `or` com a normal numpy (causava ValueError no display)",
       'or mao.get("palm_plano_estavel")' not in fonte_tool)
 
+# ============================================================================
+# 7) POINT 3D AUSENTE NAO PODE ESTOURAR (KeyError do MCP medio, item 108)
+# ============================================================================
+print("7) ponto 3D ausente (mapping falhou no frame) nao pode estourar")
+sem_middle = {"wrist": np.array([0.0, 0.0, 0.0]),
+              "index": np.array([0.08, 0.02, 0.0]),
+              "ring": np.array([-0.01, 0.03, 0.0]),
+              "pinky": np.array([-0.04, 0.02, 0.0])}
+_n, _r = gt.palm_normal_from_plane(sem_middle, "right")
+check("sem middle (e sem anterior): nao estoura (None ou referencia antiga)",
+      _n is None or np.isfinite(np.asarray(_n)).all())
+n_cont, _r = gt.palm_normal_from_plane(
+    sem_middle, "right", normal_anterior=np.array([0.0, 0.0, 1.0]))
+check("sem middle COM normal anterior: usa continuidade",
+      n_cont is not None
+      and float(np.dot(n_cont, [0.0, 0.0, 1.0])) > 0.99, n_cont)
+sem_anelar = {"wrist": np.array([0.0, 0.0, 0.0]),
+              "index": np.array([0.08, 0.02, 0.0]),
+              "middle": np.array([0.02, 0.03, 0.0]),
+              "pinky": np.array([-0.04, 0.02, 0.0])}
+n_anelar, _r = gt.palm_normal_from_plane(sem_anelar, "right")
+check("sem ring (4 pontos) continua funcionando",
+      n_anelar is not None
+      and float(np.dot(n_anelar, [0.0, 0.0, 1.0])) > 0.99, n_anelar)
+
 if FALHAS:
     print()
     print(f"PALMA_PLANO_FALHOU: {len(FALHAS)} verificacao(oes): "
