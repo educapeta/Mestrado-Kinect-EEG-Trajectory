@@ -7066,3 +7066,61 @@ PROXIMO PASSO: rodar J (pausas de 1,5 s) e V. O teste honesto agora e': o
 residuo do J TEM de bater com o erro ao vivo nas poses paradas (antes: 9 vs 60).
 Se o right continuar ruim SO' nele, ai' e' montagem/fixacao fisica do IMU.
 
+
+================================================================================
+ITEM 111 (22/10/2026) - "VETOR VERDE RUIM / SUMINDO": log do vetor da palma +
+    fallback do mapeamento color->depth + tolerancia a falha + seta mantida
+================================================================================
+RELATO: depois do item 110 o usuario tentou tentei varias vezes o J; o log mostra
+"amostras insuficientes (5, 4, 3, 2, 7, 1, 0...)" e os vetores VERDES do
+esqueleto "ficam ruins, desaparecem por um tempo da tela e depois voltam".
+Pedido: olhar o script e gravar num log o valor do vetor para ver para onde
+aponta.
+DIAGNOSTICO PELO LOG
+  - Aparecem "mapeo color->depth falhou para a palma (1118, 266)", (1174, 108),
+    (952, 183): pixels ALTOS no quadro color (1920x1080). O mapeamento
+    color->depth do Kinect falha quando o pixel cai fora do FOV de depth (mao
+    alta/perto da borda) ou o depth esta' invalido. Se UM dos 3 pontos do sinal
+    (punho/indicador/minimo) falta, `palm_normal_from_plane` devolve None -> o
+    vetor verde SOME; com pontos parciais/no fundo a normal fica "ruim".
+  - A deteccao do MediaPipe tambem cai em varios frames (mao_detectada=0), e o
+    gate de parada (spread <= 4 graus, 5 quadros) era zerado por esses quadros
+    sem plano -> o J raramente chegava a 6 amostras (user viu 5, 4, 3...).
+IMPLEMENTADO
+  1) FALLBACK DO MAPEAMENTO: `_color_to_depth_pixel` agora, se o pixel exato
+     falha, procura em ANEIS crescentes (1..8 px) um vizinho com mapeamento
+     valido (o landmark do MediaPipe tem 1-2 px de incerteza). Recupera a
+     maioria dos frames e conta em `tracker.diag["fallbacks"]`.
+  2) CONTADORES DE DIAGNOSTICO por frame (`tracker.diag`): mapeamento falhas,
+     depth profundidade invalida, pontos 3D ok, lista de profundidades.
+  3) LOG DO VETOR DA PALMA (`LogVetorPalma`, 28 colunas): 1 linha/frame/mao com
+     t, lado, frame, mao_detectada, falhas de mapeamento/depth, fallbacks,
+     pontos ok, depth da palma/min/max (mm), normal instantanea x estavel,
+     spread, RMS, contagem de estabilidade, palm_dir do IMU, erro x IMU,
+     sync color-depth, seta_visivel. Liga com `--log-palma` OU tecla G no video;
+     arquivo `palma_vetor_log_<stamp>.csv`; None vira campo vazio.
+  4) TOLERANCIA A FALHA: `atualizar_estabilidade` nao zera a contagem por UM
+     quadro sem plano (depth hole/oclusao momentaneos); 2+ faltas seguidas
+     zeram. Isso destrava o J/V com o ruido de mapeamento.
+  5) J: minimo de amostras 6 -> 5 (`PALM_PLANO_MIN_AMOSTRAS`), com mensagem
+     indicando o log quando insuficiente.
+  6) SETA MANTIDA: quando um frame perde o plano, a seta verde continua na tela
+     por ate' 1,5 s com rotulo "(mantido)" -- nao pisca/desaparece.
+  7) `_fmt_log` formata inteiros como inteiros (frame/mao_detectada).
+TESTES/SUITE: grupo 9 novo do test_palma_plano (log CSV com None, tolerancia de
+1 falta, guards de --log-palma/tecla G/LogVetorPalma/minimo do J/seta mantida)
+PASS; SUITE COMPLETA 59/59 (153 s).
+SMOKE (40 s, `--log-palma`): SEM crash; 530 linhas no CSV; mapeamento falhou 0
+nessa posicao; right depth palma 1,22 m (1,01-1,37), RMS 1,20 mm, spread
+mediana 5,7 graus, seta estavel 101/265; left depth 1,17 m, RMS 1,08, spread
+9,5, deteccoes 194/265; zero processo/porta residual.
+COMO USAR NO BENCH (pedido do usuario atendido): rodar
+  python tools\kinect_groundtruth_tool.py --log-palma --exposicao "0:-7,1:-5"
+fazer uma tentativa de J (~1 min) e mandar o `palma_vetor_log_*.csv`. O CSV diz
+exatamente onde falha: (a) mapeamento_falhas>0 com depth alto = mao no limite do
+FOV/alta demais; (b) depth_falhas>0 = furos/oclusao; (c) mao_detectada=0 =
+MediaPipe perdendo a mao; (d) spread/RMS altos com tudo ok = ruido de depth.
+POSICAO RECOMENDADA (do smoke): maos na altura do peito, 1,0-2,5 m do Kinect,
+regiao central do quadro; nao levantar a palma acima do topo do quadro (o FOV de
+depth e' menor que o de cor) -- foi onde o mapeamento falhava.
+

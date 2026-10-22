@@ -997,6 +997,108 @@ def formatar_certificado(relatorio, amostras_min=3):
     return linhas
 
 
+#: Colunas do log continuo do vetor da palma (item 111: "--log-palma").
+CABECALHO_LOG_PALMA = (
+    "t_mono",
+    "lado",
+    "frame",
+    "mao_detectada",
+    "mapeamento_falhas",
+    "depth_falhas",
+    "fallbacks",
+    "pontos_3d_ok",
+    "depth_palma_mm",
+    "depth_min_mm",
+    "depth_max_mm",
+    "normal_plano_x",
+    "normal_plano_y",
+    "normal_plano_z",
+    "normal_estavel_x",
+    "normal_estavel_y",
+    "normal_estavel_z",
+    "spread_deg",
+    "rms_mm",
+    "estavel_contagem",
+    "palm_dir_x",
+    "palm_dir_y",
+    "palm_dir_z",
+    "erro_plano_deg",
+    "erro_palma_deg",
+    "sync_color_depth_ms",
+    "seta_visivel",
+    "log_ligado",
+)
+
+
+def _fmt_log(valor, casas=4):
+    """Valor para CSV: None vira vazio (nunca 0 disfarcado de medida)."""
+    if valor is None:
+        return ""
+    if isinstance(valor, (bool, np.bool_)):
+        return "1" if valor else "0"
+    if isinstance(valor, (int, np.integer)):
+        return str(int(valor))
+    try:
+        numero = float(valor)
+    except (TypeError, ValueError):
+        return str(valor)
+    if not np.isfinite(numero):
+        return ""
+    return f"{numero:.{casas}f}"
+
+
+class LogVetorPalma:
+    """Grava 1 linha/frame/mao do VETOR DA PALMA (pedido do usuario, item 111).
+
+    Para que serve: quando a seta fica "ruim" ou some, este CSV mostra POR QUE:
+    quantos nos falharam o mapeamento color->depth, as profundidades, a normal
+    instantanea x a estavel, o spread da janela, o erro contra o IMU e a
+    sincronia color-depth -- sem precisar de print no terminal no meio da
+    sessao. Togle: `--log-palma` na linha de comando OU tecla G no video.
+    """
+
+    def __init__(self, caminho):
+        self.caminho = Path(caminho)
+        self.arquivo = open(self.caminho, "w", encoding="utf-8", newline="")
+        self.arquivo.write(",".join(CABECALHO_LOG_PALMA) + "\n")
+        self.arquivo.flush()
+        self.linhas = 0
+
+    def registrar(self, **campos):
+        """Grava uma linha; aceita None e arrays (x,y,z separados)."""
+        linha = []
+        for coluna in CABECALHO_LOG_PALMA:
+            linha.append(_fmt_log(campos.get(coluna)))
+        self.arquivo.write(",".join(linha) + "\n")
+        self.linhas += 1
+        if self.linhas % 10 == 0:
+            self.arquivo.flush()
+
+    def fechar(self):
+        try:
+            self.arquivo.flush()
+            self.arquivo.close()
+        except OSError:
+            pass
+
+
+def atualizar_estabilidade(contagem, falhas_consecutivas, plano_estavel,
+                           minimo_quadros=5, faltas_toleradas=1):
+    """(contagem, falhas) tolerando UM quadro sem plano (mapeamento falhou).
+
+    Sem tolerancia, um unico frame com depth furo/oclusao zerava a contagem e
+    a captura J/V quase nunca completava (visto no log de 22/10, item 111).
+    Com 1 falta tolerada a janela continua se o plano voltar no quadro seguinte;
+    2+ faltas consecutivas zeram (a mao realmente sumiu).
+    """
+    if plano_estavel is not None:
+        return int(contagem) + 1, 0
+    falhas = int(falhas_consecutivas) + 1
+    if falhas > int(faltas_toleradas):
+        return 0, falhas
+    return int(contagem), falhas
+
+
 #: Poses da VERIFICACAO GUIADA da palma (tecla V do groundtruth tool, item 103).
 #: As 5 primeiras cobrem o espaco de orientacoes (frente/cima/baixo/lados); a
 #: sexta exercita o punho girando. Cada linha e' a instrucao que aparece no video
@@ -2938,6 +3040,9 @@ class KinectHandTracker:
         self.auxiliary_frame_timestamp_ms = 0
 
     def frames(self):
+        # Contadores de diagnostico do frame (log do vetor da palma, item 111).
+        self.diag = {"mapeamento": 0, "depth": 0, "pontos": 0,
+                     "fallbacks": 0, "profundidades": []}
         if self.kinect.has_new_color_frame():
             data = self.kinect.get_last_color_frame()
             self.last_color = data.reshape((self.color_height, self.color_width, 4))
@@ -3017,11 +3122,16 @@ class KinectHandTracker:
         kinect.handle_depth_arrived = robust_depth_handler
 
     def _color_to_depth_pixel(self, color_x: int, color_y: int) -> Optional[tuple[int, int]]:
-        # MapColorFrameToDepthSpace (COM) exige o ponteiro ctypes do buffer
-        # interno de depth e um buffer de saida _DepthSpacePoint pre-alocado;
-        # passar o array numpy falha sempre (o wrapper do pykinect2 nao o
-        # aceita) e o except engolia o erro -> "0/N"/"Kinect sem mao".
-        # O mapeamento roda uma vez por frame de depth (cache por indice).
+        """Pixel de depth para um pixel de cor, com FALLBACK em vizinhos.
+
+        Por que o fallback (item 111): nos testes de 22/10 apareciam
+        "mapeo color->depth falhou para a palma (1118, 266)" e o vetor verde
+        SUMIA. Um unico pixel mapeado para fora do FOV de depth (mao alta/perto
+        da borda) derrubava a normal inteira. Se o pixel exato falha, procura em
+        aneis crescentes (1..8 px) um vizinho com mapeamento valido -- o
+        landmark do MediaPipe tem 1-2 px de incerteza, entao isso e' fisicamente
+        razoavel e recupera a maioria dos frames.
+        """
         try:
             if self._color_to_depth_output is None:
                 count = self.color_width * self.color_height
@@ -3034,10 +3144,6 @@ class KinectHandTracker:
                     self._color_to_depth_output,
                 )
                 self._color_to_depth_cache_index = self.depth_frame_index
-            point = self._color_to_depth_output[color_y * self.color_width + color_x]
-            if not math.isfinite(float(point.x)) or not math.isfinite(float(point.y)):
-                return None
-            depth_x, depth_y = int(round(point.x)), int(round(point.y))
         except BaseException as exc:
             if not self._map_error_reported:
                 self._map_error_reported = True
@@ -3047,8 +3153,37 @@ class KinectHandTracker:
                     "rigido de FOV/posicion do depth ou del proprio mapper)"
                 )
             return None
-        if 0 <= depth_x < self.depth_width and 0 <= depth_y < self.depth_height:
-            return depth_x, depth_y
+
+        def _ler(px, py):
+            if not (0 <= px < self.color_width and 0 <= py < self.color_height):
+                return None
+            ponto = self._color_to_depth_output[py * self.color_width + px]
+            try:
+                if not math.isfinite(float(ponto.x)) or not math.isfinite(float(ponto.y)):
+                    return None
+            except (ValueError, TypeError):
+                return None
+            dx, dy = int(round(ponto.x)), int(round(ponto.y))
+            if 0 <= dx < self.depth_width and 0 <= dy < self.depth_height:
+                return dx, dy
+            return None
+
+        achado = _ler(color_x, color_y)
+        if achado is not None:
+            return achado
+        # FALLBACK: aneis crescentes em volta do pixel original
+        for raio in (1, 2, 3, 4, 6, 8):
+            for dy in range(-raio, raio + 1):
+                for dx in range(-raio, raio + 1):
+                    if max(abs(dx), abs(dy)) != raio:
+                        continue
+                    achado = _ler(color_x + dx, color_y + dy)
+                    if achado is not None:
+                        try:
+                            self.diag["fallbacks"] = self.diag.get("fallbacks", 0) + 1
+                        except (AttributeError, TypeError):
+                            pass
+                        return achado
         return None
 
     def _median_depth(self, depth_x: int, depth_y: int, radius=None) -> Optional[float]:
@@ -3180,13 +3315,26 @@ class KinectHandTracker:
         color_y = int(np.clip(landmark.y * self.color_height, 0, self.color_height - 1))
         depth_pixel = self._color_to_depth_pixel(color_x, color_y)
         if depth_pixel is None:
+            try:
+                self.diag["mapeamento"] = self.diag.get("mapeamento", 0) + 1
+            except (AttributeError, TypeError):
+                pass
             return None
         # Parche mas grande que el default (11x11): los dedos son contornos
         # finos y el depth del Kinect es ruidoso ahi; un parche mayor estabiliza
         # la profundidad por landmark (menos huecos/fondo).
         depth_mm = self._median_depth(*depth_pixel, radius=5)
         if depth_mm is None:
+            try:
+                self.diag["depth"] = self.diag.get("depth", 0) + 1
+            except (AttributeError, TypeError):
+                pass
             return None
+        try:
+            self.diag["pontos"] = self.diag.get("pontos", 0) + 1
+            self.diag["profundidades"].append(float(depth_mm))
+        except (AttributeError, TypeError):
+            pass
         depth_point = PyKinectV2._DepthSpacePoint()
         depth_point.x, depth_point.y = map(float, depth_pixel)
         # MapDepthPointToCameraSpace espera depth como c_ushort (inteiros,

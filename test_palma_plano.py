@@ -426,6 +426,50 @@ check("tool usa formatar_certificado/normal_estavel/gate estatico",
       and "PLANO_SPREAD_MAX_DEG" in fonte_tool
       and "estabilidade_plano_contagem" in fonte_tool)
 
+# ============================================================================
+# 9) LOG DO VETOR DA PALMA + TOLERANCIA DE FALHAS (item 111)
+# ============================================================================
+print("9) log do vetor da palma e tolerancia de falhas")
+import csv as _csv
+import tempfile as _tempfile
+
+_pasta_log = _tempfile.mkdtemp(prefix="palma_log_")
+_caminho_log = os.path.join(_pasta_log, "vetor.csv")
+_log = gt.LogVetorPalma(_caminho_log)
+_log.registrar(t_mono=1.0, lado="right", frame=1, mao_detectada=1,
+               mapeamento_falhas=0, normal_plano_x=None,
+               spread_deg=2.5, rms_mm=1.8)
+_log.registrar(t_mono=2.0, lado="left", frame=1, mao_detectada=0)
+_log.fechar()
+with open(_caminho_log, encoding="utf-8", newline="") as _fh:
+    _linhas_log = list(_csv.DictReader(_fh))
+check("log do vetor grava cabecalho + 2 linhas", len(_linhas_log) == 2,
+      len(_linhas_log))
+check("log do vetor: None vira vazio e valor sai formatado",
+      _linhas_log[0]["normal_plano_x"] == ""
+      and _linhas_log[0]["spread_deg"] == "2.5000"
+      and _linhas_log[0]["lado"] == "right")
+check("log do vetor: segunda linha tem mao_detectada=0",
+      _linhas_log[1]["mao_detectada"] == "0")
+
+_contagem, _falhas = gt.atualizar_estabilidade(4, 0, np.array([0, 0, 1.0]))
+check("estabilidade: quadro valido incrementa e zera faltas",
+      (_contagem, _falhas) == (5, 0), (_contagem, _falhas))
+_contagem, _falhas = gt.atualizar_estabilidade(4, 0, None)
+check("estabilidade: UMA falta tolerada mantem a contagem",
+      (_contagem, _falhas) == (4, 1), (_contagem, _falhas))
+_contagem, _falhas = gt.atualizar_estabilidade(4, 1, None)
+check("estabilidade: duas faltas seguidas zeram",
+      (_contagem, _falhas) == (0, 2), (_contagem, _falhas))
+check("tool tem --log-palma e tecla G",
+      "--log-palma" in fonte_tool and 'key == ord("g")' in fonte_tool)
+check("tool usa LogVetorPalma/atualizar_estabilidade/minimo do J",
+      "LogVetorPalma" in fonte_tool
+      and "atualizar_estabilidade" in fonte_tool
+      and "PALM_PLANO_MIN_AMOSTRAS" in fonte_tool)
+check("tool mantem a seta verde por 1,5 s (plano_display)",
+      "plano_display" in fonte_tool)
+
 if FALHAS:
     print()
     print(f"PALMA_PLANO_FALHOU: {len(FALHAS)} verificacao(oes): "

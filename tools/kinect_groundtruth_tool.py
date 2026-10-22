@@ -154,6 +154,8 @@ PALM_ALIGNMENT_CAPTURE_SECONDS = 14.0
 #: orientacoes -- com a mao parada o ruido do Kinect nao se mistura com o
 #: movimento e a verdade do plano fica limpa (item 105).
 PALM_PLANO_CAPTURE_SECONDS = 24.0
+#: Minimo de amostras do J (plano do dorso).
+PALM_PLANO_MIN_AMOSTRAS = 5
 #: Spread maximo (graus) da janela de normais para a verdade do plano valer
 #: como PARADA (item 110: 8 graus era frouxo e aceitava amostra EM MOVIMENTO;
 #: como a verdade e' a media de uma janela, isso virava erro de alinhamento).
@@ -367,10 +369,12 @@ class CapturaAlinhamentoPalma:
         self._ultimo_tempo[lado] = agora
         return True
 
-    def resolver(self, lado):
+    def resolver(self, lado, min_amostras=None):
         """(T, f, residuo) do lado, ou None se faltam amostras validas."""
+        minimo = (PALM_ALIGNMENT_MIN_SAMPLES if min_amostras is None
+                  else int(min_amostras))
         amostras = self.amostras.get(lado, ())
-        if len(amostras) < PALM_ALIGNMENT_MIN_SAMPLES:
+        if len(amostras) < minimo:
             return None
         return solve_palm_alignment([r for r, _v in amostras],
                                     [v for _r, v in amostras])
@@ -1248,6 +1252,13 @@ def parse_cli():
         help=("porta serial do ESP32 das luvas para o reset de calibracao "
               "(padrao: detecta o CP210x). Ex.: COM4."),
     )
+    parser.add_argument(
+        "--log-palma", action="store_true",
+        help=("liga o LOG DO VETOR DA PALMA (1 linha/frame/mao em "
+              "palma_vetor_log_<stamp>.csv: mapeamento/depth, normais, "
+              "spread, erro x IMU, sync) para diagnosticar seta ruim ou "
+              "sumindo -- tecla G tambem liga/desliga no video)."),
+    )
     return parser.parse_args()
 
 
@@ -1815,7 +1826,7 @@ def main():
     }
     print(f"IMU: direita na porta {receivers['right'].port} | esquerda na porta "
           f"{receivers['left'].port}")
-    print("TECLAS (C/B/O/D/J/K/H/L/R/V): clique ANTES em uma janela de VIDEO -- sem "
+    print("TECLAS (C/B/O/D/G/J/K/H/L/R/V): clique ANTES em uma janela de VIDEO -- sem "
           "foco no video o OpenCV nao recebe a tecla (a tecla O parece nao "
           "funcionar e o console fica mudo).")
     for receiver in receivers.values():
@@ -1989,6 +2000,17 @@ def main():
     # punho+4 MCPs (mais estavel que o produto vetorial de 3 pontos).
     captura_palma_plano = CapturaAlinhamentoPalma(
         PALM_PLANO_CAPTURE_SECONDS)
+    # --- LOG DO VETOR DA PALMA (item 111) ------------------------------
+    log_palma = None
+    log_palma_ativo = False
+    if getattr(args, "log_palma", False):
+        _nome_log = time.strftime("palma_vetor_log_%Y%m%d_%H%M%S.csv")
+        log_palma = LogVetorPalma(_nome_log)
+        log_palma_ativo = True
+        print(f"[log-palma] gravando vetor da palma em {_nome_log}")
+    plano_display = {"right": None, "left": None}
+    falhas_plano_contagem = {"right": 0, "left": 0}
+    frame_contador = 0
     # VERIFICACAO GUIADA DA PALMA (item 103, tecla V): 6 poses com a verdade do
     # plano do dorso -> certificado FECHADO/NAO FECHADO pose a pose. E' a prova
     # objetiva de que o vetor derivado do IMU coincide com a direcao anatomica.
@@ -2093,6 +2115,7 @@ def main():
                   "aux_ms": None}
     try:
         while True:
+            frame_contador += 1
             now = time.monotonic()
             if desempenho["t_anterior"] is not None:
                 desempenho["loop_ms"] = _ema(
@@ -2955,6 +2978,13 @@ def main():
                 sample_lado = receivers[lado].get_latest()
                 amostras_por_lado[lado] = sample_lado
                 if mao is None:
+                    if log_palma is not None and log_palma_ativo:
+                        log_palma.registrar(
+                            t_mono=now, lado=lado, frame=frame_contador,
+                            mao_detectada=0,
+                            sync_color_depth_ms=getattr(
+                                tracker, "sync_color_depth_ms", None),
+                            log_ligado=1)
                     continue
                 mao["sample"] = sample_lado
                 fusion = fusions[lado]
@@ -3022,10 +3052,12 @@ def main():
                         limite_spread_deg=PLANO_SPREAD_MAX_DEG)
                     if media_plano is not None:
                         plano_estavel = media_plano
+                (estabilidade_plano_contagem[lado],
+                 falhas_plano_contagem[lado]) = atualizar_estabilidade(
+                    estabilidade_plano_contagem[lado],
+                    falhas_plano_contagem[lado], plano_estavel)
                 if plano_estavel is not None:
-                    estabilidade_plano_contagem[lado] += 1
-                else:
-                    estabilidade_plano_contagem[lado] = 0
+                    plano_display[lado] = (plano_estavel, now)
                 mao["palm_normal_plano"] = normal_plano_lado
                 mao["palm_plano_estavel"] = plano_estavel
                 mao["palm_plano_rms_m"] = rms_plano_lado
@@ -3053,6 +3085,55 @@ def main():
                                          sample_lado.yaw_deg))
                     verificacao_palma.coletar(lado, now, rotacao_verif,
                                               plano_estavel)
+                # --- LOG DO VETOR DA PALMA (item 111) ---------------------
+                if log_palma is not None and log_palma_ativo:
+                    diag_frame = getattr(tracker, "diag", None) or {}
+                    profundidades = diag_frame.get("profundidades") or []
+                    posicao_palma = mao.get("position")
+                    normal_plano_log = mao.get("palm_normal_plano")
+                    normal_estavel_log = mao.get("palm_plano_estavel")
+                    palm_dir_log = mao.get("palm_direction")
+
+                    def _eixo(vetor, indice):
+                        try:
+                            return float(np.asarray(vetor).reshape(3)[indice])
+                        except (TypeError, ValueError, IndexError):
+                            return None
+
+                    log_palma.registrar(
+                        t_mono=now, lado=lado, frame=frame_contador,
+                        mao_detectada=1,
+                        mapeamento_falhas=diag_frame.get("mapeamento"),
+                        depth_falhas=diag_frame.get("depth"),
+                        fallbacks=diag_frame.get("fallbacks"),
+                        pontos_3d_ok=diag_frame.get("pontos"),
+                        depth_palma_mm=(None if posicao_palma is None
+                                        else float(posicao_palma[2]) * 1000.0),
+                        depth_min_mm=(min(profundidades)
+                                      if profundidades else None),
+                        depth_max_mm=(max(profundidades)
+                                      if profundidades else None),
+                        normal_plano_x=_eixo(normal_plano_log, 0),
+                        normal_plano_y=_eixo(normal_plano_log, 1),
+                        normal_plano_z=_eixo(normal_plano_log, 2),
+                        normal_estavel_x=_eixo(normal_estavel_log, 0),
+                        normal_estavel_y=_eixo(normal_estavel_log, 1),
+                        normal_estavel_z=_eixo(normal_estavel_log, 2),
+                        spread_deg=spread_plano,
+                        rms_mm=(None if rms_plano_lado is None
+                                else float(rms_plano_lado) * 1000.0),
+                        estavel_contagem=estabilidade_plano_contagem[lado],
+                        palm_dir_x=_eixo(palm_dir_log, 0),
+                        palm_dir_y=_eixo(palm_dir_log, 1),
+                        palm_dir_z=_eixo(palm_dir_log, 2),
+                        erro_plano_deg=mao.get("palm_erro_plano_deg"),
+                        erro_palma_deg=mao.get("palm_error_deg"),
+                        sync_color_depth_ms=getattr(
+                            tracker, "sync_color_depth_ms", None),
+                        seta_visivel=(1 if normal_estavel_log is not None
+                                      else 0),
+                        log_ligado=1)
+
                 # Diagnostico da palma (tecla D): a linha do CSV do diagnostico
                 # e' gravada AQUI, logo depois do erro ao vivo -- as tres coisas
                 # tem de ser do MESMO frame e da MESMA amostra de IMU, senao a
@@ -3143,12 +3224,19 @@ def main():
                 print("Captura do alinhamento por PLANO DO DORSO terminada.")
                 for lado in ("right", "left"):
                     amostras_lado = captura_palma_plano.contar(lado)
-                    resolvido = captura_palma_plano.resolver(lado)
-                    if resolvido is None:
+                    if amostras_lado < PALM_PLANO_MIN_AMOSTRAS:
                         print(f"  {lado}: amostras insuficientes "
                               f"({amostras_lado}; precisa de "
-                              f"{PALM_ALIGNMENT_MIN_SAMPLES} com a mao girando) "
-                              "-- alinhamento NAO atualizado")
+                              f"{PALM_PLANO_MIN_AMOSTRAS} com a mao "
+                              "PARADA ~1,5 s em orientacoes diferentes) -- "
+                              "alinhamento NAO atualizado; veja o "
+                              "palma_vetor_log_*.csv (tecla G)")
+                        continue
+                    resolvido = captura_palma_plano.resolver(
+                        lado, min_amostras=PALM_PLANO_MIN_AMOSTRAS)
+                    if resolvido is None:
+                        print(f"  {lado}: refit falhou (dados "
+                              "degenerados) -- alinhamento NAO atualizado")
                         continue
                     t_lado, f_lado, residuo = resolvido
                     erros_antes = []
@@ -3398,10 +3486,16 @@ def main():
                             display, mao["landmarks"], mao["palm_direction"]
                         )
                     normal_plano = mao.get("palm_plano_estavel")
+                    rotulo = "plano dorso"
                     if normal_plano is None:
-                        normal_plano = mao.get("palm_normal_plano")
+                        mantido = plano_display.get(lado)
+                        if (mantido is not None
+                                and (now - mantido[1]) <= 1.5):
+                            normal_plano = mantido[0]
+                            rotulo = "plano dorso (mantido)"
+                        else:
+                            normal_plano = mao.get("palm_normal_plano")
                     if normal_plano is not None:
-                        rotulo = "plano dorso"
                         if mao["palm_direction"] is not None:
                             rotulo += (" (err %.0f)" % angle_between(
                                 normal_plano, mao["palm_direction"]))
@@ -3639,6 +3733,18 @@ def main():
                         overlay_log_file.close()
                         overlay_log_file = None
                     print(f"Log overlay DESLIGADO (arquivo em {OVERLAY_LOG_PATH.name})")
+            elif key == ord("g"):
+                # LOG DO VETOR DA PALMA (item 111).
+                if log_palma is None:
+                    _nome_log = time.strftime(
+                        "palma_vetor_log_%Y%m%d_%H%M%S.csv")
+                    log_palma = LogVetorPalma(_nome_log)
+                    log_palma_ativo = True
+                    print(f"[log-palma] gravando em {_nome_log}")
+                else:
+                    log_palma_ativo = not log_palma_ativo
+                    print("[log-palma] " + ("LIGADO" if log_palma_ativo
+                                            else "DESLIGADO"))
             elif key == ord("v"):
                 # VERIFICACAO GUIADA (item 103): 6 poses -> certificado.
                 if verificacao_palma.ativa:
@@ -3707,6 +3813,8 @@ def main():
             elif key == 27:
                 break
     finally:
+        if log_palma is not None:
+            log_palma.fechar()
         # DIAGNOSTICO DA PALMA: escolhemos FINALIZAR (nao cancelar) na saida --
         # o experimentador pode ter saido no meio de uma sessao de 21 s, e o que
         # ja' foi coletado custou poses reais. `finalizar` fecha o CSV no
