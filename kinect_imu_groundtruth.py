@@ -942,6 +942,77 @@ def normal_estavel(historico, limite_spread_deg=4.0):
     return media, spread
 
 
+def lado_mais_proximo(posicao, pontos_corpo, limite_m=0.30):
+    """'right'/'left'/None: lado cujo ponto do esqueleto esta mais perto.
+
+    Por que existe (item 113): o rotulo de lado do MediaPipe PISCA (o mesmo
+    acontece nas auxiliares, que tem arbitro). Como o sinal anatomico da
+    normal e ESPELHADO por lado, quando o lado troca a seta verde inverte 180
+    graus -- exatamente o "as vezes aponta para dentro, as vezes para fora da
+    palma" relatado. A junta Wrist/Hand do esqueleto 3D do Kinect e' estavel,
+    entao ela manda: se a posicao da palma esta a <= `limite_m` de uma mao do
+    esqueleto, esse e' o lado.
+    """
+    if posicao is None or not pontos_corpo:
+        return None
+    posicao = np.asarray(posicao, np.float64).reshape(3)
+    if not np.isfinite(posicao).all():
+        return None
+    melhor_lado = None
+    melhor_distancia = float("inf")
+    for lado, ponto in pontos_corpo.items():
+        if ponto is None:
+            continue
+        ponto = np.asarray(ponto, np.float64).reshape(3)
+        if not np.isfinite(ponto).all():
+            continue
+        distancia = float(np.linalg.norm(posicao - ponto))
+        if distancia < melhor_distancia:
+            melhor_distancia = distancia
+            melhor_lado = lado
+    if melhor_lado is None or melhor_distancia > float(limite_m):
+        return None
+    return melhor_lado
+
+
+def resgatar_profundidade(depth_mm, z_priors_m, tolerancia_m=0.30,
+                         referencia_m=None):
+    """Profundidade (mm) resgatada pelo prior do ESQUELETO, ou None.
+
+    Quando o depth do landmark cai no fundo (buraco/oclusao: |depth - z_mao|
+    > tolerancia), usa o z da mao do esqueleto como profundidade plausivel --
+    melhor um ponto na profundidade da mao do que um ponto no fundo, que gira
+    a normal inteira. `referencia_m` (z da mao do lado, ou EMA da ultima
+    profundidade) escolhe qual prior usar quando o depth e' invalido.
+    Devolve None se o depth ja' e' plausivel ou se nao ha prior.
+    """
+    if not z_priors_m:
+        return None
+    priors = [float(z) for z in z_priors_m
+              if z is not None and np.isfinite(float(z)) and float(z) > 0.2]
+    if not priors:
+        return None
+    try:
+        depth = float(depth_mm) / 1000.0 if depth_mm is not None else None
+    except (TypeError, ValueError):
+        depth = None
+    if depth is not None and np.isfinite(depth):
+        if min(abs(depth - z) for z in priors) <= float(tolerancia_m):
+            return None                      # depth ja' e plausivel
+        alvo = min(priors, key=lambda z: abs(depth - z))
+        return alvo * 1000.0
+    referencia = None
+    try:
+        referencia = float(referencia_m) if referencia_m is not None else None
+    except (TypeError, ValueError):
+        referencia = None
+    if referencia is not None and np.isfinite(referencia):
+        alvo = min(priors, key=lambda z: abs(referencia - z))
+    else:
+        alvo = float(np.median(priors))
+    return alvo * 1000.0
+
+
 def normal_robusta(historico, normal_anterior=None, tolerancia_deg=10.0,
                    minimo_fracao=0.70, minimo_amostras=4):
     """(normal_mediana, fracao_inliers) tolerante a OUTLIERS de 1-2 quadros.
@@ -1057,6 +1128,7 @@ CABECALHO_LOG_PALMA = (
     "mapeamento_falhas",
     "depth_falhas",
     "fallbacks",
+    "resgatados",
     "pontos_3d_ok",
     "depth_palma_mm",
     "depth_min_mm",
@@ -3094,7 +3166,7 @@ class KinectHandTracker:
     def frames(self):
         # Contadores de diagnostico do frame (log do vetor da palma, item 111).
         self.diag = {"mapeamento": 0, "depth": 0, "pontos": 0,
-                     "fallbacks": 0, "profundidades": []}
+                     "fallbacks": 0, "resgatados": 0, "profundidades": []}
         if self.kinect.has_new_color_frame():
             data = self.kinect.get_last_color_frame()
             self.last_color = data.reshape((self.color_height, self.color_width, 4))
@@ -3124,6 +3196,11 @@ class KinectHandTracker:
             self.sync_color_depth_ms = None
         if self.kinect.has_new_body_frame():
             self.last_bodies = self.kinect.get_last_body_frame()
+        # Maos do esqueleto 3D (lado geometrico + prior de profundidade, item 113)
+        self._pontos_mao_corpo = self._body_hand_camera_points()
+        self._z_por_lado = {
+            lado: float(ponto[2])
+            for lado, ponto in self._pontos_mao_corpo.items()}
         return self.last_color, self.last_depth
 
     def _log_depth_error(self, step, exc):
@@ -3362,7 +3439,15 @@ class KinectHandTracker:
                 pixels.append(depth_pixel)
         return pixels
 
-    def _landmark_camera_point(self, landmark):
+    def _landmark_camera_point(self, landmark, lado=None):
+        """Ponto 3D do landmark no camera space, com RESGATE pelo esqueleto.
+
+        `lado` escolhe o prior de profundidade (`self._z_por_lado`, item 113):
+        se o depth do landmark cair no fundo/for invalido, usa o z da mao do
+        ESQUELETO como profundidade plausivel, em vez de descartar o ponto (que
+        derrubava a normal inteira e a seta sumia). Sem `lado`, usa a EMA da
+        ultima profundidade da palma como referencia.
+        """
         color_x = int(np.clip(landmark.x * self.color_width, 0, self.color_width - 1))
         color_y = int(np.clip(landmark.y * self.color_height, 0, self.color_height - 1))
         depth_pixel = self._color_to_depth_pixel(color_x, color_y)
@@ -3376,11 +3461,26 @@ class KinectHandTracker:
         # finos y el depth del Kinect es ruidoso ahi; un parche mayor estabiliza
         # la profundidad por landmark (menos huecos/fondo).
         depth_mm = self._median_depth(*depth_pixel, radius=5)
+        z_priors = getattr(self, "_z_por_lado", None) or {}
+        prior = None
+        if lado in z_priors:
+            prior = z_priors.get(lado)
+        referencia = (prior if prior is not None
+                      else getattr(self, "last_hand_depth_m", None))
         if depth_mm is None:
             try:
                 self.diag["depth"] = self.diag.get("depth", 0) + 1
             except (AttributeError, TypeError):
                 pass
+        resgate = resgatar_profundidade(depth_mm, list(z_priors.values()),
+                                        referencia_m=referencia)
+        if resgate is not None:
+            depth_mm = resgate
+            try:
+                self.diag["resgatados"] = (self.diag.get("resgatados", 0) + 1)
+            except (AttributeError, TypeError):
+                pass
+        if depth_mm is None:
             return None
         try:
             self.diag["pontos"] = self.diag.get("pontos", 0) + 1
@@ -3389,8 +3489,6 @@ class KinectHandTracker:
             pass
         depth_point = PyKinectV2._DepthSpacePoint()
         depth_point.x, depth_point.y = map(float, depth_pixel)
-        # MapDepthPointToCameraSpace espera depth como c_ushort (inteiros,
-        # milimetros); medir as medias em float causa ctypes.ArgumentError.
         camera_point = self.mapper.MapDepthPointToCameraSpace(
             depth_point, int(round(depth_mm))
         )
@@ -3443,9 +3541,9 @@ class KinectHandTracker:
         e' a verdade do diagnostico e da calibracao da luva); SEM `lado` mantem
         o comportamento antigo (sinal forcado para a camera).
         """
-        wrist = self._landmark_camera_point(landmarks[0])
-        index_mcp = self._landmark_camera_point(landmarks[5])
-        pinky_mcp = self._landmark_camera_point(landmarks[17])
+        wrist = self._landmark_camera_point(landmarks[0], lado)
+        index_mcp = self._landmark_camera_point(landmarks[5], lado)
+        pinky_mcp = self._landmark_camera_point(landmarks[17], lado)
         if wrist is None or index_mcp is None or pinky_mcp is None:
             return None
         return self.palm_normal_from_points(wrist, index_mcp, pinky_mcp,
@@ -3460,12 +3558,12 @@ class KinectHandTracker:
         MCP minimo 17). Devolve (None, None) se os tres pontos do plano
         falharem; a direcao dos dedos pode vir None isoladamente.
         """
-        wrist = self._landmark_camera_point(landmarks[0])
+        wrist = self._landmark_camera_point(landmarks[0], lado)
         if wrist is None:
             return None, None
-        index_mcp = self._landmark_camera_point(landmarks[5])
-        pinky_mcp = self._landmark_camera_point(landmarks[17])
-        middle_mcp = self._landmark_camera_point(landmarks[9])
+        index_mcp = self._landmark_camera_point(landmarks[5], lado)
+        pinky_mcp = self._landmark_camera_point(landmarks[17], lado)
+        middle_mcp = self._landmark_camera_point(landmarks[9], lado)
         return palm_frame(wrist, index_mcp, pinky_mcp, middle_mcp, lado=lado)
 
     def palm_plane_camera(self, landmarks, lado=None, normal_anterior=None,
@@ -3481,7 +3579,7 @@ class KinectHandTracker:
         pontos = {}
         for nome, indice in PONTOS_DORSO_PALMA.items():
             try:
-                ponto = self._landmark_camera_point(landmarks[indice])
+                ponto = self._landmark_camera_point(landmarks[indice], lado)
             except (AttributeError, IndexError, TypeError):
                 ponto = None
             if ponto is None:
@@ -3634,6 +3732,46 @@ class KinectHandTracker:
             if side in found:
                 return found[side]
         return None
+
+    def _body_hand_camera_points(self):
+        """{"left": (3,), "right": (3,)} das maos do esqueleto 3D (m).
+
+        Usado para (a) decidir o LADO de cada mao do Kinect pela geometria
+        (o rotulo do MediaPipe pisca e o sinal anatomico e espelhado por lado:
+        lado errado = seta verde invertida 180 graus, item 113) e (b) prior de
+        profundidade para resgatar landmarks cujo depth caiu no fundo.
+        """
+        pontos = {}
+        if getattr(self, "last_bodies", None) is None:
+            return pontos
+        for body in self.last_bodies.bodies:
+            if not body.is_tracked:
+                continue
+            joints = getattr(body, "joints", None)
+            if joints is None:
+                continue
+            for lado, juntas in (
+                    ("right", (PyKinectV2.JointType_WristRight,
+                               PyKinectV2.JointType_HandRight)),
+                    ("left", (PyKinectV2.JointType_WristLeft,
+                              PyKinectV2.JointType_HandLeft))):
+                for tipo in juntas:
+                    try:
+                        junta = joints[tipo]
+                    except (IndexError, KeyError, TypeError):
+                        continue
+                    if (junta.TrackingState
+                            == PyKinectV2.TrackingState_NotTracked):
+                        continue
+                    pos = junta.Position
+                    xyz = np.array([float(pos.x), float(pos.y), float(pos.z)])
+                    if not np.isfinite(xyz).all() or not 0.3 < xyz[2] < 4.0:
+                        continue
+                    pontos[lado] = xyz
+                    break
+            if pontos:
+                break
+        return pontos
 
     def body_hand_anchor(self, prefer_side=None):
         """Ancora 3D (x, y, z, nome) do pulso/mao vinda do esqueleto do SDK.
@@ -4351,8 +4489,11 @@ class KinectHandTracker:
         detected = list(getattr(result, "hand_landmarks", None) or [])
         self.last_kinect_hands = detected
         maos = []
+        lados_usados = set()
+        pontos_corpo = getattr(self, "_pontos_mao_corpo", None) or {}
         for index, hand_landmarks in enumerate(detected):
             side = self._handedness_of(result, index, flip)
+            side_mediapipe = side
             position = self._palm_camera_position(hand_landmarks)
             if position is not None:
                 if self.last_hand_depth_m is None:
@@ -4361,6 +4502,21 @@ class KinectHandTracker:
                     self.last_hand_depth_m = (
                         0.8 * self.last_hand_depth_m + 0.2 * float(position[2])
                     )
+            if position is not None and pontos_corpo:
+                lado_geometrico = lado_mais_proximo(position, pontos_corpo)
+                if (lado_geometrico is not None
+                        and lado_geometrico not in lados_usados):
+                    if lado_geometrico != side_mediapipe:
+                        if not getattr(self, "_aviso_lado_geo", False):
+                            self._aviso_lado_geo = True
+                            print("[lado] mao do Kinect: lado pelo "
+                                  f"ESQUELETO 3D ({lado_geometrico}) em vez "
+                                  "do rotulo do MediaPipe "
+                                  f"({side_mediapipe}) -- evita seta "
+                                  "invertida (item 113)", flush=True)
+                    side = lado_geometrico
+            if side:
+                lados_usados.add(side)
             self._draw_hand(color_frame, hand_landmarks, destaque=True)
             maos.append(
                 {

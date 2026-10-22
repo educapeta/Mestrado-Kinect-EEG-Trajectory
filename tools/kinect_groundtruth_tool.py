@@ -3116,6 +3116,7 @@ def main():
                         mapeamento_falhas=diag_frame.get("mapeamento"),
                         depth_falhas=diag_frame.get("depth"),
                         fallbacks=diag_frame.get("fallbacks"),
+                        resgatados=diag_frame.get("resgatados"),
                         pontos_3d_ok=diag_frame.get("pontos"),
                         depth_palma_mm=(None if posicao_palma is None
                                         else float(posicao_palma[2]) * 1000.0),

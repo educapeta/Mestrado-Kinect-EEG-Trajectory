@@ -506,6 +506,35 @@ check("tool publica robust_inliers no log",
       "robust_inliers" in fonte_tool
       and "PLANO_ROBUSTO_TOLERANCIA_DEG" in fonte_tool)
 
+# ============================================================================
+# 11) LADO PELO ESQUELETO 3D + RESGATE DE PROFUNDIDADE (item 113)
+# ============================================================================
+print("11) lado geometrico e resgate de profundidade")
+_pontos = {"right": np.array([0.2, 0.0, 1.0]),
+           "left": np.array([-0.2, 0.0, 1.0])}
+check("lado: palma perto da mao direita do esqueleto",
+      gt.lado_mais_proximo([0.19, 0.01, 1.0], _pontos) == "right")
+check("lado: palma perto da mao esquerda do esqueleto",
+      gt.lado_mais_proximo([-0.21, 0.0, 1.0], _pontos) == "left")
+check("lado: longe das duas maos -> None",
+      gt.lado_mais_proximo([0.0, 0.0, 3.0], _pontos) is None)
+check("lado: sem pontos do esqueleto -> None",
+      gt.lado_mais_proximo([0.2, 0.0, 1.0], {}) is None)
+check("resgate: depth no fundo e' substituido pelo z da mao",
+      abs(gt.resgatar_profundidade(2400.0, [1.0]) - 1000.0) < 1.0)
+check("resgate: depth plausivel NAO e' alterado",
+      gt.resgatar_profundidade(1050.0, [1.0, 1.2]) is None)
+check("resgate: depth None usa a referencia (lado certo)",
+      abs(gt.resgatar_profundidade(None, [1.0, 1.2],
+                                  referencia_m=1.2) - 1200.0) < 1.0)
+check("resgate: sem prior -> None",
+      gt.resgatar_profundidade(None, []) is None)
+check("tracker tem _body_hand_camera_points",
+      hasattr(gt.KinectHandTracker, "_body_hand_camera_points"))
+check("tool publica resgatados no log",
+      "resgatados" in fonte_tool
+      and "resgatados" in gt.CABECALHO_LOG_PALMA)
+
 if FALHAS:
     print()
     print(f"PALMA_PLANO_FALHOU: {len(FALHAS)} verificacao(oes): "

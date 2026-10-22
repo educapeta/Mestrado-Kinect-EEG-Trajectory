@@ -7180,3 +7180,52 @@ contador na tela); se AINDA falhar, o proximo passo e' usar os landmarks
 esqueleto de mao do Kinect -- antes disso, medir o CSV novo (robust_inliers e
 runs) para nao chutar.
 
+
+================================================================================
+ITEM 113 (22/10/2026) - A CAUSA DA SETA "AS VEZES DENTRO, AS VEZES FORA" DA
+    PALMA: o LADO do Kinect vinha do rotulo do MediaPipe (que pisca) e o sinal
+    anatomico e' espelhado por lado; fixado pelo ESQUELETO 3D + resgate de depth
+================================================================================
+RELATO DO USUARIO: apos o item 112 os vetores ficaram mais fluidos e somem menos,
+MAS "tem vezes que o vetor normal aponta corretamente para dentro da palma,
+outras para fora (direcao das costas)" -- e isso e' o que impede o J de fechar.
+DIAGNOSTICO: o sinal anatomico da normal e' ESPELHADO POR LADO (item 79:
+`right` = +cross, `left` = -cross). O lado da mao no Kinect vinha do ROTULO DE
+LATERALIDADE DO MEDIAPIPE (`_handedness_of`), que OSCILA entre frames (as
+proprias auxiliares mostram isso no log: "ROTULO DO MEDIAPIPE INVERTIDO --
+corrigido" varias vezes). Quando o lado troca, a normal INVERTE 180 graus: e'
+exatamente o sintoma "hora aponta para dentro, hora para fora". No V isso
+aparece como erros alternando entre 5-20 graus e 150-175 graus.
+CORRECAO (item 113)
+  1) LADO PELA GEOMETRIA: nova `_body_hand_camera_points()` le as juntas
+     Wrist/HandLeft/HandRight do ESQUELETO 3D do Kinect (body frame, camera
+     space). `lado_mais_proximo(posicao, pontos, limite=0.30 m)` decide o lado
+     pela posicao 3D da palma; `detect_hands_all` usa esse lado (com controle
+     para nao repetir o mesmo lado em duas maos e fallback para o rotulo se o
+     esqueleto nao estiver rastreado). Quando a geometria corrige o rotulo,
+     imprime UMA vez "[lado] mao do Kinect: lado pelo ESQUELETO 3D (...) em vez
+     do rotulo do MediaPipe (...) -- evita seta invertida (item 113)".
+  2) RESGATE DE PROFUNDIDADE: `resgatar_profundidade(depth_mm, z_priors,
+     tolerancia=0.30 m, referencia)` -- quando o depth do landmark cai no FUNDO
+     (buraco/oclusao) ou vem invalido, usa o z da MAO do esqueleto (do lado,
+     ou a EMA da ultima profundidade) como profundidade plausivel. Os pontos 3D
+     da palma passam o `lado` para escolher o prior certo. Contador `resgatados`
+     no diag e no CSV do --log-palma.
+  3) ALINHAMENTO RESTAURADO: os J ruins anteriores tinham gravado JSONs
+     incoerentes (a certificacao offline mostrava right PREPARO 124 graus etc.).
+     Refiz o refit da sessao CANONICA de 19/10 com a verdade do plano:
+     right residuo 11,72 / left 7,06 graus (os arquivos ruins foram para .bak).
+     Serve de base sã para testar o V; o J novo deve refitar melhor.
+TESTES: grupo 11 do test_palma_plano (lado_mais_proximo direita/esquerda/longe/
+sem pontos; resgatar_profundidade fundo/plausivel/None+referencia/sem prior;
+tracker tem _body_hand_camera_points; tool publica resgatados no log) PASS;
+SUITE COMPLETA 59/59.
+SMOKE 30 s com --log-palma: sem crash; mao detectada em 331 linhas; coluna
+`resgatados` sendo gravada; nenhum "[lado] ... ESQUELETO" impresso (geometria
+concordou com o rotulo naquele momento).
+COMO TESTAR: reiniciar o tool com --log-palma e --exposicao "0:-7,1:-5"; se
+aparecer a linha "[lado] ... pelo ESQUELETO 3D", era essa a causa da inversao.
+Depois J (contador na tela) e V. Se o corpo NAO estiver rastreado pelo Kinect
+(fora do FOV do body), o lado cai no rotulo e a inversao pode voltar -- manter o
+corpo inteiro no quadro durante a calibracao ajuda.
+
