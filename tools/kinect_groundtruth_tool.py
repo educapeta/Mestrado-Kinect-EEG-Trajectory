@@ -1827,9 +1827,10 @@ def main():
     }
     print(f"IMU: direita na porta {receivers['right'].port} | esquerda na porta "
           f"{receivers['left'].port}")
-    print("TECLAS (C/B/O/D/G/J/K/H/L/R/V): clique ANTES em uma janela de VIDEO -- sem "
+    print("TECLAS (C/B/M/O/D/G/J/K/H/L/R/V): clique ANTES em uma janela de VIDEO -- sem "
           "foco no video o OpenCV nao recebe a tecla (a tecla O parece nao "
           "funcionar e o console fica mudo).")
+    print("  M = MEDIR NIVEL DA MESA (plano do Kinect, compensa inclinacao)")
     print("  J = CALIBRAR por 3 POSES FISICAS (palma p/ Kinect, p/ baixo "
           "na mesa, p/ cima) | V = VERIFICAR com as mesmas poses | "
           "G = log do vetor")
@@ -2026,6 +2027,39 @@ def main():
     #: depender de landmark/depth/sinal do Kinect.
     poses_fisicas = ColetorPosesFisicas()
     poses_fisicas_fase_vista = None
+    # --- NIVEL DA MESA (item 115): referencia de gravidade medida pelo depth.
+    # O usuario confirmou o Kinect nivelado em relacao a mesa; medimos o
+    # PLANO DA MESA e usamos a normal como referencia das poses 2/3, o que
+    # compensa qualquer inclinacao residual do sensor ("alinhar ele antes").
+    mesa_normal_camera = None
+    mesa_plano_info = None
+    mesa_auto_tentativas = 0
+    #: Sentido da normal medida que corresponde a "para CIMA" (+1/-1);
+    #: resolvido pelo J comparando o residuo das duas hipoteses.
+    mesa_sinal = 1.0
+    caminho_mesa = Path("mesa_kinect.json")
+    try:
+        if caminho_mesa.exists():
+            _estado_mesa = json.loads(caminho_mesa.read_text(encoding="utf-8"))
+            _normal_mesa = np.asarray(_estado_mesa.get("normal"),
+                                      np.float64).reshape(3)
+            _norma_mesa = float(np.linalg.norm(_normal_mesa))
+            if np.isfinite(_normal_mesa).all() and _norma_mesa > 1e-6:
+                mesa_normal_camera = _normal_mesa / _norma_mesa
+                mesa_plano_info = {
+                    "tilt_deg": float(_estado_mesa.get("tilt_deg")
+                                       or 0.0),
+                    "inliers": int(_estado_mesa.get("inliers") or 0),
+                    "fracao": float(_estado_mesa.get("fracao") or 0.0),
+                }
+                mesa_sinal = float(_estado_mesa.get("sinal") or 1.0)
+                print(f"[nivel] plano da mesa carregado de "
+                      f"{caminho_mesa.name} (tilt "
+                      f"{mesa_plano_info['tilt_deg']:.1f} graus; tecle M "
+                      "para medir de novo)")
+    except (OSError, ValueError, TypeError):
+        mesa_normal_camera = None
+        mesa_plano_info = None
     verif_fase_vista = None
     #: RMS do plano do dorso durante a captura J (controle de qualidade: luz
     #: estourada/landmarks ruins inflam o RMS e descartam amostras).
@@ -2134,6 +2168,22 @@ def main():
                     (now - desempenho["t_anterior"]) * 1000.0)
             desempenho["t_anterior"] = now
             color, depth = tracker.frames()
+            if (mesa_normal_camera is None and mesa_auto_tentativas < 3
+                    and frame_contador % 80 == 40):
+                mesa_auto_tentativas += 1
+                _info_mesa_auto = tracker.medir_plano_mesa()
+                if (_info_mesa_auto is not None
+                        and _info_mesa_auto["tilt_deg"] <= 85.0):
+                    mesa_normal_camera = _info_mesa_auto["normal"]
+                    mesa_plano_info = _info_mesa_auto
+                    print(f"[nivel] plano da MESA medido: tilt "
+                          f"{_info_mesa_auto['tilt_deg']:.1f} graus | "
+                          f"inliers "
+                          f"{_info_mesa_auto['fracao'] * 100:.0f}% | "
+                          "usando como referencia das poses 2/3 "
+                          "(Kinect inclinado em relacao a mesa: a "
+                          "calibracao COMPENSA com o plano medido)",
+                          flush=True)
             # --- TODAS as auxiliares: le, casa a resolucao e detecta POR CAMERA --
             # Cada camera tem o seu detector/timestamp (VideoMode do MediaPipe) e
             # o seu tamanho de frame; a camera ATIVA e' restaurada no fim do laco
@@ -3253,8 +3303,19 @@ def main():
                     poses_fisicas.parar()
                     poses_fisicas_fase_vista = None
                     if modo_pose == "calibrar":
-                        resultado_poses = poses_fisicas.calibrar()
-                        print("CALIBRACAO POR POSES FISICAS terminada:")
+                        if mesa_normal_camera is not None:
+                            resultado_poses = poses_fisicas.calibrar_mesa(
+                                mesa_normal_camera)
+                            mesa_sinal = float(
+                                resultado_poses.get("sinal_mesa") or 1.0)
+                            print("CALIBRACAO POR POSES FISICAS "
+                                  "terminada (referencia: PLANO DA MESA "
+                                  f"medido, sinal {mesa_sinal:+.0f}):")
+                        else:
+                            resultado_poses = poses_fisicas.calibrar()
+                            print("CALIBRACAO POR POSES FISICAS "
+                                  "terminada (referencia: Kinect "
+                                  "NIVELADO):")
                         for lado in ("right", "left"):
                             dados_pose = resultado_poses["lados"].get(lado, {})
                             if dados_pose.get("sem_amostras"):
@@ -3572,6 +3633,9 @@ def main():
                       f"erro palma: {' | '.join(erros_palma)} | "
                       f"erro plano: {' | '.join(erros_plano)} | "
                       f"estab. plano: {' | '.join(estabilidade_plano)}"
+                      + (f" | nivel mesa: "
+                         f"{mesa_plano_info['tilt_deg']:.1f} graus"
+                         if mesa_plano_info is not None else "")
                       + (" | SEM ALINHAMENTO -- aperte O (14 s girando a mao)"
                          if falta_o else ""),
                       flush=True)
@@ -3896,6 +3960,48 @@ def main():
                         overlay_log_file.close()
                         overlay_log_file = None
                     print(f"Log overlay DESLIGADO (arquivo em {OVERLAY_LOG_PATH.name})")
+            elif key == ord("m"):
+                # NIVEL DA MESA (item 115): mede o plano da mesa pelo depth.
+                _info_mesa = tracker.medir_plano_mesa()
+                if _info_mesa is None:
+                    print("[nivel] NAO consegui medir a mesa: aponte o "
+                          "Kinect para a mesa SEM maos/objetos na frente "
+                          "e tecle M de novo")
+                else:
+                    mesa_normal_camera = _info_mesa["normal"]
+                    mesa_plano_info = _info_mesa
+                    _nx, _ny, _nz = (float(v) for v in _info_mesa["normal"])
+                    print(f"[nivel] plano da MESA: tilt "
+                          f"{_info_mesa['tilt_deg']:.1f} graus | "
+                          f"inliers {_info_mesa['fracao'] * 100:.0f}% | "
+                          f"erro {_info_mesa['erro_m'] * 1000:.1f} mm | "
+                          f"normal ({_nx:+.3f}, {_ny:+.3f}, {_nz:+.3f})")
+                    print("  referencia das poses 2/3 = plano da mesa "
+                          "medido (compensa inclinacao do sensor)")
+                    print(f"  interpretacao: se a mesa for HORIZONTAL, o "
+                          f"Kinect esta' inclinado "
+                          f"{_info_mesa['tilt_deg']:.1f} graus em relacao "
+                          "a ela (a calibracao ja' compensa; alinhar so' "
+                          "e' necessario se voce quiser)")
+                    if _info_mesa["tilt_deg"] > 2.0:
+                        print(f"  ATENCAO: inclinacao "
+                              f"{_info_mesa['tilt_deg']:.1f} graus em "
+                              "relacao a camera; a calibracao COMPENSA "
+                              "com o plano medido, mas se quiser alinhar "
+                              "fisicamente ajuste o suporte ate < 1 grau")
+                    try:
+                        caminho_mesa.write_text(json.dumps({
+                            "normal": [float(v) for v in
+                                       _info_mesa["normal"]],
+                            "tilt_deg": float(_info_mesa["tilt_deg"]),
+                            "inliers": int(_info_mesa["inliers"]),
+                            "fracao": float(_info_mesa["fracao"]),
+                            "sinal": float(mesa_sinal),
+                            "quando": time.strftime("%Y-%m-%d %H:%M:%S"),
+                        }, indent=2), encoding="utf-8")
+                        print(f"  gravado em {caminho_mesa.name}")
+                    except OSError as exc:
+                        print(f"  nao gravou {caminho_mesa.name}: {exc}")
             elif key == ord("g"):
                 # LOG DO VETOR DA PALMA (item 111).
                 if log_palma is None:
@@ -3917,6 +4023,11 @@ def main():
                 else:
                     captura_palma_plano.parar()
                     verificacao_palma.parar()
+                    _poses_ref = (poses_fisicas_com_mesa(
+                                      mesa_normal_camera, sinal=mesa_sinal)
+                                  if mesa_normal_camera is not None
+                                  else POSES_FISICAS_CALIBRACAO)
+                    poses_fisicas = ColetorPosesFisicas(poses=_poses_ref)
                     poses_fisicas.iniciar(now, modo="verificar")
                     poses_fisicas_fase_vista = None
                     print(
@@ -3937,7 +4048,17 @@ def main():
                 else:
                     captura_palma_plano.parar()
                     verificacao_palma.parar()
+                    _poses_ref = (poses_fisicas_com_mesa(
+                                      mesa_normal_camera, sinal=mesa_sinal)
+                                  if mesa_normal_camera is not None
+                                  else POSES_FISICAS_CALIBRACAO)
+                    poses_fisicas = ColetorPosesFisicas(poses=_poses_ref)
                     poses_fisicas.iniciar(now, modo="calibrar")
+                    print("  referencia das normais: "
+                          + ("PLANO DA MESA medido"
+                             if mesa_normal_camera is not None
+                             else "Kinect NIVELADO (padrao; tecle M para "
+                                  "medir a mesa)"))
                     poses_fisicas_fase_vista = None
                     print(
                         "CALIBRACAO POR POSES FISICAS (item 114) -- "

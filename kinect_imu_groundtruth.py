@@ -1091,6 +1091,83 @@ POSES_FISICAS_SETTLE_SEC = 0.8
 POSES_FISICAS_LIMITE_DEG = 12.0
 
 
+def ajustar_plano_mesa(pontos, limiar_m=0.02, iteracoes=120, semente=1):
+    """Plano dominante (a MESA) da nuvem 3D do depth, normal apontando p/ CIMA.
+
+    Por que existe (item 115): o usuario confirmou que o Kinect esta' nivelado em
+    relacao a mesa, mas "temos que alinhar ele antes". Em vez de exigir um
+    Kinect perfeito, medimos o PLANO DA MESA com o proprio depth (RANSAC + minimos
+    quadrados nos inliers) e usamos a normal medida como referencia de gravidade
+    das poses 2/3 (palma p/ baixo / p/ cima). Assim a calibracao compensa a
+    inclinacao do sensor/mesa em vez de assumi-la zero.
+    """
+    nuvem = np.asarray(pontos, np.float64).reshape(-1, 3)
+    nuvem = nuvem[np.isfinite(nuvem).all(axis=1)]
+    if len(nuvem) < 120:
+        return None
+    gerador = np.random.default_rng(int(semente))
+    melhor = None
+    for _ in range(max(1, int(iteracoes))):
+        indices = gerador.choice(len(nuvem), 3, replace=False)
+        p0, p1, p2 = nuvem[indices]
+        normal = np.cross(p1 - p0, p2 - p0)
+        norma = float(np.linalg.norm(normal))
+        if norma < 1e-9:
+            continue
+        normal = normal / norma
+        distancias = np.abs((nuvem - p0) @ normal)
+        inliers = distancias < float(limiar_m)
+        contagem = int(inliers.sum())
+        if melhor is None or contagem > melhor[0]:
+            melhor = (contagem, inliers)
+    if melhor is None:
+        return None
+    contagem, inliers = melhor
+    if contagem < max(200, int(0.12 * len(nuvem))):
+        return None
+    ajustados = nuvem[inliers]
+    centroide = ajustados.mean(axis=0)
+    _u, _s, vt = np.linalg.svd(ajustados - centroide)
+    normal = vt[-1]
+    normal = normal / max(1e-12, float(np.linalg.norm(normal)))
+    #: A mesa esta' ABAIXO do Kinect: a normal para CIMA e' a que aponta para o
+    #: eixo Y da camera (sensor nao esta' de cabeca para baixo).
+    if normal[1] < 0.0:
+        normal = -normal
+    tilt_deg = float(np.degrees(np.arccos(np.clip(float(normal[1]), -1.0, 1.0))))
+    erro = np.abs((ajustados - centroide) @ normal)
+    return {
+        "normal": normal,
+        "inliers": contagem,
+        "fracao": float(contagem) / float(len(nuvem)),
+        "tilt_deg": tilt_deg,
+        "erro_m": float(np.mean(erro)),
+    }
+
+
+def poses_fisicas_com_mesa(normal_mesa, sinal=1.0):
+    """Poses fisicas (item 114) com as normais 2/3 tiradas do PLANO DA MESA.
+
+    Pose 1 continua "palma de frente para o Kinect" = eixo da camera (0,0,-1).
+    Poses 2/3 usam +-normal da mesa (medida pelo depth): a calibracao deixa de
+    assumir o sensor perfeitamente nivelado.
+    """
+    normal = np.asarray(normal_mesa, np.float64).reshape(3)
+    normal = normal / max(1e-12, float(np.linalg.norm(normal)))
+    if normal[1] < 0.0:
+        normal = -normal
+    #: `sinal` diz qual sentido da normal medida e' "para CIMA". Como o
+    #: sentido do eixo Y do camera space do Kinect nao e' documentado de
+    #: forma confiavel (o codigo antigo usa +y num lugar e -y em outro), o
+    #: calibrador testa os DOIS sinais e escolhe o de MENOR residuo.
+    orientada = float(sinal) * normal
+    return (
+        (POSES_FISICAS_CALIBRACAO[0][0], (0.0, 0.0, -1.0)),
+        (POSES_FISICAS_CALIBRACAO[1][0], tuple(float(v) for v in -orientada)),
+        (POSES_FISICAS_CALIBRACAO[2][0], tuple(float(v) for v in orientada)),
+    )
+
+
 class ColetorPosesFisicas:
     """Coleta rotacoes do IMU em poses de orientacao FISICA conhecida.
 
@@ -1174,7 +1251,42 @@ class ColetorPosesFisicas:
         return grupos
 
     def calibrar(self):
+        """{lado: {T, f, residuo, poses:{idx: erro}}} com as poses atuais."""
+        return self._calibrar_com_poses(self.poses)
+
+    def calibrar_mesa(self, normal_mesa):
+        """Calibra usando o PLANO DA MESA medido; testa os DOIS sinais.
+
+        O sentido do eixo Y do camera space do Kinect nao e' confiavel entre
+        os trechos do codigo (um usa +y, outro -y), entao tentamos
+        `sinal=+1` e `sinal=-1` e ficamos com o resultado de MENOR residuo
+        (o residuo alto delata a atribuicao de "para cima" errada).
+        """
+        candidatos = []
+        for sinal in (1.0, -1.0):
+            poses = poses_fisicas_com_mesa(normal_mesa, sinal=sinal)
+            resultado = self._calibrar_com_poses(poses)
+            residuos = [dados.get("residuo")
+                        for dados in resultado["lados"].values()
+                        if not dados.get("sem_amostras")]
+            if not residuos:
+                continue
+            candidatos.append((float(np.mean(residuos)), sinal,
+                               poses, resultado))
+        if not candidatos:
+            vazio = self._calibrar_com_poses(
+                poses_fisicas_com_mesa(normal_mesa))
+            vazio["sinal_mesa"] = 1.0
+            return vazio
+        melhor = min(candidatos, key=lambda item: item[0])
+        _residuo, sinal, _poses, resultado = melhor
+        resultado["sinal_mesa"] = float(sinal)
+        resultado["poses_usadas"] = _poses
+        return resultado
+
+    def _calibrar_com_poses(self, poses):
         """{lado: {T, f, residuo, poses:{idx: erro}}} ou marca sem amostras."""
+        self.poses = tuple(poses)
         resultado = {"modo": "calibrar", "lados": {}, "fechado": False}
         for lado in ("right", "left"):
             grupos = self._por_pose(lado)
@@ -3943,6 +4055,35 @@ class KinectHandTracker:
             if side in found:
                 return found[side]
         return None
+
+    def medir_plano_mesa(self, passo=6, limiar_m=0.02):
+        """Plano da MESA no referencial da camera (item 115).
+
+        Amostra o depth em grade, converte para camera space e ajusta o plano
+        dominante (RANSAC). Devolve dict de `ajustar_plano_mesa` ou None.
+        """
+        if self.last_depth is None:
+            return None
+        passo = max(2, int(passo))
+        pontos = []
+        for py in range(0, self.depth_height, passo):
+            for px in range(0, self.depth_width, passo):
+                try:
+                    mm = int(self.last_depth[py, px])
+                except (IndexError, TypeError, ValueError):
+                    continue
+                if not 350 < mm < 2500:
+                    continue
+                ponto = PyKinectV2._DepthSpacePoint()
+                ponto.x, ponto.y = float(px), float(py)
+                try:
+                    cam = self.mapper.MapDepthPointToCameraSpace(ponto, mm)
+                except Exception:
+                    continue
+                xyz = (float(cam.x), float(cam.y), float(cam.z))
+                if np.isfinite(xyz).all() and 0.35 < xyz[2] < 2.5:
+                    pontos.append(xyz)
+        return ajustar_plano_mesa(pontos, limiar_m=limiar_m)
 
     def _body_hand_camera_points(self):
         """{"left": (3,), "right": (3,)} das maos do esqueleto 3D (m).

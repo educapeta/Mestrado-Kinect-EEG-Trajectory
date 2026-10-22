@@ -625,6 +625,75 @@ check("tool usa ColetorPosesFisicas/POSES_FISICAS_CALIBRACAO",
       and "POSES_FISICAS_CALIBRACAO" in fonte_tool
       and "poses fisicas" in fonte_tool)
 
+# ============================================================================
+# 13) PLANO DA MESA (item 115): nivel medido pelo depth + vetores compensados
+# ============================================================================
+print("13) plano da mesa e vetores compensados")
+_rng = np.random.default_rng(7)
+_n_verdade = np.array([0.08, 0.995, -0.05])
+_n_verdade = _n_verdade / np.linalg.norm(_n_verdade)
+_b1 = np.cross(_n_verdade, np.array([1.0, 0.0, 0.0]))
+_b1 = _b1 / np.linalg.norm(_b1)
+_b2 = np.cross(_n_verdade, _b1)
+_origem = np.array([0.0, 0.0, 1.0])
+_u = _rng.uniform(-0.4, 0.4, 1500)
+_v = _rng.uniform(-0.4, 0.4, 1500)
+_pontos_mesa = (_origem[None, :] + _u[:, None] * _b1[None, :]
+                + _v[:, None] * _b2[None, :])
+_pontos_mesa += _rng.normal(0.0, 0.001, _pontos_mesa.shape)
+_fora = _rng.uniform(-0.5, 0.5, (150, 3)) + np.array([0.0, 0.3, 1.2])
+_nuvem = np.vstack([_pontos_mesa, _fora])
+_plano = gt.ajustar_plano_mesa(_nuvem, limiar_m=0.02, iteracoes=150)
+check("plano da mesa: RANSAC/LS recupera a normal (tilt ~4 graus)",
+      _plano is not None
+      and np.degrees(np.arccos(np.clip(
+          float(np.dot(_plano["normal"], _n_verdade)), -1.0, 1.0))) < 1.5,
+      None if _plano is None else _plano["normal"])
+if _plano is not None:
+    check("plano da mesa: tilt medido bate com o real",
+          abs(_plano["tilt_deg"]
+              - np.degrees(np.arccos(float(_n_verdade[1])))) < 1.5,
+          _plano["tilt_deg"])
+    check("plano da mesa: normal aponta para CIMA (y>0)",
+          float(_plano["normal"][1]) > 0.9)
+_poses_mesa = gt.poses_fisicas_com_mesa(_n_verdade)
+check("poses com mesa: pose 1 = eixo da camera",
+      np.allclose(_poses_mesa[0][1], (0.0, 0.0, -1.0)))
+check("poses com mesa: pose 2 e 3 = -n e +n da mesa",
+      np.allclose(_poses_mesa[1][1], -_n_verdade)
+      and np.allclose(_poses_mesa[2][1], _n_verdade))
+check("plano da mesa: nuvem pequena -> None",
+      gt.ajustar_plano_mesa(np.zeros((10, 3))) is None)
+check("tool mede a mesa no depth e usa como referencia",
+      "medir_plano_mesa" in fonte_tool
+      and "poses_fisicas_com_mesa" in fonte_tool
+      and "mesa_kinect.json" in fonte_tool)
+_poses_sinal_menos = gt.poses_fisicas_com_mesa(_n_verdade, sinal=-1.0)
+check("poses com mesa: sinal -1 inverte as poses 2/3",
+      np.allclose(_poses_sinal_menos[1][1], _n_verdade)
+      and np.allclose(_poses_sinal_menos[2][1], -_n_verdade))
+
+# calibra_mesa escolhe o sinal certo pelo residuo (y do Kinect ambiguo)
+_coletor_mesa = gt.ColetorPosesFisicas(seg_pose=1.0, settle=0.2)
+_coletor_mesa.iniciar(0.0, "calibrar")
+_poses_verdade = gt.poses_fisicas_com_mesa(_n_verdade, sinal=1.0)
+for _indice, (_nome, _vetor) in enumerate(_poses_verdade):
+    _alvo = _T_verdade.T @ np.asarray(_vetor, np.float64)
+    _rot = _rot_entre(_f_verdade, _alvo)
+    for _dt in (0.3, 0.5, 0.7, 0.9):
+        for _lado in ("right", "left"):
+            _coletor_mesa.coletar(_lado, _indice * 1.0 + _dt, _rot)
+_resultado_mesa = _coletor_mesa.calibrar_mesa(_n_verdade)
+check("calibrar_mesa escolhe o sinal +1 e FECHA o certificado",
+      _resultado_mesa["sinal_mesa"] == 1.0
+      and _resultado_mesa["fechado"] is True,
+      (_resultado_mesa.get("sinal_mesa"),
+       {_l: _resultado_mesa["lados"][_l].get("residuo")
+        for _l in ("right", "left")}))
+check("tool resolve o sinal da mesa e usa no J/V",
+      "calibrar_mesa" in fonte_tool
+      and "mesa_sinal" in fonte_tool)
+
 if FALHAS:
     print()
     print(f"PALMA_PLANO_FALHOU: {len(FALHAS)} verificacao(oes): "

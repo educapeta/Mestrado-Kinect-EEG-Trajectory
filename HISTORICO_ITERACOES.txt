@@ -7288,3 +7288,52 @@ PENDENCIA: o usuario rodar J (3 poses, duas maos juntas) e depois V; o
 alinhamento em disco ainda e' o refit canonico do item 113 (nao calibrado por
 este protocolo ainda) -- rodar J primeiro.
 
+
+================================================================================
+ITEM 115 (22/10/2026) - "ALINHAR O KINECT ANTES": medicao do PLANO DA MESA
+    pelo depth e compensacao da inclinacao nas 3 poses fisicas
+================================================================================
+CONTEXTO: o usuario respondeu ao item 114 ("o kinect esta' nivelado sim em
+relacao a mesa, temos que alinhar ele antes entao"). Em vez de assumir o sensor
+perfeitamente nivelado, medimos o PLANO DA MESA com o proprio depth e usamos a
+normal medida como referencia de gravidade das poses 2/3.
+MEDICAO REAL NO BENCH (Kinect ligado, sem maos na frente): RANSAC no depth
+encontrou um plano grande e estavel -> normal (+0.04,+0.62,-0.78), 49% dos
+pontos, erro 4.5 mm, TILT 51.2 GRAUS em relacao ao eixo Y da camera. Ou seja: o
+plano da mesa esta' a ~51 graus do eixo optico -- o "nivelado" do suporte nao
+significa eixo optico nivelado; o sensor esta' inclinado ~51 graus para baixo
+(mirando a mesa/maos). Isso sozinho ja' explica os erros sistematicos de 40-90
+graus do V anterior: as poses 2/3 assumiam normal (0,+-1,0) e a verdade estava
+51 graus fora.
+IMPLEMENTADO
+  1) `ajustar_plano_mesa(pontos, limiar_m=0.02, iteracoes=120)` (gt): RANSAC +
+     minimos quadrados nos inliers; escolhe o plano dominante; devolve normal,
+     inliers, fracao, tilt_deg (angulo com o eixo Y da camera) e erro_m.
+  2) `KinectHandTracker.medir_plano_mesa(passo=6)`: amostra o depth em grade,
+     converte para camera space (0.35 < z < 2.5 m), chama o ajuste.
+  3) `poses_fisicas_com_mesa(normal_mesa, sinal=1.0)` (gt): pose 1 continua
+     (0,0,-1) (palma p/ a camera); poses 2/3 passam a usar -n/+n do plano
+     MEDIDO da mesa, absorvendo a inclinacao do sensor.
+     O SENTIDO do eixo Y do camera space do Kinect e' ambiguo no codigo antigo
+     (um trecho usa +y, outro -y), entao `ColetorPosesFisicas.calibrar_mesa`
+     testa `sinal=+1` e `sinal=-1` e fica com o de MENOR residuo; o sinal
+     escolhido fica gravado em mesa_kinect.json e o V usa o mesmo.
+  4) Tool: tecla M = MEDIR NIVEL DA MESA (independe do resto; grava
+     mesa_kinect.json com normal/tilt/inliers/sinal); medicao AUTOMATICA nos
+     primeiros frames (tenta nos frames 40/120/200, aceita tilt <= 85 graus) e
+     a linha [status] passa a mostrar "nivel mesa: 51.2 graus". J usa
+     calibrar_mesa quando o plano foi medido; V usa as mesmas poses.
+  5) Mensagens: se a mesa for horizontal, o Kinect esta' inclinado X graus em
+     relacao a ela; a calibracao COMPENSA (alinhar fisicamente so' se quiser).
+TESTES: grupo 13 do test_palma_plano -- RANSAC recupera plano sintetico tilt
+~4 graus (erro <1.5 grau, normal p/ cima), nuvem pequena -> None,
+poses_fisicas_com_mesa (sinal +1/-1), calibrar_mesa escolhe o sinal +1 e FECHA
+o certificado; guards do tool (medir_plano_mesa, calibrar_mesa, mesa_sinal).
+SUITE COMPLETA 59/59.
+SMOKE 30 s no Kinect real: SEM crash; medicao automatica imprimiu
+"[nivel] plano da MESA medido: tilt 51.2 graus | inliers 49% ..."; [status]
+passou a mostrar "nivel mesa: 51.2 graus".
+PROXIMO PASSO: rodar J (3 poses fisicas, duas maos juntas, ~11 s) e depois V;
+esperado: o V finalmente fecha porque as normais 2/3 agora sao as da MESA
+medida, nao uma suposicao de Kinect nivelado.
+
