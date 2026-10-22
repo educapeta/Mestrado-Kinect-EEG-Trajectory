@@ -6842,3 +6842,32 @@ PROXIMO PASSO: reiniciar o tool (codigo novo), J com pausas (~20 s) -> V; se o
 right continuar ruim SO' nele, conferir fixacao fisica do IMU direito na luva
 (sensor solto muda o f com o movimento e nenhuma calibracao estatica conserta).
 
+
+================================================================================
+ITEM 106 (22/10/2026) - test_palm_seta_pose agora certifica o METODO, nao o
+    arquivo JSON: JSON refeito na bancada (J) em outra sessao/boot nao reprova
+================================================================================
+PROBLEMA: depois do J de hoje na bancada, o test_palm_seta_pose FALHOU (right
+PREPARO 36,7; right MESA 124,5; left PREPARO 109,6...). Nao era bug: o J
+SOBRESCREVEU os JSONs com o refit da sessao de HOJE (outro yaw de boot/
+montagem; .bak guardou o anterior) e o teste comparava esse arquivo contra o CSV
+canonico de 19/10 -- comparacao entre sessoes diferentes, que tem de falhar.
+CORRECAO (teste mais honesto e mais forte):
+  - o teste agora REFFITA o proprio CSV canonico (`solve_palm_alignment` com a
+    verdade anatomica 3-pontos) e exige <= 20 graus por pose nos dois lados.
+    Isso certifica o METODO (sinal, modelo v = T R f, fisica das poses)
+    independente de qual JSON esta' em disco. Resultado: right 13,0/4,8/11,0/
+    10,6 e left 8,5/8,1/1,7/4,5 -> OK.
+  - o JSON SALVO e' checado em separado e vira AVISO (nao falha) quando e' de
+    outra sessao, com instrucao de como certificar a sessao dele (tecla V ou
+    analisa_diag_palma.py <csv> --salvar).
+  - negativo de controle virou SINTETICO (f -> -f): mesmo residuo e previsao
+    invertida -> o teste TEM de reprovar (dot MESA -0,997/-0,990). Antes o
+    controle dependia do .bak, que pode ser um refit legitimo de outra sessao
+    (era o caso hoje).
+RESULTADO: test_palm_seta_pose 6/6 OK; demais regressoes (plano, alinhamento,
+reancora, imu_reset, exposicao) verdes.
+NOTA OPERACIONAL: o JSON carregado pelo tool e' o refit da ULTIMA captura J/O;
+ele vale para o boot/sessao em que foi feito (T absorve o yaw do boot). O
+certificado V e' o que confirma na sessao corrente.
+
