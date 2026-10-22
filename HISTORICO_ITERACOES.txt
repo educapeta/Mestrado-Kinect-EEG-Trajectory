@@ -6477,3 +6477,65 @@ PROXIMOS PASSOS (ordem)
   4) Sessao real: antes de cada sessao, religar as luvas paradas e conferir o
      gyro ~0 (ou rodar o re-zero do item 2).
 
+
+================================================================================
+ITEM 100 (21/10/2026) - BIAS DO GIROSCOPIO RESOLVIDO: reboot com as luvas
+    PARADAS (pela serial) leva a deriva de yaw de 434 para 0,2 graus/min
+================================================================================
+HIPOTESE (fechada): o bias do giroscopio e' calibrado UMA vez no boot e assume a
+luva PARADA; se o ESP32 religa com a luva em movimento, o "bias" vira a media do
+movimento e o yaw deriva. Medido em duas rodadas de 10 min com as luvas paradas:
+
+ANTES (boot antigo, luva provavelmente em movimento no boot):
+  DIREITA: gyro_y -12,504 dps (offset constante) -> yaw +434,6 graus/min
+  ESQUERDA: bias 0,1-0,3 dps -> yaw +6,2 graus/min
+  roll/pitch perfeitos (std 0,02) e sem saltos nos dois.
+
+REBOOT PELA SERIAL COM AS LUVAS PARADAS (novo tools/reinicia_luvas_serial.py):
+  pulso RTS (EN) pela COM4 -> boot log capturado; firmware calibrou:
+    bias MPU 0x68 (DIREITA): (2,4400, 3,0268, -0,3868)
+    bias MPU 0x69 (ESQUERDA): (1,1188, 0,0688, -0,6436)
+  gyro corrigido medido no UDP logo depois: ~0,00-0,02 dps nos dois lados.
+
+DEPOIS (10 min com as luvas paradas, 64,2 Hz, 77.092 amostras):
+  DIREITA: yaw -1,85 graus em 10 min = **-0,20 graus/min**
+           gyro medio (-0,001, -0,006, -0,003) dps | roll/pitch deriva 0,00
+  ESQUERDA: yaw -0,21 graus em 10 min = **-0,04 graus/min**
+           gyro medio (+0,000, -0,006, -0,001) dps | roll/pitch deriva 0,00
+  zero saltos de yaw; accel 1,065-1,068 g parado (std 0,004).
+  VEREDITO: comportamento BOM para sessao (yaw <= 1 grau/min).
+
+CONCLUSAO
+  - O problema de hoje NAO era firmware/filtro: era o BOOT com a luva em
+    movimento. O ritual "reiniciar com as luvas paradas" resolve (434 -> 0,2
+    graus/min na direita; 6,2 -> 0,04 na esquerda).
+  - A REANCORAGEM DO YAW DO BOOT (item 97) agora segura a seta por sessoes
+    longas: 0,2 graus/min = ~1 grau a cada 5 min.
+  - Firmware de "bias robusto" e re-zero em runtime continuam uteis como
+    robustez (nao bloqueiam mais): calibracao de boot que detecta movimento e
+    repete + comando de re-zero (serial/UDP) para nao depender de reboot.
+
+FERRAMENTAS CRIADAS (commitadas)
+  tools/reinicia_luvas_serial.py -- reset por RTS + captura do boot/calibracao
+    (mostra as linhas "[imu] bias MPU 0x68/0x69"); validado 2x.
+  tools/deriva_estatica_imu.py -- captura N min e analisa deriva/bias por lado
+    com veredito (`--analisar arquivo.csv` para reprocessar).
+
+RITUAL ANTES DE CADA SESSAO (1 min)
+  1) luvas/luva PARADAS na mesa (como ficam entre sessoes);
+  2) .venv\Scripts\python.exe tools\reinicia_luvas_serial.py COM4
+     (ou apertar EN/RST) e NAO MEXER por ~3 s;
+  3) opcional: .venv\Scripts\python.exe tools\deriva_estatica_imu.py --segundos 60
+     (gyro ~0 e yaw ~0 graus/min; se nao, repetir o reset);
+  4) abrir o tool: ele reancora o yaw do boot sozinho (item 97) e a seta deve
+     estar correta.
+
+DADOS (na raiz, fora do git): deriva_estatica_20261021.csv (antes) e
+deriva_estatica_20261021_pos_reboot.csv (depois).
+
+PENDENCIAS (seguem do item 98)
+  - validar visualmente cue novo / pausa com 2 ESPACOS / baseline com bips;
+  - conferir espelhamento do Kinect (logo DELL) e virar o flip se invertido;
+  - corrigir o sinal do PALM_* no writer do paradigma (item 79 pendencia 3);
+  - sessao de validacao com Tee-Object _sessao.log; depois o trial real.
+
