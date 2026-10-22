@@ -2997,6 +2997,7 @@ def main():
                 else:
                     normal_plano_lado, rms_plano_lado = plano_lado
                 plano_estavel = None
+                spread_plano = None
                 if normal_plano_lado is not None:
                     ultimo_plano_camera[lado] = normal_plano_lado
                     hist_plano_camera[lado].append(normal_plano_lado)

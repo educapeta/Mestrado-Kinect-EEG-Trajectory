@@ -343,6 +343,8 @@ check("tool usa a media estavel e a sincronia color-depth",
       and "palm_plano_estavel" in fonte_tool)
 check("tool NAO usa `or` com a normal numpy (causava ValueError no display)",
       'or mao.get("palm_plano_estavel")' not in fonte_tool)
+check("tool inicializa spread_plano antes de usar (evita UnboundLocalError)",
+      "spread_plano = None" in fonte_tool)
 
 # ============================================================================
 # 7) POINT 3D AUSENTE NAO PODE ESTOURAR (KeyError do MCP medio, item 108)

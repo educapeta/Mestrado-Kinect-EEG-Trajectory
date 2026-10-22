@@ -6948,3 +6948,61 @@ PROXIMO PASSO: com a luva DE VOLTA na mao, reiniciar o tool (codigo novo), J com
 pausas (~20 s) e V; a coluna "estab. plano" acompanha a qualidade do Kinect
 durante o J/V (se o spread/RMS estourar, a captura daquela pose nao vale).
 
+
+================================================================================
+ITEM 109 (22/10/2026) - TESTE RIGOROSO PRE-EXECUCAO do groundtruth tool:
+    suite 59/59, ritual real OK, probe do Kinect OK e smoke de 45 s SEM crash
+    (achou e corrigiu 2 bugs antes do usuario rodar)
+================================================================================
+PEDIDO: "faca um teste rigoroso do programa antes de eu rodar".
+O QUE FOI RODADO
+  1) SUITE COMPLETA: 59/59 test_*.py OK (0 falhas, 173 s; sem o
+     test_freeze_kinect_direto, que e' lento de proposito).
+  2) RITUAL REAL DE CALIBRACAO (imu_reset.calibra_imu, hardware de verdade):
+     executado=True | ok=True | porta COM4 | tentativas=1
+     bias firmware: 0x68 (2,4209, 3,3816, -0,396) | 0x69 (1,1178, 0,0923, -0,6546)
+     bias UDP: 4210 (+0,00,-0,00,+0,01) std 0,27 | 4211 (+0,01,+0,02,-0,01)
+     std 0,21 -> OK (settle de 2 s funcionando).
+  3) PROBE DO PIPELINE DO KINECT (8 s, sem GUI): 188 frames processados,
+     204 deteccoes de mao, plano OK 201 / falhou 3 (98,5%);
+     sync color-depth mediana 4,3 ms (max 33,1 ms);
+     right: 186 normais, RMS do plano 2,28 mm, salto entre quadros mediana
+     1,96 graus (max 17,77), spread da janela 1,24 graus -> ESTAVEL;
+     left: so' 15 normais (mao pouco no quadro) com saltos (mao em movimento).
+  4) SMOKE TEST DO TOOL INTEIRO: Start-Process por 45 s com
+     `--sem-calibra-imu --participante SMOKE --exposicao "0:-7,1:-5"`, log
+     capturado, processo morto no fim, conferencia de portas/processos.
+     RESULTADO FINAL: sem crash, 7 linhas [status], 3+ [desempenho]
+     (loop ~10 fps | sync color-depth 4-5 ms), reancoragem e lateralidade
+     correram, 1 "mapeo color->depth falhou" pontual (tratado), e ZERO
+     processo/porta residual depois do kill.
+
+BUGS ACHADOS PELO TESTE (antes de chegar na mao do usuario)
+  a) KeyError 'middle' quando o mapping color->depth falhava para o MCP medio
+     (item 108): corrigido (middle opcional + fallback).
+  b) UnboundLocalError 'spread_plano': quando o plano do quadro era invalido
+     (normal=None) `spread_plano` nao era definido e o display/status estourava
+     -- o tool morria no PRIMEIRO frame com mao. Corrigido com inicializacao
+     explicita antes do bloco; guarda no test_palma_plano para nao voltar.
+  c) (item 107) ValueError do numpy em `or` no desenho da seta verde.
+
+ESTADO ATUAL: suite 59/59 (rodada antes das 2 correcoes de tool; depois delas
+as regressoes de palma/plano/reancora/imu_reset/exposicao rodaram verdes e o
+smoke de 45 s passou). Nada rodando, nenhuma porta UDP presa.
+
+O QUE O SMOKE MOSTROU (com as luvas FORA da mao, como o usuario deixou):
+  - reanchor/erro palma/erro plano com valores altos NAO significam defeito: sem
+    a luva na mao o vetor do IMU nao tem relacao com a mao no video;
+  - "estab. plano" mostrou: right RMS 2,9-7,4 mm/spread caiu a 3,7 graus (bom);
+    left RMS 1,8-3,0 mm mas spread 18-25 graus (a mao esquerda estava se
+    movendo/pouco visivel no smoke) -- a coluna serve exatamente para isso.
+
+PROCEDIMENTO REPETIVEL (documentado): suite completa, `imu_reset.calibra_imu`
+real e `Start-Process` do tool por ~45 s com log+kill, conferindo Traceback,
+linhas [status]/[desempenho], sync e portas residuais.
+
+PROXIMO PASSO: com as luvas DE VOLTA na mao, rodar o tool com
+`--participante P01 --exposicao "0:-7,1:-5"`, J (pausando ~1 s em cada
+orientacao) e V; a coluna "estab. plano" deve ficar com spread baixo (<= 3-5
+graus) nas poses paradas.
+
