@@ -338,7 +338,8 @@ longe["wrist"] = np.array([0.30, 0.0, 0.0])
 check("ponto de FUNDO (30 cm do centro) e' descartado", eh_none(
     gt.palm_normal_from_plane(longe)))
 check("tool usa a media estavel e a sincronia color-depth",
-      "media_estavel_normais" in fonte_tool
+      ("normal_estavel" in fonte_tool
+       or "media_estavel_normais" in fonte_tool)
       and "sync_color_depth_ms" in fonte_tool
       and "palm_plano_estavel" in fonte_tool)
 check("tool NAO usa `or` com a normal numpy (causava ValueError no display)",
@@ -370,6 +371,60 @@ n_anelar, _r = gt.palm_normal_from_plane(sem_anelar, "right")
 check("sem ring (4 pontos) continua funcionando",
       n_anelar is not None
       and float(np.dot(n_anelar, [0.0, 0.0, 1.0])) > 0.99, n_anelar)
+
+# ============================================================================
+# 8) GATE DE ESTABILIDADE + FORMATADOR DO CERTIFICADO (item 110)
+# ============================================================================
+print("8) gate de estabilidade e formatador do certificado")
+paradas = [np.array([0.0, 0.0, 1.0]), np.array([0.02, 0.0, 1.0]),
+           np.array([-0.01, 0.01, 1.0])]
+normal_ok, spread_ok = gt.normal_estavel(paradas, limite_spread_deg=4.0)
+check("normal_estavel aceita janela PARADA",
+      normal_ok is not None and spread_ok < 4.0, (normal_ok, spread_ok))
+movimento = [np.array([1.0, 0.0, 0.0]), np.array([0.0, 1.0, 0.0]),
+             np.array([0.0, 0.0, 1.0])]
+normal_ruim, spread_ruim = gt.normal_estavel(movimento,
+                                             limite_spread_deg=4.0)
+check("normal_estavel REJEITA janela em MOVIMENTO",
+      normal_ruim is None and spread_ruim > 4.0,
+      (normal_ruim, spread_ruim))
+
+verif_curta = gt.VerificacaoPosesPalma(poses=("A", "B", "C"),
+                                       seg_pose=1.0, settle=0.2)
+verif_curta.iniciar(0.0)
+for instante in (0.5, 0.7, 0.9):
+    for lado in ("right", "left"):
+        verif_curta.coletar(lado, instante, np.eye(3), np.array([0, 0, 1.0]))
+rel_curto = verif_curta.relatorio(
+    {"right": FusaoFalsa(T_verdade, f_verdade),
+     "left": FusaoFalsa(T_verdade, f_verdade)})
+linhas = gt.formatar_certificado(rel_curto)
+check("formatar_certificado NAO ESTOURA com pose sem amostras (bug do V)",
+      isinstance(linhas, list)
+      and any("SEM ESTABILIDADE" in linha for linha in linhas),
+      linhas[:4])
+check("certificado NAO FECHADO e' explicado",
+      any("NAO FECHADO" in linha for linha in linhas), linhas[-2:])
+
+verif_cheia = gt.VerificacaoPosesPalma(poses=("A", "B", "C"),
+                                       seg_pose=1.0, settle=0.2)
+verif_cheia.iniciar(0.0)
+for indice in range(3):
+    for instante in (0.5 + indice, 0.7 + indice, 0.9 + indice):
+        for lado, fusao in fusoes.items():
+            rot = imu.rotation_matrix(*rng.uniform(-60, 60, 3))
+            normal = fusao.imu_to_camera @ rot @ fusao.palm_reference_body
+            verif_cheia.coletar(lado, instante, rot, normal)
+linhas_cheias = gt.formatar_certificado(
+    verif_cheia.relatorio(fusoes))
+check("formatar_certificado mostra FECHADO quando tudo passa",
+      any("CERTIFICADO: FECHADO" in linha for linha in linhas_cheias),
+      linhas_cheias[-1])
+check("tool usa formatar_certificado/normal_estavel/gate estatico",
+      "formatar_certificado" in fonte_tool
+      and "normal_estavel" in fonte_tool
+      and "PLANO_SPREAD_MAX_DEG" in fonte_tool
+      and "estabilidade_plano_contagem" in fonte_tool)
 
 if FALHAS:
     print()

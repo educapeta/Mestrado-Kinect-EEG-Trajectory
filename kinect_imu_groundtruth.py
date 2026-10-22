@@ -925,6 +925,78 @@ def media_estavel_normais(historico, limite_spread_deg=8.0):
     return media, spread
 
 
+def normal_estavel(historico, limite_spread_deg=4.0):
+    """(normal_media, spread) so' se o historico estiver PARADO.
+
+    Diferenca para `media_estavel_normais`: aqui o spread e' um GATE -- se
+    as normais recentes variam mais que `limite_spread_deg` a mao ainda esta
+    se movendo e a media NAO serve como verdade de calibracao (o atraso da
+    media em relacao ao IMU viraria erro de alinhamento). Devolve
+    (None, spread) nesse caso, para o chamador saber que houve movimento.
+    """
+    media, spread = media_estavel_normais(historico)
+    if media is None or spread is None:
+        return None, spread
+    if float(spread) > float(limite_spread_deg):
+        return None, spread
+    return media, spread
+
+
+def formatar_certificado(relatorio, amostras_min=3):
+    """Linhas de texto do CERTIFICADO V, sem quebrar com valor None.
+
+    Por que existe (item 110): o tool imprimia o certificado montando a
+    string direto; uma pose sem amostras tem `media=None` e o formato
+    `%.1f` estourava TypeError -- justamente DEPOIS de uma verificacao longa.
+    Aqui a formatacao e' pura e testavel: pose sem amostras sai como
+    "SEM ESTABILIDADE/AMOSTRAS", nunca excecao.
+    """
+    linhas = []
+    relatorio = relatorio or {}
+    for lado in ("right", "left"):
+        dados = (relatorio.get("lados") or {}).get(lado) or {}
+        if dados.get("sem_alinhamento"):
+            linhas.append(
+                f"  {lado}: SEM ALINHAMENTO carregado -- aperte O ou J "
+                "antes de verificar")
+            continue
+        linhas.append(f"  {lado}:")
+        for indice, nome in enumerate(relatorio.get("poses") or ()):
+            stats = (dados.get("poses") or {}).get(indice) or {}
+            n = int(stats.get("n") or 0)
+            media = stats.get("media")
+            p90 = stats.get("p90")
+            maximo = stats.get("max")
+            if media is None or n < int(amostras_min):
+                linhas.append(
+                    f"    {indice + 1}. {nome}: SEM ESTABILIDADE/AMOSTRAS "
+                    f"(n={n}) -- FAIL (mantenha a mao visivel e PARADA "
+                    "durante a pose)")
+                continue
+            veredito = "PASS" if stats.get("passou") else "FAIL"
+            linhas.append(
+                f"    {indice + 1}. {nome}: n={n} | media {media:.1f} | "
+                f"p90 {p90:.1f} | max {maximo:.1f} graus -- {veredito}")
+    if relatorio.get("fechado"):
+        linhas.append(
+            "  CERTIFICADO: FECHADO -- o vetor do IMU bate com a direcao "
+            "anatomica da palma em TODAS as poses (<= limite).")
+    else:
+        textos = []
+        for item in relatorio.get("poses_ruins") or ():
+            lado, indice, nome, media = item
+            detalhe = ("sem amostras" if media is None
+                       else f"{float(media):.1f} graus")
+            textos.append(f"{lado} {indice} ({nome}, {detalhe})")
+        linhas.append(
+            "  CERTIFICADO: NAO FECHADO -- poses ruins: "
+            + "; ".join(textos))
+        linhas.append(
+            "  -> rode J (refit pelo plano do dorso) e repita V; se "
+            "persistir, confira montagem/luvas trocadas (--imu-portas)")
+    return linhas
+
+
 #: Poses da VERIFICACAO GUIADA da palma (tecla V do groundtruth tool, item 103).
 #: As 5 primeiras cobrem o espaco de orientacoes (frente/cima/baixo/lados); a
 #: sexta exercita o punho girando. Cada linha e' a instrucao que aparece no video
@@ -937,10 +1009,11 @@ POSES_VERIFICACAO_PALMA = (
     "PALMA PARA A DIREITA",
     "GIRE O PUNHO DEVAGAR (360 graus, sem sair do quadro)",
 )
-#: Duracao de cada pose da verificacao guiada (s).
-VERIFICACAO_POSE_SEC = 2.5
+#: Duracao de cada pose da verificacao guiada (s). 3 s para dar tempo de
+#: chegar, PARAR e acumular >=0,5 s de verdade estavel (item 110).
+VERIFICACAO_POSE_SEC = 3.0
 #: Tempo (s) descartado no inicio de cada pose (tempo de chegar na pose).
-VERIFICACAO_SETTLE_SEC = 0.6
+VERIFICACAO_SETTLE_SEC = 0.8
 #: Limite (graus) do certificado "FECHADO" -- o MESMO espirito do limite por
 #: fase do diagnostico (15 graus), mas aqui e' a prova pose a pose.
 VERIFICACAO_LIMITE_DEG = 15.0

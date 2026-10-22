@@ -7006,3 +7006,63 @@ PROXIMO PASSO: com as luvas DE VOLTA na mao, rodar o tool com
 orientacao) e V; a coluna "estab. plano" deve ficar com spread baixo (<= 3-5
 graus) nas poses paradas.
 
+
+================================================================================
+ITEM 110 (22/10/2026) - ANALISE A FUNDO DO J/V: a media da verdade do Kinect
+    ATRASADA contaminava o J; gate de PARADA apertado + certificado que nao
+    estoura com pose sem amostras
+================================================================================
+LOG ANALISADO (rodada do usuario: J -> V -> crash no certificado)
+  - J right: 30 amostras, residuo do PLANO 9,11 graus, "erro do alinhamento
+    ANTERIOR 25,6 graus"; left: 31 amostras, residuo 11,33, anterior 22,9.
+  - ANTES do J os erros ao vivo eram 7-12 graus (right) e 1-7 (left). Ou seja,
+    o "erro anterior" medido NAS AMOSTRAS do J (25,6) era MAIOR que o erro ao
+    vivo (10) -- as amostras do J nao correspondiam aos frames ao vivo, e o J
+    salvou um T/f pior do que o que estava valendo: DEPOIS do J os erros ao
+    vivo saltaram para 53-63 graus (right) e o V reprovou tudo (right 60-96).
+  - CAUSA: a verdade usada na coleta e' a MEDIA de uma janela de normais
+    (~0,3 s de atraso). Com o gate antigo (spread <= 8 graus) a media aceitava
+    amostra com a mao AINDA SE MOVENDO devagar; como o IMU e' lido no instante
+    atual, rotacao(IMU) x normal(atrasada) ficavam desalinhadas ~10-25 graus.
+    O fit aprendia esse desalinhamento e, nas poses PARADAS do V, ele aparecia
+    como erro grande e dependente da pose. O J em si nao tinha como "saber"
+    disso (residuo 9 e' a distancia das amostras ao modelo, nao a verdade).
+  - Alem disso: o V morreu com
+    TypeError: unsupported format string passed to NoneType.__format__
+    ao montar o texto do certificado quando uma pose tinha 0 amostras (left
+    PALMA PARA CIMA n=0; left DIREITA n=2). E o left ficou com muitas poses
+    sem amostra: a mao esquerda saia do quadro nas poses de palma para cima.
+CORRECOES (item 110)
+  1) GATE DE PARADA APERTADO: nova `normal_estavel(historico, limite=4.0)`
+     (em kinect_imu_groundtruth.py) -- a verdade do plano SO' e' aceita se o
+     spread da janela for <= 4 graus (antes 8). A janela da media subiu de 7
+     para 12 quadros (~1,2 s) e o tool exige >= 5 quadros CONSECUTIVOS com
+     spread baixo (~0,5 s parada) antes de usar a verdade na coleta de J/V.
+     Isso elimina o atraso media-x-IMU: a amostra e' coletada com a mao parada.
+  2) PROTOCOLO: J passou de 20 para 24 s com instrucao "PARE ~1,5 s em cada
+     orientacao"; V passou a 6 poses x 3,0 s (settle 0,8 s) e a instrucao
+     manda SEGURAR a pose PARADA ate a troca. O que nao ficar parado nao entra
+     (vira "SEM ESTABILIDADE/AMOSTRAS" e o operador ve o motivo).
+  3) DIAGNOSTICO NO J: depois de refitar, ele imprime o erro do MODELO NOVO
+     nas proprias amostras (mediana/p90) e AVISA se passar do limite -- assim
+     "a captura nao vale" aparece na hora, em vez de so' no V.
+  4) CERTIFICADO A PROVA DE FALHA: `formatar_certificado(relatorio)` (funcao
+     PURA e testada) monta as linhas; pose sem amostras vira "SEM
+     ESTABILIDADE/AMOSTRAS (n=...)" com instrucao de manter a mao visivel e
+     parada; nenhum valor None entra em format string (fim do TypeError).
+     O tool imprime as linhas dessa funcao.
+  5) O V agora usa a MESMA verdade estatica do J (gate de 4 graus) -- antes
+     ele aceitava planos mais frouxos e media ruido.
+TESTES: test_palma_plano grupo 8 novo: `normal_estavel` aceita janela parada e
+REJEITA janela em movimento; `formatar_certificado` nao estoura com pose sem
+amostras (o bug do V); mostra FECHADO/NAO FECHADO; e o tool usa
+formatar_certificado/normal_estavel/gate. PASS; demais regressoes verdes
+(palm_seta, imu_reset, reancora, exposicao, palm_alignment).
+SMOKE: tool rodado 45 s com as flags (sem intervencao) SEM erro/crash; status
+com "estab. plano" mostrando spread (right 15-45 graus porque a mao estava se
+movendo; left 1,2-2,8 parado) -- comportamento do gate correto; zero processo/
+porta residual; sync 3 ms.
+PROXIMO PASSO: rodar J (pausas de 1,5 s) e V. O teste honesto agora e': o
+residuo do J TEM de bater com o erro ao vivo nas poses paradas (antes: 9 vs 60).
+Se o right continuar ruim SO' nele, ai' e' montagem/fixacao fisica do IMU.
+

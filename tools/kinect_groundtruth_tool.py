@@ -153,7 +153,16 @@ PALM_ALIGNMENT_CAPTURE_SECONDS = 14.0
 #: proposito: o protocolo e' girar devagar e PARAR ~1 s em cada uma das ~6
 #: orientacoes -- com a mao parada o ruido do Kinect nao se mistura com o
 #: movimento e a verdade do plano fica limpa (item 105).
-PALM_PLANO_CAPTURE_SECONDS = 20.0
+PALM_PLANO_CAPTURE_SECONDS = 24.0
+#: Spread maximo (graus) da janela de normais para a verdade do plano valer
+#: como PARADA (item 110: 8 graus era frouxo e aceitava amostra EM MOVIMENTO;
+#: como a verdade e' a media de uma janela, isso virava erro de alinhamento).
+PLANO_SPREAD_MAX_DEG = 4.0
+#: Quadros consecutivos com spread baixo exigidos antes de usar/coletar a
+#: verdade do plano (~0,5 s a 10 fps).
+PLANO_QUADROS_ESTAVEIS_MIN = 5
+#: Janela da media das normais (~1,2 s a 10 fps).
+PLANO_JANELA_QUADROS = 12
 #: Erro (px) do diagnostico do tabuleiro (tecla T) a partir do qual a calibracao
 #: gravada e' considerada de OUTRA montagem. Por que existe: o RMS do arquivo
 #: so' mede a coerencia INTERNA dele -- um stereo feito em outra maquina/sala e'
@@ -1997,6 +2006,10 @@ def main():
     #: com o ruido do depth; a media com spread baixo e' a verdade estavel
     #: usada na calibracao/video (item 105).
     hist_plano_camera = {"right": [], "left": []}
+    #: Quadros consecutivos com a normal do plano "parada" (spread <= gate).
+    #: So' depois de PLANO_QUADROS_ESTAVEIS_MIN a verdade entra na
+    #: calibracao (item 110).
+    estabilidade_plano_contagem = {"right": 0, "left": 0}
     # Diagnostico da palma por MOVIMENTO PROGRAMADO (tecla D): grava
     # palm_diag_<data>_<hora>.csv e, no fim, o resumo por (fase, lado). E' o
     # log que faltava para separar "calibracao sistematicamente errada" de
@@ -3001,13 +3014,18 @@ def main():
                 if normal_plano_lado is not None:
                     ultimo_plano_camera[lado] = normal_plano_lado
                     hist_plano_camera[lado].append(normal_plano_lado)
-                    if len(hist_plano_camera[lado]) > 7:
-                        hist_plano_camera[lado] = hist_plano_camera[lado][-7:]
-                    media_plano, spread_plano = media_estavel_normais(
-                        hist_plano_camera[lado])
-                    if (media_plano is not None
-                            and spread_plano <= 8.0):
+                    if len(hist_plano_camera[lado]) > PLANO_JANELA_QUADROS:
+                        hist_plano_camera[lado] = (
+                            hist_plano_camera[lado][-PLANO_JANELA_QUADROS:])
+                    media_plano, spread_plano = normal_estavel(
+                        hist_plano_camera[lado],
+                        limite_spread_deg=PLANO_SPREAD_MAX_DEG)
+                    if media_plano is not None:
                         plano_estavel = media_plano
+                if plano_estavel is not None:
+                    estabilidade_plano_contagem[lado] += 1
+                else:
+                    estabilidade_plano_contagem[lado] = 0
                 mao["palm_normal_plano"] = normal_plano_lado
                 mao["palm_plano_estavel"] = plano_estavel
                 mao["palm_plano_rms_m"] = rms_plano_lado
@@ -3019,12 +3037,15 @@ def main():
                     else angle_between(plano_estavel,
                                        mao["palm_direction"])
                 )
-                if captura_palma_plano.ativa and plano_estavel is not None:
+                estavel_agora = (plano_estavel is not None
+                                 and estabilidade_plano_contagem[lado]
+                                 >= PLANO_QUADROS_ESTAVEIS_MIN)
+                if captura_palma_plano.ativa and estavel_agora:
                     captura_palma_plano.coletar(lado, now, sample_lado,
                                                 plano_estavel)
                     if rms_plano_lado is not None:
                         plano_rms_captura[lado].append(float(rms_plano_lado))
-                if verificacao_palma.ativa and plano_estavel is not None:
+                if verificacao_palma.ativa and estavel_agora:
                     rotacao_verif = (None if sample_lado is None
                                      else rotation_matrix(
                                          sample_lado.roll_deg,
@@ -3149,6 +3170,25 @@ def main():
                           f"alinhamento ANTERIOR {erro_antes:.1f} graus | "
                           + (f"gravado em {palm_alignment_path(lado).name}"
                              if gravou else "NAO gravado"))
+                    erros_novos = []
+                    for rotacao_amostra, normal_amostra in captura_palma_plano.amostras[lado]:
+                        vetor = (fusions[lado].imu_to_camera
+                                 @ rotacao_amostra
+                                 @ fusions[lado].palm_reference_body)
+                        norma_vetor = float(np.linalg.norm(vetor))
+                        if norma_vetor > 1e-9:
+                            erros_novos.append(angle_between(
+                                normal_amostra, vetor / norma_vetor))
+                    if erros_novos:
+                        mediana_nova = float(np.median(erros_novos))
+                        p90_nova = float(np.percentile(erros_novos, 90))
+                        print(f"    {lado}: erro do modelo NOVO nessas "
+                              f"amostras: mediana {mediana_nova:.1f} | "
+                              f"p90 {p90_nova:.1f} graus")
+                        if mediana_nova > PALM_ALIGNMENT_MAX_RESIDUAL_DEG:
+                            print(f"    {lado}: ATENCAO -- erro alto nas "
+                                  "amostras: capture de novo com a mao "
+                                  "PARADA ~1,5 s em cada orientacao")
                     amostras_rms = plano_rms_captura.get(lado) or []
                     if amostras_rms:
                         print(f"    {lado}: qualidade do plano na captura: RMS "
@@ -3163,40 +3203,10 @@ def main():
                     verificacao_palma.parar()
                     relatorio_verif = verificacao_palma.relatorio(fusions)
                     print("VERIFICACAO DA PALMA terminada (limite "
-                          f"{relatorio_verif['limite_graus']:g} graus/pose):")
-                    for lado in ("right", "left"):
-                        dados_verif = relatorio_verif["lados"][lado]
-                        if dados_verif.get("sem_alinhamento"):
-                            print(f"  {lado}: SEM ALINHAMENTO carregado -- "
-                                  "aperte O ou J antes de verificar")
-                            continue
-                        print(f"  {lado}:")
-                        for indice, nome in enumerate(relatorio_verif["poses"]):
-                            stats = dados_verif["poses"][indice]
-                            if stats["media"] is None:
-                                print(f"    {indice + 1}. {nome}: amostras "
-                                      f"insuficientes ({stats['n']}) -- FAIL")
-                            else:
-                                print(f"    {indice + 1}. {nome}: "
-                                      f"n={stats['n']} | media "
-                                      f"{stats['media']:.1f} | p90 "
-                                      f"{stats['p90']:.1f} | max "
-                                      f"{stats['max']:.1f} graus -- "
-                                      + ("PASS" if stats["passou"] else "FAIL"))
-                    if relatorio_verif["fechado"]:
-                        print("  CERTIFICADO: FECHADO -- o vetor do IMU bate com "
-                              "a direcao anatomica da palma em TODAS as poses "
-                              "(<= limite).")
-                    else:
-                        print("  CERTIFICADO: NAO FECHADO -- poses ruins: "
-                              + "; ".join(
-                                  f"{lado_v} {indice_v} ({nome_v}, "
-                                  f"{media_v:.1f} graus)"
-                                  for lado_v, indice_v, nome_v, media_v
-                                  in relatorio_verif["poses_ruins"]))
-                        print("  -> rode J (refit pelo plano do dorso) e repita "
-                              "V; se persistir, confira montagem/luvas "
-                              "trocadas (--imu-portas)")
+                          f"{relatorio_verif['limite_graus']:g} "
+                          "graus/pose):")
+                    for linha_cert in formatar_certificado(relatorio_verif):
+                        print(linha_cert)
                     verif_fase_vista = None
                 elif fase_verif[0] != verif_fase_vista:
                     verif_fase_vista = fase_verif[0]
@@ -3635,14 +3645,17 @@ def main():
                     verificacao_palma.parar()
                     print("Verificacao guiada da palma cancelada.")
                 else:
+                    estabilidade_plano_contagem = {"right": 0, "left": 0}
                     verificacao_palma.iniciar(now)
                     verif_fase_vista = None
                     print(
                         "VERIFICACAO GUIADA DA PALMA (6 poses x "
                         f"{VERIFICACAO_POSE_SEC:g} s): siga a instrucao na "
-                        "tela. A verdade e' o PLANO MEDIO do dorso; no fim sai "
-                        "PASS/FAIL por pose e o CERTIFICADO FECHADO/NAO "
-                        "FECHADO. Use as DUAS maos; V de novo cancela.")
+                        "tela e SEGURE a pose PARADA ate a troca (a verdade "
+                        "so' entra com >=0,5 s de plano estavel). A verdade "
+                        "e' o PLANO MEDIO do dorso; no fim sai PASS/FAIL por "
+                        "pose e o CERTIFICADO FECHADO/NAO FECHADO. Mantenha "
+                        "as DUAS maos visiveis; V de novo cancela.")
             elif key == ord("j"):
                 # CALIBRACAO POR PLANO DO DORSO (item 102): a verdade e' o plano
                 # medio punho+4 MCPs (mais estavel que os 3 pontos da O). No fim
@@ -3652,11 +3665,12 @@ def main():
                     print("Captura do alinhamento por PLANO DO DORSO cancelada.")
                 else:
                     plano_rms_captura = {"right": [], "left": []}
+                    estabilidade_plano_contagem = {"right": 0, "left": 0}
                     captura_palma_plano.iniciar(now)
                     print(
                         "CALIBRACAO DA PALMA POR PLANO DO DORSO "
                         f"({PALM_PLANO_CAPTURE_SECONDS:g} s): gire a mao "
-                        "DEVAGAR e PARE ~1 s em cada orientacao (palma para o "
+                        "DEVAGAR e PARE ~1,5 s em cada orientacao (palma para o "
                         "Kinect, para cima, para baixo, para a esquerda, para a "
                         "direita, gira o punho), com a mao INTEIRA no quadro. "
                         "Parar em cada pose e' o que limpa a verdade do "
