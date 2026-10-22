@@ -7229,3 +7229,62 @@ Depois J (contador na tela) e V. Se o corpo NAO estiver rastreado pelo Kinect
 (fora do FOV do body), o lado cai no rotulo e a inversao pode voltar -- manter o
 corpo inteiro no quadro durante a calibracao ajuda.
 
+
+================================================================================
+ITEM 114 (22/10/2026) - CALIBRACAO POR 3 POSES FISICAS (pedido do usuario):
+    abandonar a verdade do Kinect em tempo real e usar orientacoes definidas
+    fisicamente -- palma p/ Kinect, p/ baixo na mesa, p/ cima (dorso na mesa)
+================================================================================
+PEDIDO DO USUARIO: "vamos definir as orientacoes no espaco que eu consiga fazer
+de maneira precisa: orientar minha palma ao Kinect perfeitamente; orientar minha
+palma colada na mesa em direcao ao chao; orientar minha palma colada na mesa em
+direcao ao teto. Assim podemos definir inicialmente estes vetores com o tool e
+dai rodar o V, para avaliar o desempenho dos IMUs."
+MOTIVO: mesmo com mediana robusta (112), lado geometrico e resgate de depth
+(113), a verdade do Kinect continuava ruidosa/ambigua o suficiente para o J nao
+fechar (poses com 40-170 graus de erro e series de erros alternando ~5-20 e
+~150-175 graus). A normal estimada por landmark/depth varia MUITO; as rotacoes
+do IMU sao fluidas. Solucao: a VERDADE passa a ser GEOMETRICA (conhecida a
+priori), nao estimada.
+IMPLEMENTADO
+  1) `POSES_FISICAS_CALIBRACAO` (kinect_imu_groundtruth.py): 3 poses com a
+     normal da palma CONHECIDA no referencial da camera (Kinect nivelado,
+     X=direita, Y=para cima, Z=para dentro da cena):
+       1. PALMA DE FRENTE PARA O KINECT, dedos p/ cima, mao na linha do sensor
+          -> normal (0,0,-1) (aponta para a camera);
+       2. PALMA PARA BAIXO, apoiada na MESA -> normal (0,-1,0);
+       3. PALMA PARA CIMA, com o DORSO apoiado na MESA -> normal (0,+1,0).
+     Duracoes: POSES_FISICAS_POSE_SEC=3.0, SETTLE=0.8, limite=12 graus.
+  2) Classe `ColetorPosesFisicas` com 2 modos:
+     - "calibrar": coleta as ROTACOES do IMU (roll/pitch/yaw) em cada pose,
+       depois resolve T e f com `solve_palm_alignment` usando os VETORES
+       CONHECIDOS (verdade fisica), devolve residuo e erro por pose;
+     - "verificar": avalia o alinhamento CARREGADO contra os mesmos vetores
+       conhecidos, pose a pose (n/media/p90/max + PASS/FAIL) e certificado.
+     NAO usa landmark/depth/lado/sinal do Kinect: so' a rotacao do IMU. O
+     Kinect nao precisa nem ver a mao durante a captura (o IMU e' lido sempre).
+  3) Tool: tecla J agora = CALIBRAR por poses fisicas (3 poses, ~11 s total);
+     tecla V = VERIFICAR com as mesmas poses. A tela mostra o numero/instrucao
+     da pose, cronometro e contador de amostras R/L; ao final J refaz T/f,
+     grava com backup (.json.bak) e imprime residuo + erro por pose +
+     CERTIFICADO; V imprime PASS/FAIL por pose/lado + CERTIFICADO. O codigo
+     antigo do plano do dorso continua no arquivo mas as teclas J/V nao o usam.
+  4) Dica no console: "J = CALIBRAR por 3 POSES FISICAS ... | V = VERIFICAR".
+COMO USAR (importante): fazer as 3 poses com AS DUAS LUVAS AO MESMO TEMPO
+(maos espelhadas, mesma orientacao em cada pose) -- a coleta e' por luva e nao
+sabe qual mao esta' na pose; se so' uma mao fizer, a outra grava pose errada.
+Pose 1: as duas palmas viradas para o sensor, dedos p/ cima, maos na mesma
+altura/profundidade e perto da linha central do Kinect. Poses 2/3: as duas maos
+na mesa, com a palma p/ baixo (2) e com o dorso na mesa/palma p/ cima (3).
+LIMITACAO CONHECIDA: as poses 2/3 assumem o Kinect NIVELLADO (sem inclinacao).
+Se o sensor estiver inclinado, sobra um erro sistematico comum aos dois lados;
+da' para medir/corrigir depois (acelerometro do Kinect ou pose extra).
+TESTES: grupo 12 do test_palma_plano -- solver recupera T/f das 3 orientacoes
+conhecidas (erro <1 grau), coletor calibra os dois lados e FECHA o certificado,
+verificacao PASSA com alinhamento certo e FALHA com f errado em 40 graus; SUITE
+COMPLETA 59/59. Smoke 25 s: sem crash, dica de J/V no console; log do vetor
+continua funcionando.
+PENDENCIA: o usuario rodar J (3 poses, duas maos juntas) e depois V; o
+alinhamento em disco ainda e' o refit canonico do item 113 (nao calibrado por
+este protocolo ainda) -- rodar J primeiro.
+

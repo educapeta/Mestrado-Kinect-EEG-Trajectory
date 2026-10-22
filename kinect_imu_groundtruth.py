@@ -1064,6 +1064,217 @@ def normal_robusta(historico, normal_anterior=None, tolerancia_deg=10.0,
     return mediana, fracao
 
 
+#: POSES FISICAS DE CALIBRACAO (item 114). A verdade NAO vem do Kinect: vem
+#: de tres orientacoes que o usuario consegue fazer com precisao FISICA, com a
+#: normal da palma CONHECIDA no referencial da camera (Kinect nivelado, eixo Y
+#: para cima, Z para dentro da cena):
+#:   - palma de frente para o Kinect (na linha do sensor, dedos para cima)
+#:       -> normal aponta para a camera = (0,0,-1)
+#:   - palma para baixo apoiada na mesa (dedos para frente)
+#:       -> normal aponta para o chao = (0,-1,0)
+#:   - palma para cima com o DORSO apoiado na mesa
+#:       -> normal aponta para o teto = (0,+1,0)
+#: Com as rotacoes do IMU nessas 3 poses, `solve_palm_alignment` resolve T e f
+#: SEM depender de landmark/depth/sinal do Kinect (que oscilavam).
+POSES_FISICAS_CALIBRACAO = (
+    ("PALMA DE FRENTE PARA O KINECT (dedos p/ cima, mao na linha do sensor)",
+     (0.0, 0.0, -1.0)),
+    ("PALMA PARA BAIXO, apoiada na MESA (dedos p/ frente)",
+     (0.0, -1.0, 0.0)),
+    ("PALMA PARA CIMA, com o DORSO apoiado na MESA",
+     (0.0, 1.0, 0.0)),
+)
+#: Duracao de cada pose fisica (s) e tempo para chegar na pose.
+POSES_FISICAS_POSE_SEC = 3.0
+POSES_FISICAS_SETTLE_SEC = 0.8
+#: Limite (graus) do certificado das poses fisicas.
+POSES_FISICAS_LIMITE_DEG = 12.0
+
+
+class ColetorPosesFisicas:
+    """Coleta rotacoes do IMU em poses de orientacao FISICA conhecida.
+
+    MODOS:
+      - "calibrar": ao final resolve T/f com `solve_palm_alignment` usando os
+        vetores CONHECIDOS de cada pose (a verdade fisica) e devolve o resultado;
+      - "verificar": avalia o alinhamento CARREGADO (T R f) contra esses mesmos
+        vetores conhecidos, pose a pose -> PASS/FAIL + certificado.
+
+    Nao usa landmark/depth do Kinect: so' a rotacao do IMU (que e' fluida). O
+    experimentador precisa apenas acertar as 3 poses fisicas.
+    """
+
+    def __init__(self, poses=POSES_FISICAS_CALIBRACAO,
+                 seg_pose=POSES_FISICAS_POSE_SEC,
+                 settle=POSES_FISICAS_SETTLE_SEC,
+                 limite=POSES_FISICAS_LIMITE_DEG):
+        self.poses = tuple(poses)
+        self.seg_pose = float(seg_pose)
+        self.settle = float(settle)
+        self.limite_graus = float(limite)
+        self.modo = "calibrar"
+        self._ativa = False
+        self._t0 = 0.0
+        self._amostras = {"right": [], "left": []}   # [(pose_idx, rotacao)]
+
+    def iniciar(self, agora, modo="calibrar"):
+        self.modo = str(modo)
+        self._ativa = True
+        self._t0 = float(agora)
+        self._amostras = {"right": [], "left": []}
+
+    def parar(self):
+        self._ativa = False
+
+    @property
+    def ativa(self):
+        return self._ativa
+
+    @property
+    def duracao_s(self):
+        return len(self.poses) * self.seg_pose
+
+    def fase_atual(self, agora):
+        if not self._ativa:
+            return None
+        decorrido = float(agora) - self._t0
+        if decorrido < 0.0 or decorrido >= self.duracao_s:
+            return None
+        indice = int(decorrido // self.seg_pose)
+        indice = min(max(indice, 0), len(self.poses) - 1)
+        restante = (indice + 1) * self.seg_pose - decorrido
+        return indice, self.poses[indice][0], max(0.0, restante)
+
+    def coletar(self, lado, agora, rotacao):
+        if not self._ativa or rotacao is None:
+            return False
+        fase = self.fase_atual(agora)
+        if fase is None:
+            return False
+        indice = fase[0]
+        dentro = (float(agora) - self._t0) - indice * self.seg_pose
+        if dentro < self.settle:
+            return False
+        rot = np.asarray(rotacao, np.float64).reshape(3, 3)
+        if not np.isfinite(rot).all():
+            return False
+        self._amostras[lado].append((indice, rot))
+        return True
+
+    def contar(self, lado, indice_pose=None):
+        if indice_pose is None:
+            return len(self._amostras.get(lado, ()))
+        return sum(1 for pose, _rot in self._amostras.get(lado, ())
+                   if pose == indice_pose)
+
+    def _por_pose(self, lado):
+        grupos = {}
+        for indice, rot in self._amostras.get(lado, ()):
+            grupos.setdefault(indice, []).append(rot)
+        return grupos
+
+    def calibrar(self):
+        """{lado: {T, f, residuo, poses:{idx: erro}}} ou marca sem amostras."""
+        resultado = {"modo": "calibrar", "lados": {}, "fechado": False}
+        for lado in ("right", "left"):
+            grupos = self._por_pose(lado)
+            faltam = [indice for indice in range(len(self.poses))
+                      if len(grupos.get(indice, [])) < 3]
+            if faltam:
+                resultado["lados"][lado] = {
+                    "sem_amostras": True,
+                    "poses_insuficientes": [indice + 1 for indice in faltam],
+                }
+                continue
+            rotacoes = []
+            vetores = []
+            for indice in range(len(self.poses)):
+                vetor = np.asarray(self.poses[indice][1], np.float64)
+                for rot in grupos[indice]:
+                    rotacoes.append(rot)
+                    vetores.append(vetor)
+            resolvido = solve_palm_alignment(rotacoes, vetores)
+            if resolvido is None:
+                resultado["lados"][lado] = {"sem_amostras": True,
+                                            "poses_insuficientes": []}
+                continue
+            t_matriz, f_corpo, residuo = resolvido
+            erros = {}
+            for indice in range(len(self.poses)):
+                vetor = np.asarray(self.poses[indice][1], np.float64)
+                preditos = [t_matriz @ rot @ f_corpo
+                            for rot in grupos[indice]]
+                erros[indice] = float(np.median([
+                    np.degrees(np.arccos(np.clip(
+                        float(np.dot(v / np.linalg.norm(v), vetor)), -1.0, 1.0)))
+                    for v in preditos if np.linalg.norm(v) > 1e-9])) if preditos else None
+            resultado["lados"][lado] = {
+                "T": t_matriz, "f": f_corpo, "residuo": float(residuo),
+                "poses": erros, "amostras": len(rotacoes),
+            }
+        resultado["fechado"] = all(
+            (not dados.get("sem_amostras"))
+            and max(v for v in dados["poses"].values()
+                    if v is not None) <= self.limite_graus
+            for dados in resultado["lados"].values()) if resultado["lados"] else False
+        return resultado
+
+    def verificar(self, fusions):
+        """Certificado contra as poses fisicas para o alinhamento CARREGADO."""
+        def erro_graus(previsto, verdade):
+            norma = float(np.linalg.norm(previsto))
+            if norma < 1e-9:
+                return None
+            return float(np.degrees(np.arccos(np.clip(
+                float(np.dot(previsto / norma, verdade)), -1.0, 1.0))))
+
+        resultado = {"modo": "verificar", "poses": [p[0] for p in self.poses],
+                     "limite_graus": self.limite_graus, "lados": {},
+                     "fechado": False, "poses_ruins": []}
+        for lado in ("right", "left"):
+            fusao = (fusions.get(lado) if hasattr(fusions, "get")
+                     else fusions[lado])
+            t_matriz = getattr(fusao, "imu_to_camera", None)
+            f_corpo = getattr(fusao, "palm_reference_body", None)
+            dados = {"poses": {}, "sem_alinhamento": False}
+            if t_matriz is None or f_corpo is None:
+                dados["sem_alinhamento"] = True
+                resultado["lados"][lado] = dados
+                continue
+            t_matriz = np.asarray(t_matriz, np.float64).reshape(3, 3)
+            f_corpo = np.asarray(f_corpo, np.float64).reshape(3)
+            f_corpo = f_corpo / max(1e-12, float(np.linalg.norm(f_corpo)))
+            grupos = self._por_pose(lado)
+            ok_lado = True
+            for indice in range(len(self.poses)):
+                vetor = np.asarray(self.poses[indice][1], np.float64)
+                valores = []
+                for rot in grupos.get(indice, ()):
+                    erro = erro_graus(t_matriz @ rot @ f_corpo, vetor)
+                    if erro is not None:
+                        valores.append(erro)
+                if len(valores) >= 3:
+                    stats = {"n": len(valores),
+                             "media": float(np.mean(valores)),
+                             "p90": float(np.percentile(valores, 90)),
+                             "max": float(np.max(valores))}
+                    stats["passou"] = stats["media"] <= self.limite_graus
+                else:
+                    stats = {"n": len(valores), "media": None, "p90": None,
+                             "max": None, "passou": False}
+                dados["poses"][indice] = stats
+                if not stats["passou"]:
+                    ok_lado = False
+                    resultado["poses_ruins"].append(
+                        (lado, indice + 1, self.poses[indice][0],
+                         stats.get("media")))
+            dados["fechado"] = ok_lado
+            resultado["lados"][lado] = dados
+        resultado["fechado"] = all(
+            dados.get("fechado") for dados in resultado["lados"].values())
+        return resultado
+
+
 def formatar_certificado(relatorio, amostras_min=3):
     """Linhas de texto do CERTIFICADO V, sem quebrar com valor None.
 

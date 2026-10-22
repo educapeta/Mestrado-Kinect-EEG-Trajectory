@@ -535,6 +535,96 @@ check("tool publica resgatados no log",
       "resgatados" in fonte_tool
       and "resgatados" in gt.CABECALHO_LOG_PALMA)
 
+# ============================================================================
+# 12) POSES FISICAS DE CALIBRACAO (item 114): verdade geometrica conhecida
+# ============================================================================
+print("12) poses fisicas de calibracao/verificacao")
+
+
+def _rot_entre(a, b):
+    """Rotacao (3,3) que leva o vetor a no vetor b."""
+    a = np.asarray(a, np.float64) / np.linalg.norm(a)
+    b = np.asarray(b, np.float64) / np.linalg.norm(b)
+    eixo = np.cross(a, b)
+    cosseno = float(np.dot(a, b))
+    if np.linalg.norm(eixo) < 1e-12:
+        return np.eye(3) if cosseno > 0 else np.eye(3)
+    k = np.array([[0.0, -eixo[2], eixo[1]],
+                  [eixo[2], 0.0, -eixo[0]],
+                  [-eixo[1], eixo[0], 0.0]])
+    return np.eye(3) + k + (k @ k) / (1.0 + cosseno)
+
+
+_f_verdade = np.array([0.30, -0.25, 0.92])
+_f_verdade = _f_verdade / np.linalg.norm(_f_verdade)
+_T_verdade = gt.rotation_matrix(20.0, -35.0, 50.0)
+_rotacoes = []
+_vetores = []
+for _nome, _vetor in gt.POSES_FISICAS_CALIBRACAO:
+    _alvo = _T_verdade.T @ np.asarray(_vetor, np.float64)
+    _rotacoes.append(_rot_entre(_f_verdade, _alvo))
+    _vetores.append(np.asarray(_vetor, np.float64))
+# o solver pede PALM_ALIGNMENT_MIN_SAMPLES pares; repete as 3 poses
+_rotacoes_solver = [r for r in _rotacoes for _ in range(4)]
+_vetores_solver = [v for v in _vetores for _ in range(4)]
+_resolvido = gt.solve_palm_alignment(_rotacoes_solver, _vetores_solver)
+check("poses fisicas: solver recupera T/f das 3 orientacoes conhecidas",
+      _resolvido is not None and _resolvido[2] < 0.5,
+      None if _resolvido is None else _resolvido[2])
+if _resolvido is not None:
+    _T2, _f2, _ = _resolvido
+    _erros_pose = []
+    for _rot, _vetor in zip(_rotacoes, _vetores):
+        _previsto = _T2 @ _rot @ _f2
+        _previsto = _previsto / np.linalg.norm(_previsto)
+        _erros_pose.append(float(np.degrees(np.arccos(np.clip(
+            float(np.dot(_previsto, _vetor)), -1.0, 1.0)))))
+    check("poses fisicas: erro por pose < 1 grau (verdade geometrica)",
+          max(_erros_pose) < 1.0, np.round(_erros_pose, 3))
+
+_coletor = gt.ColetorPosesFisicas(seg_pose=1.0, settle=0.2)
+_coletor.iniciar(0.0, "calibrar")
+for _indice, _rot in enumerate(_rotacoes):
+    for _dt in (0.3, 0.5, 0.7, 0.9):
+        for _lado in ("right", "left"):
+            _coletor.coletar(_lado, _indice * 1.0 + _dt, _rot)
+_calibrado = _coletor.calibrar()
+check("poses fisicas: calibra os dois lados com 3 poses",
+      all(not _calibrado["lados"][_lado].get("sem_amostras")
+          and _calibrado["lados"][_lado]["residuo"] < 1.0
+          for _lado in ("right", "left")),
+      {_l: _calibrado["lados"][_l].get("residuo")
+       for _l in ("right", "left")})
+check("poses fisicas: certificado de calibracao FECHADO",
+      _calibrado["fechado"] is True)
+
+_fusoes = {"right": gt.PositionFusion(), "left": gt.PositionFusion()}
+for _lado in ("right", "left"):
+    _dados = _calibrado["lados"][_lado]
+    _fusoes[_lado].set_palm_alignment(_dados["T"], _dados["f"],
+                                      _dados["residuo"])
+_verificador = gt.ColetorPosesFisicas(seg_pose=1.0, settle=0.2)
+_verificador.iniciar(0.0, "verificar")
+for _indice, _rot in enumerate(_rotacoes):
+    for _dt in (0.3, 0.5, 0.7, 0.9):
+        for _lado in ("right", "left"):
+            _verificador.coletar(_lado, _indice * 1.0 + _dt, _rot)
+_relatorio = _verificador.verificar(_fusoes)
+check("poses fisicas: verificacao PASSA com o alinhamento certo",
+      _relatorio["fechado"] is True, _relatorio["poses_ruins"])
+_fusoes["right"].palm_reference_body = gt.rotation_matrix(
+    0.0, 40.0, 0.0) @ np.asarray(_fusoes["right"].palm_reference_body)
+_relatorio_ruim = _verificador.verificar(_fusoes)
+check("poses fisicas: verificacao FALHA com f errado em 40 graus",
+      _relatorio_ruim["fechado"] is False
+      and any(item[0] == "right"
+              for item in _relatorio_ruim["poses_ruins"]),
+      _relatorio_ruim["poses_ruins"])
+check("tool usa ColetorPosesFisicas/POSES_FISICAS_CALIBRACAO",
+      "ColetorPosesFisicas" in fonte_tool
+      and "POSES_FISICAS_CALIBRACAO" in fonte_tool
+      and "poses fisicas" in fonte_tool)
+
 if FALHAS:
     print()
     print(f"PALMA_PLANO_FALHOU: {len(FALHAS)} verificacao(oes): "

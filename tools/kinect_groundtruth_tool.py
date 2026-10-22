@@ -1830,6 +1830,9 @@ def main():
     print("TECLAS (C/B/O/D/G/J/K/H/L/R/V): clique ANTES em uma janela de VIDEO -- sem "
           "foco no video o OpenCV nao recebe a tecla (a tecla O parece nao "
           "funcionar e o console fica mudo).")
+    print("  J = CALIBRAR por 3 POSES FISICAS (palma p/ Kinect, p/ baixo "
+          "na mesa, p/ cima) | V = VERIFICAR com as mesmas poses | "
+          "G = log do vetor")
     for receiver in receivers.values():
         receiver.start()
     # --- webcams auxiliares: a ATIVA (--aux-index) + as OUTRAS (--aux-cameras) ---
@@ -2018,6 +2021,11 @@ def main():
     # plano do dorso -> certificado FECHADO/NAO FECHADO pose a pose. E' a prova
     # objetiva de que o vetor derivado do IMU coincide com a direcao anatomica.
     verificacao_palma = VerificacaoPosesPalma()
+    #: CALIBRACAO/VERIFICACAO POR 3 POSES FISICAS (item 114): a verdade
+    #: e' geometrica (palma p/ Kinect, p/ baixo na mesa, p/ cima), sem
+    #: depender de landmark/depth/sinal do Kinect.
+    poses_fisicas = ColetorPosesFisicas()
+    poses_fisicas_fase_vista = None
     verif_fase_vista = None
     #: RMS do plano do dorso durante a captura J (controle de qualidade: luz
     #: estourada/landmarks ruins inflam o RMS e descartam amostras).
@@ -2980,6 +2988,13 @@ def main():
                 mao = resultados_por_lado[lado]
                 sample_lado = receivers[lado].get_latest()
                 amostras_por_lado[lado] = sample_lado
+                if poses_fisicas.ativa:
+                    rotacao_pose = (None if sample_lado is None
+                                    else rotation_matrix(
+                                        sample_lado.roll_deg,
+                                        sample_lado.pitch_deg,
+                                        sample_lado.yaw_deg))
+                    poses_fisicas.coletar(lado, now, rotacao_pose)
                 if mao is None:
                     if log_palma is not None and log_palma_ativo:
                         log_palma.registrar(
@@ -3230,6 +3245,94 @@ def main():
                               "dorso e mantenha a mao dentro do quadro; se "
                               "persistir, confira se as luvas nao estao "
                               "trocadas (--imu-portas)")
+            # --- POSES FISICAS (tecla J calibrar / V verificar, item 114) ---
+            if poses_fisicas.ativa:
+                fase_pose = poses_fisicas.fase_atual(now)
+                if fase_pose is None:
+                    modo_pose = poses_fisicas.modo
+                    poses_fisicas.parar()
+                    poses_fisicas_fase_vista = None
+                    if modo_pose == "calibrar":
+                        resultado_poses = poses_fisicas.calibrar()
+                        print("CALIBRACAO POR POSES FISICAS terminada:")
+                        for lado in ("right", "left"):
+                            dados_pose = resultado_poses["lados"].get(lado, {})
+                            if dados_pose.get("sem_amostras"):
+                                faltam = dados_pose.get("poses_insuficientes")
+                                print(f"  {lado}: amostras insuficientes "
+                                      f"(poses {faltam}) -- alinhamento "
+                                      "NAO atualizado; segure cada pose "
+                                      "PARADA ~2 s")
+                                continue
+                            t_pose = dados_pose["T"]
+                            f_pose = dados_pose["f"]
+                            residuo_pose = dados_pose["residuo"]
+                            fusions[lado].set_palm_alignment(
+                                t_pose, f_pose, residuo_pose)
+                            gravou_pose = save_palm_alignment(
+                                fusions[lado], lado)
+                            print(f"  {lado}: {dados_pose['amostras']} "
+                                  f"amostras | residuo {residuo_pose:.2f} "
+                                  "graus | "
+                                  + (f"gravado em "
+                                     f"{palm_alignment_path(lado).name}"
+                                     if gravou_pose else "NAO gravado"))
+                            for indice_pose, (nome_pose, _vetor_pose) in enumerate(
+                                    POSES_FISICAS_CALIBRACAO):
+                                erro_pose = dados_pose["poses"].get(
+                                    indice_pose)
+                                if erro_pose is not None:
+                                    print(f"    {indice_pose + 1}. "
+                                          f"{nome_pose}: erro "
+                                          f"{erro_pose:.1f} graus")
+                        print("  CERTIFICADO: "
+                              + ("FECHADO (3 poses dentro do limite)"
+                                 if resultado_poses["fechado"] else
+                                 "NAO FECHADO -- repita as poses com "
+                                 "mais calma (parado ~2 s em cada)"))
+                    else:
+                        relatorio_pose = poses_fisicas.verificar(fusions)
+                        print("VERIFICACAO POR POSES FISICAS terminada "
+                              f"(limite {POSES_FISICAS_LIMITE_DEG:g} "
+                              "graus/pose):")
+                        for lado in ("right", "left"):
+                            dados_pose = relatorio_pose["lados"].get(
+                                lado, {})
+                            print(f"  {lado}:")
+                            if dados_pose.get("sem_alinhamento"):
+                                print("    SEM ALINHAMENTO CARREGADO")
+                                continue
+                            for indice_pose, (nome_pose, _vetor_pose) in enumerate(
+                                    POSES_FISICAS_CALIBRACAO):
+                                stats_pose = dados_pose["poses"].get(
+                                    indice_pose, {})
+                                if stats_pose.get("media") is None:
+                                    print(f"    {indice_pose + 1}. "
+                                          f"{nome_pose}: SEM "
+                                          "ESTABILIDADE/AMOSTRAS "
+                                          f"(n={stats_pose.get('n', 0)}) "
+                                          "-- FAIL")
+                                else:
+                                    print(f"    {indice_pose + 1}. "
+                                          f"{nome_pose}: "
+                                          f"n={stats_pose['n']} | media "
+                                          f"{stats_pose['media']:.1f} | "
+                                          f"p90 {stats_pose['p90']:.1f} | "
+                                          f"max {stats_pose['max']:.1f} "
+                                          "graus -- "
+                                          + ("PASS" if stats_pose["passou"]
+                                             else "FAIL"))
+                        if relatorio_pose["fechado"]:
+                            print("  CERTIFICADO: FECHADO")
+                        else:
+                            ruins = "; ".join(
+                                f"{lado} {indice} ({nome}, "
+                                + ("sem amostras" if media is None
+                                   else f"{media:.1f} graus") + ")"
+                                for lado, indice, nome, media
+                                in relatorio_pose["poses_ruins"])
+                            print("  CERTIFICADO: NAO FECHADO -- poses "
+                                  f"ruins: {ruins}")
             # --- fim da captura do alinhamento por PLANO DO DORSO (tecla J) ---
             if captura_palma_plano.ativa and captura_palma_plano.restante_s <= 0.0:
                 captura_palma_plano.parar()
@@ -3550,6 +3653,29 @@ def main():
                     cv2.putText(display, _texto_amostras, (12, 110),
                                 cv2.FONT_HERSHEY_SIMPLEX, 0.65,
                                 (255, 255, 0), 2)
+            if display is not None and poses_fisicas.ativa:
+                fase_pose_display = poses_fisicas.fase_atual(now)
+                if fase_pose_display is not None:
+                    modo_display = ("CALIBRAR" if poses_fisicas.modo
+                                   == "calibrar" else "VERIFICAR")
+                    cv2.putText(
+                        display,
+                        f"{modo_display} POSES FISICAS "
+                        f"{fase_pose_display[0] + 1}/"
+                        f"{len(poses_fisicas.poses)} -- SEGURE PARADO "
+                        f"({fase_pose_display[2]:.1f} s)",
+                        (12, 160), cv2.FONT_HERSHEY_SIMPLEX, 0.7,
+                        (0, 255, 255), 2)
+                    cv2.putText(display, fase_pose_display[1][:78],
+                                (12, 195), cv2.FONT_HERSHEY_SIMPLEX, 0.6,
+                                (255, 255, 0), 2)
+                    cv2.putText(
+                        display,
+                        f"amostras R "
+                        f"{poses_fisicas.contar('right')} | L "
+                        f"{poses_fisicas.contar('left')}",
+                        (12, 228), cv2.FONT_HERSHEY_SIMPLEX, 0.6,
+                        (255, 255, 0), 2)
             depth_status = "depth: sem frame"
             stats = tracker.depth_stats()
             if stats is not None:
@@ -3783,45 +3909,47 @@ def main():
                     print("[log-palma] " + ("LIGADO" if log_palma_ativo
                                             else "DESLIGADO"))
             elif key == ord("v"):
-                # VERIFICACAO GUIADA (item 103): 6 poses -> certificado.
-                if verificacao_palma.ativa:
-                    verificacao_palma.parar()
-                    print("Verificacao guiada da palma cancelada.")
+                # VERIFICACAO CONTRA AS POSES FISICAS (item 114): o alinhamento
+                # carregado e' comparado com as normais CONHECIDAS das 3 poses.
+                if poses_fisicas.ativa:
+                    poses_fisicas.parar()
+                    print("Verificacao por poses fisicas cancelada.")
                 else:
-                    estabilidade_plano_contagem = {"right": 0, "left": 0}
-                    verificacao_palma.iniciar(now)
-                    verif_fase_vista = None
-                    print(
-                        "VERIFICACAO GUIADA DA PALMA (6 poses x "
-                        f"{VERIFICACAO_POSE_SEC:g} s): siga a instrucao na "
-                        "tela e SEGURE a pose PARADA ate a troca (a verdade "
-                        "so' entra com >=0,5 s de plano estavel). A verdade "
-                        "e' o PLANO MEDIO do dorso; no fim sai PASS/FAIL por "
-                        "pose e o CERTIFICADO FECHADO/NAO FECHADO. Mantenha "
-                        "as DUAS maos visiveis; V de novo cancela.")
-            elif key == ord("j"):
-                # CALIBRACAO POR PLANO DO DORSO (item 102): a verdade e' o plano
-                # medio punho+4 MCPs (mais estavel que os 3 pontos da O). No fim
-                # compara com o alinhamento ATUAL, refaz T/f e grava com backup.
-                if captura_palma_plano.ativa:
                     captura_palma_plano.parar()
-                    print("Captura do alinhamento por PLANO DO DORSO cancelada.")
-                else:
-                    plano_rms_captura = {"right": [], "left": []}
-                    estabilidade_plano_contagem = {"right": 0, "left": 0}
-                    captura_palma_plano.iniciar(now)
+                    verificacao_palma.parar()
+                    poses_fisicas.iniciar(now, modo="verificar")
+                    poses_fisicas_fase_vista = None
                     print(
-                        "CALIBRACAO DA PALMA POR PLANO DO DORSO "
-                        f"({PALM_PLANO_CAPTURE_SECONDS:g} s): gire a mao "
-                        "DEVAGAR e PARE ~1,5 s em cada orientacao (palma para o "
-                        "Kinect, para cima, para baixo, para a esquerda, para a "
-                        "direita, gira o punho), com a mao INTEIRA no quadro. "
-                        "Parar em cada pose e' o que limpa a verdade do "
-                        "Kinect (sem ruido de movimento); as duas maos podem "
-                        "ser capturadas juntas. No fim compara com o "
-                        "alinhamento ATUAL, refaz T/f e grava com backup "
-                        "(.json.bak). J de novo cancela."
-                    )
+                        "VERIFICACAO POR POSES FISICAS (item 114) -- "
+                        f"{len(poses_fisicas.poses)} poses x "
+                        f"{POSES_FISICAS_POSE_SEC:g} s, segure PARADO em cada "
+                        "uma (a rotacao do IMU e' coletada; o Kinect nao e' "
+                        "usado como verdade). No fim sai PASS/FAIL por pose e "
+                        "o CERTIFICADO FECHADO/NAO FECHADO contra as normais "
+                        "fisicas conhecidas; V de novo cancela.")
+            elif key == ord("j"):
+                # CALIBRACAO POR POSES FISICAS (item 114): 3 orientacoes com a
+                # normal da palma CONHECIDA (sem depender do Kinect). No fim
+                # resolve T/f com solve_palm_alignment e grava com backup.
+                if poses_fisicas.ativa:
+                    poses_fisicas.parar()
+                    print("Calibracao por poses fisicas cancelada.")
+                else:
+                    captura_palma_plano.parar()
+                    verificacao_palma.parar()
+                    poses_fisicas.iniciar(now, modo="calibrar")
+                    poses_fisicas_fase_vista = None
+                    print(
+                        "CALIBRACAO POR POSES FISICAS (item 114) -- "
+                        f"{len(poses_fisicas.poses)} poses x "
+                        f"{POSES_FISICAS_POSE_SEC:g} s. A verdade e' FISICA, "
+                        "nao vem do Kinect (o Kinect so' precisa ver o IMU "
+                        "enviando). Siga a instrucao na tela e SEGURE PARADO: "
+                        "1) palma de frente para o Kinect, dedos p/ cima, mao "
+                        "na linha do sensor; 2) palma para BAIXO apoiada na "
+                        "mesa, dedos p/ frente; 3) palma para CIMA com o DORSO "
+                        "apoiado na mesa. J de novo cancela; no fim refaz T/f "
+                        "e grava com backup (.json.bak).")
             elif key == ord("p"):
                 hand_calib_active = False
                 hand_calib_samples_aux = []
