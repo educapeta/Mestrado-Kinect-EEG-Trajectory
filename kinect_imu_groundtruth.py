@@ -942,6 +942,57 @@ def normal_estavel(historico, limite_spread_deg=4.0):
     return media, spread
 
 
+def normal_robusta(historico, normal_anterior=None, tolerancia_deg=10.0,
+                   minimo_fracao=0.70, minimo_amostras=4):
+    """(normal_mediana, fracao_inliers) tolerante a OUTLIERS de 1-2 quadros.
+
+    Por que existe (item 112, medido no log do usuario): no CSV de 22/10 o
+    MediaPipe detectava a mao em 99% dos frames e a normal instantanea tinha
+    salto mediano de 2,9 graus, mas 5-8% dos quadros saltavam >45 graus
+    (depth hole/oclusao/sinal). A MEDIA de janela (media_estavel_normais) era
+    contaminada por esses poucos quadros: o spread estourava e o gate zerava
+    o J/V mesmo com a mao parada (havia RUNS longos de spread <=4 no log).
+    Solucao: MEDIANA vetorial com alinhamento de sinal e fracao de INLIERS
+    (angulo <= `tolerancia_deg` da mediana). Se `minimo_fracao` dos quadros
+    concorda, a mediana e valida -- um ou dois outliers nao derrubam.
+    O sinal e alinhado pela `normal_anterior` (continuidade), se dada; senao
+    pelo primeiro vetor da janela.
+    """
+    vetores = []
+    for valor in historico:
+        if valor is None:
+            continue
+        vetor = np.asarray(valor, np.float64).reshape(3)
+        norma = float(np.linalg.norm(vetor))
+        if not np.isfinite(vetor).all() or norma < 1e-9:
+            continue
+        vetores.append(vetor / norma)
+    if len(vetores) < int(minimo_amostras):
+        return None, 0.0
+    referencia = None
+    if normal_anterior is not None:
+        anterior = np.asarray(normal_anterior, np.float64).reshape(3)
+        norma = float(np.linalg.norm(anterior))
+        if np.isfinite(anterior).all() and norma > 1e-9:
+            referencia = anterior / norma
+    if referencia is None:
+        referencia = vetores[0]
+    alinhados = np.array([v if float(np.dot(v, referencia)) >= 0.0 else -v
+                          for v in vetores])
+    mediana = np.median(alinhados, axis=0)
+    norma = float(np.linalg.norm(mediana))
+    if norma < 1e-9:
+        return None, 0.0
+    mediana = mediana / norma
+    angulos = [float(np.degrees(np.arccos(np.clip(
+        float(np.dot(v, mediana)), -1.0, 1.0)))) for v in alinhados]
+    fracao = float(np.mean([angulo <= float(tolerancia_deg)
+                            for angulo in angulos]))
+    if fracao < float(minimo_fracao):
+        return None, fracao
+    return mediana, fracao
+
+
 def formatar_certificado(relatorio, amostras_min=3):
     """Linhas de texto do CERTIFICADO V, sem quebrar com valor None.
 
@@ -1019,6 +1070,7 @@ CABECALHO_LOG_PALMA = (
     "spread_deg",
     "rms_mm",
     "estavel_contagem",
+    "robust_inliers",
     "palm_dir_x",
     "palm_dir_y",
     "palm_dir_z",

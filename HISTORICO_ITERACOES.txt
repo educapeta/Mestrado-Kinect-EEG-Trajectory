@@ -7124,3 +7124,59 @@ POSICAO RECOMENDADA (do smoke): maos na altura do peito, 1,0-2,5 m do Kinect,
 regiao central do quadro; nao levantar a palma acima do topo do quadro (o FOV de
 depth e' menor que o de cor) -- foi onde o mapeamento falhava.
 
+
+================================================================================
+ITEM 112 (22/10/2026) - ANALISE DO LOG DO USUARIO: o problema NAO era o
+    MediaPipe (99% de deteccao) e sim OUTLIERS de 1-2 quadros quebrando a media;
+    MEDIANA ROBUSTA + contador de amostras na tela
+================================================================================
+CONTEXTO: o usuario tentou varias vezes J/V; precisou se aproximar do Kinect para
+gravar o J e o V nao fechou; sugeriu usar so' os nos do MediaPipe porque o vetor
+do IMU e' muito mais fluido que a referencia do Kinect.
+ANALISE OBJETIVA (CSV gerado pelo proprio usuario com --log-palma, 8.838 linhas,
+16:05): ver item 111 para o formato.
+  RIGHT: mao detectada em 99% dos quadros; normal instantanea presente 92%;
+    spread da janela: mediana 17,4 graus, p90 79,6; spread <=4 graus em so' 22%
+    das linhas; saltos entre normais consecutivas: mediana 2,9 graus, MAS 5,5%
+    acima de 45 graus; mapeamento falhou 93x; RMS 1,81 mm (bom).
+  LEFT: 99% deteccao; normal 78%; spread mediana 13,9 / p90 75,6; <=4 em 20%;
+    8% de saltos >45 graus; mapeamento falhou 109x; RMS 1,74 mm.
+  Havia 82 (R) / 74 (L) RUNS de spread<=4, alguns de 30-67 quadros (~3-6 s).
+  CONCLUSAO: o MediaPipe detecta a mao muito bem (99%) e a normal instantanea e'
+  localmente estavel (salto mediano ~3 graus). O problema e' que a MEDIA de
+  janela (media_estavel_normais) e' fragil a 1-2 QUADROS RUINS: um salto >45
+  graus (depth hole/oclusao/sinal) estoura o spread da janela inteira e zerava o
+  gate -> J/V nunca juntavam amostras mesmo com a mao parada. Nao era o MediaPipe
+  nem o usuario.
+CORRECAO (item 112)
+  1) `normal_robusta(historico, normal_anterior, tolerancia_deg=10,
+     minimo_fracao=0.70, minimo_amostras=4)` em kinect_imu_groundtruth.py:
+     MEDIANA vetorial com alinhamento de sinal (pela normal anterior) + fracao de
+     INLIERS dentro de 10 graus da mediana; aceita a mediana se >=70% concordam.
+     Um ou dois outliers nao derrubam mais o gate.
+  2) Tool: janela subiu para 15 quadros (~1,5 s), tolerancia 10 graus, fracao
+     minima 0.70; o gate de 5 quadros consecutivos agora conta quadros em que a
+     MEDIANA ROBUSTA e' valida (com tolerancia de 1 falta). A seta verde usa a
+     mediana robusta (visualmente mais fluida e sem sumir: continua com
+     "mantido" por 1,5 s se um frame falhar).
+  3) CONTADOR NA TELA (feedback que faltava): durante o J aparece
+     "J (plano do dorso): R n | L n amostras" e durante o V
+     "V i/6 | R n | L n amostras" -- o usuario VE' a amostra entrando.
+  4) Log ganhou a coluna `robust_inliers` (fracao de quadros que concordam com a
+     mediana em cada linha).
+SIMULACAO NA PROPRIA GRAVACAO DO USUARIO (aplicando a mediana robusta aos
+normais do CSV): verdade robusta valida em 53% (R) e 58% (L) dos quadros
+(antes 22%/20% com o gate de spread <=4); runs validos >=5 quadros: 83 (R) e 77
+(L); runs mais longos 176 e 76 quadros. E' exatamente o que destrava o J/V.
+TESTES: test_palma_plano grupo 10 (mediana robusta aceita janela com 1 outlier
+~100 graus; rejeita janela em movimento; exige minimo de amostras; alinha sinal
+pela normal anterior; tool publica robust_inliers/PLANO_ROBUSTO_TOLERANCIA_DEG)
+PASS; demais regressoes verdes. Smoke curto SEM intervencao: sem crash; log
+gravando linhas (sem mao em quadro, mao_detectada=0) e cabecalho com a coluna
+nova.
+PENDENCIA: rodar com --log-palma; o J agora deve juntar as amostras (ver o
+contador na tela); se AINDA falhar, o proximo passo e' usar os landmarks
+"world" do MediaPipe como referencia auxiliar (ideia do usuario) e/ou prior do
+esqueleto de mao do Kinect -- antes disso, medir o CSV novo (robust_inliers e
+runs) para nao chutar.
+

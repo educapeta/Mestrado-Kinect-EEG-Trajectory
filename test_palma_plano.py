@@ -338,7 +338,8 @@ longe["wrist"] = np.array([0.30, 0.0, 0.0])
 check("ponto de FUNDO (30 cm do centro) e' descartado", eh_none(
     gt.palm_normal_from_plane(longe)))
 check("tool usa a media estavel e a sincronia color-depth",
-      ("normal_estavel" in fonte_tool
+      ("normal_robusta" in fonte_tool
+       or "normal_estavel" in fonte_tool
        or "media_estavel_normais" in fonte_tool)
       and "sync_color_depth_ms" in fonte_tool
       and "palm_plano_estavel" in fonte_tool)
@@ -422,8 +423,8 @@ check("formatar_certificado mostra FECHADO quando tudo passa",
       linhas_cheias[-1])
 check("tool usa formatar_certificado/normal_estavel/gate estatico",
       "formatar_certificado" in fonte_tool
-      and "normal_estavel" in fonte_tool
-      and "PLANO_SPREAD_MAX_DEG" in fonte_tool
+      and "normal_robusta" in fonte_tool
+      and "PLANO_ROBUSTO_TOLERANCIA_DEG" in fonte_tool
       and "estabilidade_plano_contagem" in fonte_tool)
 
 # ============================================================================
@@ -469,6 +470,41 @@ check("tool usa LogVetorPalma/atualizar_estabilidade/minimo do J",
       and "PALM_PLANO_MIN_AMOSTRAS" in fonte_tool)
 check("tool mantem a seta verde por 1,5 s (plano_display)",
       "plano_display" in fonte_tool)
+
+# ============================================================================
+# 10) MEDIANA ROBUSTA: outliers de 1-2 quadros nao derrubam o gate (item 112)
+# ============================================================================
+print("10) mediana robusta tolera outliers e alinha sinal")
+_base = np.array([0.0, 0.0, 1.0])
+_serie = [_base, np.array([0.02, 0.0, 1.0]),
+          np.array([-0.01, 0.01, 1.0]),
+          np.array([0.9, 0.0, 0.1]),
+          np.array([0.0, 0.02, 1.0]), np.array([-0.02, 0.0, 1.0])]
+_normal, _fracao = gt.normal_robusta(_serie, normal_anterior=_base)
+check("mediana robusta ACEITA janela com 1 outlier (~100 graus)",
+      _normal is not None and _fracao >= 0.7,
+      (None if _normal is None else np.round(_normal, 3), _fracao))
+check("mediana robusta aponta ~+z",
+      _normal is not None
+      and float(np.dot(_normal, [0.0, 0.0, 1.0])) > 0.99,
+      _normal)
+_mov = [np.array([1.0, 0.0, 0.0]), np.array([0.0, 1.0, 0.0]),
+        np.array([0.0, 0.0, 1.0]), np.array([1.0, 1.0, 1.0])]
+_normal_m, _fracao_m = gt.normal_robusta(_mov, normal_anterior=None)
+check("mediana robusta REJEITA janela em MOVIMENTO",
+      _normal_m is None and _fracao_m < 0.7, _fracao_m)
+check("mediana robusta exige minimo de amostras",
+      gt.normal_robusta([np.array([0.0, 0.0, 1.0])]) == (None, 0.0))
+_inv = [np.array([0.0, 0.0, -1.0]), np.array([0.01, 0.0, -1.0]),
+        np.array([-0.01, 0.01, -1.0]), np.array([0.0, 0.01, -1.0])]
+_normal_s, _fracao_s = gt.normal_robusta(
+    _inv, normal_anterior=np.array([0.0, 0.0, 1.0]))
+check("mediana robusta alinha o sinal pela normal anterior",
+      _normal_s is not None
+      and float(np.dot(_normal_s, [0.0, 0.0, 1.0])) > 0.99, _normal_s)
+check("tool publica robust_inliers no log",
+      "robust_inliers" in fonte_tool
+      and "PLANO_ROBUSTO_TOLERANCIA_DEG" in fonte_tool)
 
 if FALHAS:
     print()

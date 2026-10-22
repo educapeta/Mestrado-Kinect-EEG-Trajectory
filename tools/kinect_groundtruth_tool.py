@@ -156,15 +156,16 @@ PALM_ALIGNMENT_CAPTURE_SECONDS = 14.0
 PALM_PLANO_CAPTURE_SECONDS = 24.0
 #: Minimo de amostras do J (plano do dorso).
 PALM_PLANO_MIN_AMOSTRAS = 5
-#: Spread maximo (graus) da janela de normais para a verdade do plano valer
-#: como PARADA (item 110: 8 graus era frouxo e aceitava amostra EM MOVIMENTO;
-#: como a verdade e' a media de uma janela, isso virava erro de alinhamento).
-PLANO_SPREAD_MAX_DEG = 4.0
-#: Quadros consecutivos com spread baixo exigidos antes de usar/coletar a
-#: verdade do plano (~0,5 s a 10 fps).
+#: Tolerancia (graus) da MEDIANA ROBUSTA das normais: quadros mais longe que
+#: isso da mediana sao OUTLIERS e nao derrubam o gate (item 112; medido no log
+#: do usuario: 5-8% dos quadros com salto >45 graus zeravam o J/V).
+PLANO_ROBUSTO_TOLERANCIA_DEG = 10.0
+#: Fracao minima dos quadros da janela que precisa concordar com a mediana.
+PLANO_ROBUSTO_FRACAO_MIN = 0.70
+#: Quadros consecutivos estaveis exigidos antes de usar/coletar a verdade.
 PLANO_QUADROS_ESTAVEIS_MIN = 5
-#: Janela da media das normais (~1,2 s a 10 fps).
-PLANO_JANELA_QUADROS = 12
+#: Janela da mediana robusta (~1,5 s a 10 fps).
+PLANO_JANELA_QUADROS = 15
 #: Erro (px) do diagnostico do tabuleiro (tecla T) a partir do qual a calibracao
 #: gravada e' considerada de OUTRA montagem. Por que existe: o RMS do arquivo
 #: so' mede a coerencia INTERNA dele -- um stereo feito em outra maquina/sala e'
@@ -2009,6 +2010,8 @@ def main():
         log_palma_ativo = True
         print(f"[log-palma] gravando vetor da palma em {_nome_log}")
     plano_display = {"right": None, "left": None}
+    #: Ultima normal ROBUSTA aceita por lado (sinal/continuidade da mediana).
+    plano_robusto_anterior = {"right": None, "left": None}
     falhas_plano_contagem = {"right": 0, "left": 0}
     frame_contador = 0
     # VERIFICACAO GUIADA DA PALMA (item 103, tecla V): 6 poses com a verdade do
@@ -3041,17 +3044,24 @@ def main():
                     normal_plano_lado, rms_plano_lado = plano_lado
                 plano_estavel = None
                 spread_plano = None
+                fracao_robusta = 0.0
                 if normal_plano_lado is not None:
                     ultimo_plano_camera[lado] = normal_plano_lado
                     hist_plano_camera[lado].append(normal_plano_lado)
                     if len(hist_plano_camera[lado]) > PLANO_JANELA_QUADROS:
                         hist_plano_camera[lado] = (
                             hist_plano_camera[lado][-PLANO_JANELA_QUADROS:])
-                    media_plano, spread_plano = normal_estavel(
+                    plano_estavel, fracao_robusta = normal_robusta(
                         hist_plano_camera[lado],
-                        limite_spread_deg=PLANO_SPREAD_MAX_DEG)
-                    if media_plano is not None:
-                        plano_estavel = media_plano
+                        normal_anterior=plano_robusto_anterior[lado],
+                        tolerancia_deg=PLANO_ROBUSTO_TOLERANCIA_DEG,
+                        minimo_fracao=PLANO_ROBUSTO_FRACAO_MIN)
+                    if plano_estavel is not None:
+                        plano_robusto_anterior[lado] = plano_estavel
+                        if (normal_plano_lado is not None
+                                and np.isfinite(normal_plano_lado).all()):
+                            spread_plano = angle_between(
+                                normal_plano_lado, plano_estavel)
                 (estabilidade_plano_contagem[lado],
                  falhas_plano_contagem[lado]) = atualizar_estabilidade(
                     estabilidade_plano_contagem[lado],
@@ -3123,6 +3133,7 @@ def main():
                         rms_mm=(None if rms_plano_lado is None
                                 else float(rms_plano_lado) * 1000.0),
                         estavel_contagem=estabilidade_plano_contagem[lado],
+                        robust_inliers=fracao_robusta,
                         palm_dir_x=_eixo(palm_dir_log, 0),
                         palm_dir_y=_eixo(palm_dir_log, 1),
                         palm_dir_z=_eixo(palm_dir_log, 2),
@@ -3513,6 +3524,31 @@ def main():
                         f"({fase_verif_display[2]:.1f} s)",
                         (12, 80), cv2.FONT_HERSHEY_SIMPLEX, 0.7,
                         (0, 255, 255), 2)
+
+            if display is not None:
+                _texto_amostras = None
+                if captura_palma_plano.ativa:
+                    _texto_amostras = (
+                        'J (plano do dorso): R '
+                        + str(captura_palma_plano.contar('right'))
+                        + ' | L '
+                        + str(captura_palma_plano.contar('left'))
+                        + ' amostras')
+                elif verificacao_palma.ativa:
+                    _fase_amostras = verificacao_palma.fase_atual(now)
+                    if _fase_amostras is not None:
+                        _texto_amostras = (
+                            'V ' + str(_fase_amostras[0] + 1) + '/'
+                            + str(len(verificacao_palma.poses))
+                            + ' | R '
+                            + str(verificacao_palma.contar('right'))
+                            + ' | L '
+                            + str(verificacao_palma.contar('left'))
+                            + ' amostras')
+                if _texto_amostras is not None:
+                    cv2.putText(display, _texto_amostras, (12, 110),
+                                cv2.FONT_HERSHEY_SIMPLEX, 0.65,
+                                (255, 255, 0), 2)
             depth_status = "depth: sem frame"
             stats = tracker.depth_stats()
             if stats is not None:
