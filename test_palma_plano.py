@@ -923,6 +923,109 @@ check("tool usa o modo takes no J/V",
       "iniciar_takes" in fonte_tool
       and "processar_takes" in fonte_tool)
 
+# ============================================================================
+# 17) PROJECAO camera->pixel BLINDADA (item 121): mao no limite do FOV
+#     fazia o mapper devolver inf e o desenho morria com OverflowError
+# ============================================================================
+print("17) projecao camera->pixel blindada (inf/NaN nao estoura)")
+import types as _types
+
+
+class _MapperFake:
+    def __init__(self, cor=None, profundidade=None):
+        self.cor = cor
+        self.profundidade = profundidade
+
+    def MapCameraPointToColorSpace(self, ponto):
+        return self.cor(ponto)
+
+    def MapDepthPointToCameraSpace(self, ponto, profundidade):
+        return self.profundidade(ponto, profundidade)
+
+
+def _tracker_fake(mapper):
+    tracker = object.__new__(gt.KinectHandTracker)
+    tracker.mapper = mapper
+    tracker.color_width = 640
+    tracker.color_height = 480
+    tracker.depth_width = 512
+    tracker.depth_height = 424
+    tracker.diag = {"mapeamento": 0, "depth": 0, "pontos": 0,
+                    "fallbacks": 0, "resgatados": 0,
+                    "profundidades": []}
+    tracker.last_hand_depth_m = 1.0
+    tracker._z_por_lado = {"right": 1.0, "left": 1.0}
+    tracker._color_to_depth_pixel = lambda *a, **k: (10, 10)
+    tracker._median_depth = lambda *a, **k: 1000.0
+    return tracker
+
+
+_tracker_inf = _tracker_fake(_MapperFake(
+    cor=lambda ponto: _types.SimpleNamespace(
+        x=float("inf"), y=float("nan")),
+    profundidade=lambda ponto, profundidade: _types.SimpleNamespace(
+        x=float("inf"), y=0.0, z=1.0)))
+check("projecao: ponto de cor infinito -> None (sem int(inf))",
+      _tracker_inf.camera_para_pixel_color([0.1, 0.0, 1.0]) is None)
+check("projecao: camera point infinito -> None",
+      _tracker_inf._landmark_camera_point(
+          _types.SimpleNamespace(x=0.5, y=0.5), "right") is None)
+
+_tracker_huge = _tracker_fake(_MapperFake(
+    cor=lambda ponto: _types.SimpleNamespace(x=1e12, y=5.0)))
+check("projecao: pixel absurdo (1e12) -> None",
+      _tracker_huge.camera_para_pixel_color([0.1, 0.0, 1.0]) is None)
+
+_tracker_ok = _tracker_fake(_MapperFake(
+    cor=lambda ponto: _types.SimpleNamespace(
+        x=200.0 + 1000.0 * float(ponto.x),
+        y=240.0 + 1000.0 * float(ponto.y))))
+tracker_ok = _tracker_ok
+tracker_ok._landmark_camera_point = lambda *a, **k: np.array(
+    [0.10, 0.00, 1.00])
+_frame = np.zeros((480, 640, 3), np.uint8)
+tracker_ok.draw_palm_vector_custom(
+    _frame, [_types.SimpleNamespace(x=0.5, y=0.5)] * 21,
+    np.array([1.0, 0.0, 0.0]))
+check("projecao: desenho normal continua desenhando",
+      int(_frame.sum()) > 0)
+
+tracker_inf_draw = _tracker_ok
+tracker_inf_draw.mapper = _MapperFake(
+    cor=lambda ponto: _types.SimpleNamespace(
+        x=(300.0 if float(ponto.x) < 0.2 else float("inf")),
+        y=300.0))
+_frame_inf = np.zeros((480, 640, 3), np.uint8)
+try:
+    tracker_inf_draw.draw_palm_vector_custom(
+        _frame_inf, [_types.SimpleNamespace(x=0.5, y=0.5)] * 21,
+        np.array([1.0, 0.0, 0.0]))
+    _sem_erro_inf = True
+except (OverflowError, ValueError, TypeError):
+    _sem_erro_inf = False
+check("projecao: seta com ponta inf NAO estoura (bug do ultimo run)",
+      _sem_erro_inf and int(_frame_inf.sum()) == 0)
+
+tracker_nan = _tracker_ok
+tracker_nan._landmark_camera_point = lambda *a, **k: np.array(
+    [np.nan, 0.0, 1.0])
+_frame_nan = np.zeros((480, 640, 3), np.uint8)
+try:
+    tracker_nan.draw_palm_vector_custom(
+        _frame_nan, [_types.SimpleNamespace(x=0.5, y=0.5)] * 21,
+        np.array([0.0, 0.0, 1.0]))
+    _sem_erro_nan = True
+except (OverflowError, ValueError, TypeError):
+    _sem_erro_nan = False
+check("projecao: ponto NaN nao estoura o desenho",
+      _sem_erro_nan)
+check("tool usa o helper camera_para_pixel_color",
+      "camera_para_pixel_color" in open(
+          "kinect_imu_groundtruth.py", encoding="utf-8").read())
+check("tool desenha as setas pelo wrapper seguro (nunca derruba a sessao)",
+      "desenhar_vetor_palma_seguro" in fonte_tool
+      and "tracker.draw_palm_vector(" not in fonte_tool)
+
 if FALHAS:
     print()
     print(f"PALMA_PLANO_FALHOU: {len(FALHAS)} verificacao(oes): "

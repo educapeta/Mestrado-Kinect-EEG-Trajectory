@@ -4158,6 +4158,8 @@ class KinectHandTracker:
                 if self._abaixo_do_tronco(joint.Position.y, y_base):
                     continue
                 point = self.mapper.MapCameraPointToDepthSpace(joint.Position)
+                if point is None:
+                    continue
                 if not np.isfinite((point.x, point.y)).all():
                     continue
                 pixel = (int(round(point.x)), int(round(point.y)))
@@ -4243,7 +4245,19 @@ class KinectHandTracker:
         camera_point = self.mapper.MapDepthPointToCameraSpace(
             depth_point, int(round(depth_mm))
         )
-        return np.array([camera_point.x, camera_point.y, camera_point.z], dtype=float)
+        if camera_point is None:
+            return None
+        try:
+            xyz = np.array([camera_point.x, camera_point.y, camera_point.z],
+                           dtype=float)
+        except (AttributeError, TypeError, ValueError):
+            return None
+        #: O mapper devolve inf/NaN para profundidades/pixels invalidos (ex.:
+        #: mao no limite superior do FOV, item 121). Ponto nao-finito aqui
+        #: virava inf na projecao p/ cor e estourava int(round(inf)) no desenho.
+        if not np.isfinite(xyz).all() or xyz[2] <= 0.05:
+            return None
+        return xyz
 
     @staticmethod
     def palm_normal_from_points(wrist, index_mcp, pinky_mcp, eps=1e-9,
@@ -5179,6 +5193,8 @@ class KinectHandTracker:
                 if self._abaixo_do_tronco(joint.Position.y, y_base):
                     continue
                 point = self.mapper.MapCameraPointToColorSpace(joint.Position)
+                if point is None:
+                    continue
                 if not np.isfinite((point.x, point.y)).all():
                     continue
                 pixel = (int(round(point.x)), int(round(point.y)))
@@ -5432,7 +5448,14 @@ class KinectHandTracker:
         camera_point = self.mapper.MapDepthPointToCameraSpace(
             depth_point, int(round(depth_mm))
         )
-        position = np.array([camera_point.x, -camera_point.y, camera_point.z], dtype=float)
+        if camera_point is None:
+            self.last_hand_reason = "mapeamento depth->camera falhou"
+            return color_frame, None, landmarks
+        position = np.array(
+            [camera_point.x, -camera_point.y, camera_point.z], dtype=float)
+        if not np.isfinite(position).all() or position[2] <= 0.05:
+            self.last_hand_reason = "posicao 3D invalida (inf/NaN)"
+            return color_frame, None, landmarks
         palm_depth_m = float(position[2])
         self.last_hand_reason = "OK"
         if self.last_hand_depth_m is None:
@@ -5454,6 +5477,45 @@ class KinectHandTracker:
                 f"{CHECKERBOARD_SIZE[0] * CHECKERBOARD_SIZE[1]} cantos)"
             )
 
+    def camera_para_pixel_color(self, posicao):
+        """Ponto de camera -> pixel do RGB, ou None se a projecao for invalida.
+
+        O mapper do Kinect devolve inf/NaN/valores absurdos para pontos que
+        caem fora do FOV da cor (mao no limite do quadro, item 121). Toda a
+        conversao que DEPOIS vira int(round(...)) ou cv2 passa por aqui: sem
+        isso o programa morria com OverflowError: float infinity.
+        """
+        if posicao is None:
+            return None
+        try:
+            vetor = np.asarray(posicao, np.float64).reshape(3)
+        except (TypeError, ValueError):
+            return None
+        if not np.isfinite(vetor).all():
+            return None
+        try:
+            ponto_camera = PyKinectV2._CameraSpacePoint(
+                float(vetor[0]), float(vetor[1]), float(vetor[2]))
+            ponto = self.mapper.MapCameraPointToColorSpace(ponto_camera)
+        except (AttributeError, TypeError, ValueError, OverflowError):
+            return None
+        try:
+            x = float(ponto.x)
+            y = float(ponto.y)
+        except (AttributeError, TypeError, ValueError):
+            return None
+        if not (np.isfinite(x) and np.isfinite(y)):
+            return None
+        largura = float(getattr(self, "color_width", 0) or 0)
+        altura = float(getattr(self, "color_height", 0) or 0)
+        if largura <= 0 or altura <= 0:
+            return None
+        #: margem generosa: projecao coerente pode cair fora do quadro, mas um
+        #: valor a dezenas de vezes o tamanho do quadro e' lixo numerico.
+        if abs(x) > 10.0 * largura or abs(y) > 10.0 * altura:
+            return None
+        return int(round(x)), int(round(y))
+
     def draw_palm_vector_custom(self, frame, landmarks, direction_camera,
                                 cor=(0, 0, 255), rotulo="direcao da palma",
                                 espessura=5):
@@ -5463,28 +5525,47 @@ class KinectHandTracker:
         plano do Kinect...): e' o desenho que permite comparar as duas lado a
         lado na calibracao por plano do dorso (tecla J, item 102).
         """
-        if direction_camera is None:
+        if direction_camera is None or frame is None or not landmarks:
             return
-        direcao = np.asarray(direction_camera, np.float64).reshape(3)
+        try:
+            direcao = np.asarray(direction_camera, np.float64).reshape(3)
+        except (TypeError, ValueError):
+            return
         norma = float(np.linalg.norm(direcao))
         if not np.isfinite(direcao).all() or norma < 1e-9:
             return
         direcao = direcao / norma
-        palm = self._landmark_camera_point(landmarks[9])
+        try:
+            palm = self._landmark_camera_point(landmarks[9])
+        except (AttributeError, IndexError, TypeError):
+            palm = None
         if palm is None:
             return
+        palm = np.asarray(palm, np.float64).reshape(3)
+        if not np.isfinite(palm).all():
+            return
         endpoint = palm + direcao * PALM_VECTOR_LENGTH_M
-        start_point = PyKinectV2._CameraSpacePoint(*palm)
-        end_point = PyKinectV2._CameraSpacePoint(*endpoint)
-        start = self.mapper.MapCameraPointToColorSpace(start_point)
-        end = self.mapper.MapCameraPointToColorSpace(end_point)
-        start_pixel = (int(round(start.x)), int(round(start.y)))
-        end_pixel = (int(round(end.x)), int(round(end.y)))
-        if all(np.isfinite((start.x, start.y, end.x, end.y))):
-            cv2.arrowedLine(frame, start_pixel, end_pixel, cor, espessura,
-                            tipLength=0.2)
-            cv2.putText(frame, rotulo, end_pixel, cv2.FONT_HERSHEY_SIMPLEX,
-                        0.65, cor, 2)
+        start_pixel = self.camera_para_pixel_color(palm)
+        end_pixel = self.camera_para_pixel_color(endpoint)
+        if start_pixel is None or end_pixel is None:
+            return
+        try:
+            altura, largura = frame.shape[:2]
+        except (AttributeError, ValueError):
+            return
+        if largura <= 0 or altura <= 0:
+            return
+        #: recorta o destino para o quadro (seta continua visivel no limite em
+        #: vez de sumir quando a ponta sai do video).
+        end_pixel = (min(max(end_pixel[0], 0), largura - 1),
+                     min(max(end_pixel[1], 0), altura - 1))
+        if not (0 <= start_pixel[0] < largura
+                and 0 <= start_pixel[1] < altura):
+            return
+        cv2.arrowedLine(frame, start_pixel, end_pixel, cor, espessura,
+                        tipLength=0.2)
+        cv2.putText(frame, rotulo, end_pixel, cv2.FONT_HERSHEY_SIMPLEX,
+                    0.65, cor, 2)
 
     def draw_palm_vector(self, frame, landmarks, direction_camera):
         self.draw_palm_vector_custom(frame, landmarks, direction_camera)

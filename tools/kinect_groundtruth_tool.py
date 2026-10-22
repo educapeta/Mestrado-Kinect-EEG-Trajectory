@@ -140,6 +140,25 @@ import imu_reset  # noqa: E402
 #: rastreado sao os programas -- e a coluna `aux_pair_*_m` do CSV grava ESTE no'.
 HAND_TRACK_LANDMARK = 9
 
+
+def desenhar_vetor_palma_seguro(tracker, frame, landmarks, direcao, **kwargs):
+    """Desenha a seta da palma sem derrubar a sessao por erro de desenho.
+
+    O desenho nao e' critico para a aquisicao: se a projecao do vetor falhar
+    (ponto fora do FOV, inf/NaN, cv2), avisa UMA vez e segue o loop. Sem isso
+    um unico frame ruim (mao no limite do quadro, item 121) matava o tool no
+    meio de um J/V e perdia a sessao inteira.
+    """
+    if tracker is None or frame is None or landmarks is None or direcao is None:
+        return
+    try:
+        tracker.draw_palm_vector_custom(frame, landmarks, direcao, **kwargs)
+    except Exception as exc:  # noqa: BLE001 -- desenho nunca aborta aquisicao
+        if not getattr(tracker, "_aviso_desenho_vetor", False):
+            tracker._aviso_desenho_vetor = True
+            print(f"[desenho] seta da palma ignorada neste frame: {exc}",
+                  flush=True)
+
 # --- alinhamento IMU <-> camera da palma (por luva) --------------------------
 #: Arquivo do alinhamento resolvido de cada luva. Fica na raiz (junto das
 #: calibracoes) e e' POR LADO: cada luva tem a sua montagem, e o alinhamento de
@@ -3886,9 +3905,9 @@ def main():
                     # medida pelo Kinect (a verdade mais estavel). O rotulo traz
                     # o erro entre as duas em graus.
                     if mao["palm_direction"] is not None:
-                        tracker.draw_palm_vector(
-                            display, mao["landmarks"], mao["palm_direction"]
-                        )
+                        desenhar_vetor_palma_seguro(
+                            tracker, display, mao["landmarks"],
+                            mao["palm_direction"])
                     normal_plano = mao.get("palm_plano_estavel")
                     rotulo = "plano dorso"
                     if normal_plano is None:
@@ -3903,8 +3922,8 @@ def main():
                         if mao["palm_direction"] is not None:
                             rotulo += (" (err %.0f)" % angle_between(
                                 normal_plano, mao["palm_direction"]))
-                        tracker.draw_palm_vector_custom(
-                            display, mao["landmarks"], normal_plano,
+                        desenhar_vetor_palma_seguro(
+                            tracker, display, mao["landmarks"], normal_plano,
                             cor=(0, 255, 0), rotulo=rotulo)
             if display is not None and verificacao_palma.ativa:
                 fase_verif_display = verificacao_palma.fase_atual(now)
@@ -4295,9 +4314,9 @@ def main():
                     poses_fisicas.iniciar_takes(now, modo="verificar")
                     poses_fisicas_fase_vista = None
                     print(
-                        "VERIFICACAO POR POSES FISICAS (item 114) -- "
-                        f"{len(poses_fisicas.poses)} poses x "
-                        f"{POSES_FISICAS_POSE_SEC:g} s, segure PARADO em cada "
+                        "VERIFICACAO POR TAKES -- "
+                        f"{len(poses_fisicas.poses)} posicoes, segure "
+                        "PARADO em cada "
                         "uma, com a PALMA MIRANDO A LENTE e a mao PERTO do "
                         "sensor (~50 cm), SEM TEMPO FIXO: 2 s PARADO = TAKE. "
                         "Posicoes: 1) CENTRO; 2) BEM A ESQUERDA; 3) BEM A DIREITA; "
@@ -4305,9 +4324,9 @@ def main():
                         "pelo Kinect (mesmas verdades do J). No fim sai PASS/FAIL e "
                         "o CERTIFICADO; V de novo cancela.")
             elif key == ord("j"):
-                # CALIBRACAO POR POSES FISICAS (item 114): 3 orientacoes com a
-                # normal da palma CONHECIDA (sem depender do Kinect). No fim
-                # resolve T/f com solve_palm_alignment e grava com backup.
+                # CALIBRACAO POR TAKES (itens 114/120): 4 posicoes espalhadas
+                # com a palma mirando a lente; 2 s PARADO = take (sem tempo
+                # fixo). No fim resolve T/f pela direcao mao->lente e grava.
                 if poses_fisicas.ativa:
                     poses_fisicas.parar()
                     print("Calibracao por poses fisicas cancelada.")
@@ -4316,16 +4335,13 @@ def main():
                     verificacao_palma.parar()
                     poses_fisicas = ColetorPosesFisicas()
                     poses_fisicas.iniciar_takes(now, modo="calibrar")
-                    print("  referencia das normais: "
-                          + ("PLANO DA MESA medido"
-                             if mesa_normal_camera is not None
-                             else "Kinect NIVELADO (padrao; tecle M para "
-                                  "medir a mesa)"))
+                    print("  modo TAKES: 2 s com a mao PARADA grava o "
+                          "take; a tela guia a posicao e o status R/L "
+                          "(sem tempo fixo).")
                     poses_fisicas_fase_vista = None
                     print(
-                        "CALIBRACAO POR POSES FISICAS (item 114) -- "
-                        f"{len(poses_fisicas.poses)} poses x "
-                        f"{POSES_FISICAS_POSE_SEC:g} s. A verdade e' FISICA, "
+                        "CALIBRACAO POR TAKES -- "
+                        f"{len(poses_fisicas.poses)} posicoes. A verdade e' FISICA, "
                         "nao vem de planura: e a DIRECAO da sua mao ate a "
                         "LENTE, medida pelo Kinect. SAO 4 POSICOES BEM ESPALHADAS "
                         "(se ficarem parecidas a calibracao fica mal condicionada). "

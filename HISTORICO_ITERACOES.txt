@@ -7592,3 +7592,53 @@ baixo, palma mirando a lente, mao a ~50 cm; quando parar 2 s o take sai sozinho)
 e depois V; conferir o espalhamento impresso (>=18 graus) e o vetor vermelho
 acompanhando a mao.
 
+
+================================================================================
+ITEM 121 (22/10/2026) - BUG "OverflowError: cannot convert float infinity":
+    projecao camera->pixel devolvia inf/NaN (mao no limite superior do FOV) e o
+    desenho da seta chamava int(round(inf)) ANTES de checar finitude -> matava o
+    tool no meio do J (depois do TAKE 1/4)
+================================================================================
+CAUSA (revisao do traceback)
+  - O log mostrou "mapeo color->depth falhou para a palma (456, 65)" (mao alta,
+    limite superior do quadro) e logo depois o crash em
+    draw_palm_vector_custom -> int(round(end.x)) com end.x = inf.
+  - Na funcao o `int(round(start.x/end.x))` era feito ANTES do
+    `if all(np.isfinite(...))`. Se o mapper do Kinect devolve inf/NaN para um
+    ponto fora do FOV (ou se _landmark_camera_point devolve um ponto nao-finito),
+    o int(inf) estoura OverflowError e derruba a sessao inteira (aquisicao).
+CORRECOES
+  1) `KinectHandTracker.camera_para_pixel_color(posicao)` (novo helper):
+     valida o ponto de camera (np.isfinite), cria o _CameraSpacePoint dentro de
+     try/except, valida x/y finitos, rejeita valores > 10x o tamanho do quadro
+     (lixo numerico) e so' DEPOIS converte para int. Devolve None se invalido.
+  2) `draw_palm_vector_custom`: valida direcao/palm finitos, usa o helper para
+     inicio e fim, NAO desenha se a projecao for invalida e RECORTA a ponta para
+     dentro do quadro (seta continua visivel no limite em vez de sumir/crashar).
+     Antes o int(round(...)) vinha antes da checagem: era o bug exato.
+  3) `_landmark_camera_point`: valida a saida do mapper (None/NaN/inf/z<=0.05)
+     -> devolve None. Era a origem dos pontos nao-finitos que chegavam ao desenho.
+  4) Tool: helper `desenhar_vetor_palma_seguro(tracker, frame, landmarks,
+     direcao, **kwargs)` usado nas DUAS setas (vermelha do IMU e verde do
+     plano): qualquer erro de desenho/projecao e' ignorado naquele frame com um
+     aviso impresso UMA vez -- um frame ruim nunca mais perde a sessao.
+  5) Guardas defensivas relacionadas: detect_hand valida camera_point None/
+     finito/z>0.05; _draw_skeleton e _draw_skeleton_depth checam mapper None
+     antes de (point.x, point.y).
+  6) Textos antigos do J/V limpos: "3 poses x 3 s" e "referencia das normais:
+     PLANO DA MESA" -> agora "CALIBRACAO POR TAKES -- 4 posicoes" / "modo TAKES:
+     2 s com a mao PARADA grava o take".
+TESTES DE REGRESSAO (grupo 17 do test_palma_plano, com mapper FAKE)
+  - camera_para_pixel_color devolve None p/ ponto de cor inf/NaN;
+  - _landmark_camera_point devolve None quando o mapper da' inf;
+  - pixel absurdo (1e12) e' rejeitado;
+  - desenho normal continua desenhando (frame muda);
+  - CENARIO EXATO DO BUG: ponta da seta com projecao inf -> NAO lanca excecao e
+    nao desenha nada (antes: OverflowError);
+  - ponto NaN nao estoura;
+  - tool usa o wrapper seguro e nao chama mais draw_palm_vector direto.
+SUITE COMPLETA 59/59 (com os novos checks); smoke do tool sem crash.
+OBS.: o take ja' gravado antes do crash nao e' perdido em runs futuros porque o
+desenho nao derruba mais o loop; se a projecao falhar a seta some naquele frame
+e volta no proximo.
+
