@@ -1831,9 +1831,9 @@ def main():
           "foco no video o OpenCV nao recebe a tecla (a tecla O parece nao "
           "funcionar e o console fica mudo).")
     print("  M = MEDIR NIVEL DA MESA (plano do Kinect, compensa inclinacao)")
-    print("  J = CALIBRAR por 3 POSES FISICAS (palma p/ Kinect, p/ baixo "
-          "na mesa, p/ cima) | V = VERIFICAR com as mesmas poses | "
-          "G = log do vetor")
+    print("  J = CALIBRAR por 4 POSES ESPALHADAS (mao a ~50 cm da lente, "
+          "palma mirando a lente: centro/esquerda/direita/baixo) | "
+          "V = VERIFICAR | G = log do vetor")
     for receiver in receivers.values():
         receiver.start()
     # --- webcams auxiliares: a ATIVA (--aux-index) + as OUTRAS (--aux-cameras) ---
@@ -3348,13 +3348,12 @@ def main():
                         if mesa_normal_camera is not None:
                             resultado_poses = poses_fisicas.calibrar_por_posicoes()
                             if resultado_poses.get("faltam_posicoes"):
-                                print("  AVISO: o Kinect nao mediu a "
-                                      "POSICAO da mao em todas as poses "
-                                      "(faltam: "
-                                      f"{resultado_poses['faltam_posicoes']}); "
-                                      "caindo para o plano da mesa")
-                                resultado_poses = poses_fisicas.calibrar_mesa(
-                                    mesa_normal_camera)
+                                print("  ERRO: o Kinect nao mediu a POSICAO "
+                                      "da mao em todas as poses (faltam: "
+                                      f"{resultado_poses['faltam_posicoes']}). "
+                                      "NADA sera gravado -- mantenha as "
+                                      "DUAS maos visiveis, segure ~2 s em "
+                                      "cada pose e refaca o J.")
                             mesa_sinal = float(
                                 resultado_poses.get("sinal_mesa") or 1.0)
                             poses_verdade_por_lado = {
@@ -3364,7 +3363,8 @@ def main():
                                 if _dados_v.get("poses_usadas")}
                             print("CALIBRACAO POR POSES FISICAS "
                                   "terminada (verdade: DIRECAO MAO->LENTE "
-                                  "medida pelo Kinect nas 3 posicoes):")
+                                  f"medida pelo Kinect nas "
+                                  f"{len(poses_fisicas.poses)} posicoes):")
                             for _lado_diag in ("right", "left"):
                                 _ang = resultado_poses.get(
                                     "angulos", {}).get(_lado_diag)
@@ -3453,6 +3453,20 @@ def main():
                                     fusions[lado],
                                     "palm_alignment_residual_deg", None)
                             dados_pose = resultado_poses["lados"].get(lado, {})
+                            _espalhamento = dados_pose.get(
+                                "espalhamento_min_deg")
+                            if _espalhamento is not None:
+                                print(f"  {lado}: espalhamento minimo "
+                                      "entre as poses "
+                                      f"{_espalhamento:.1f} graus "
+                                      "(minimo "
+                                      f"{POSES_FISICAS_SPREAD_MIN_DEG:g})"
+                                      + ("" if _espalhamento >=
+                                         POSES_FISICAS_SPREAD_MIN_DEG
+                                         else
+                                         " -- POSES MUITO PARECIDAS: "
+                                         "leve a mao mais para os "
+                                         "lados/baixo e refaca"))
                             if dados_pose.get("sem_amostras"):
                                 faltam = dados_pose.get("poses_insuficientes")
                                 print(f"  {lado}: amostras insuficientes "
@@ -3465,8 +3479,16 @@ def main():
                             residuo_pose = dados_pose["residuo"]
                             fusions[lado].set_palm_alignment(
                                 t_pose, f_pose, residuo_pose)
+                            _espalhamento_pose = dados_pose.get(
+                                "espalhamento_min_deg")
+                            _espalhamento_ok = (
+                                _espalhamento_pose is None
+                                or _espalhamento_pose >=
+                                POSES_FISICAS_SPREAD_MIN_DEG)
                             _melhor = melhor_palma_sessao.get(lado)
-                            if _melhor is None or residuo_pose < _melhor:
+                            _melhora = (_melhor is None
+                                       or residuo_pose < _melhor)
+                            if _espalhamento_ok and _melhora:
                                 gravou_pose = save_palm_alignment(
                                     fusions[lado], lado)
                                 melhor_palma_sessao[lado] = residuo_pose
@@ -3474,6 +3496,14 @@ def main():
                                     f"gravado em "
                                     f"{palm_alignment_path(lado).name}"
                                     if gravou_pose else "NAO gravado")
+                            elif not _espalhamento_ok:
+                                _texto_gravacao = (
+                                    "NAO gravado (poses muito "
+                                    "parecidas: espalhamento "
+                                    f"{_espalhamento_pose:.1f} < "
+                                    f"{POSES_FISICAS_SPREAD_MIN_DEG:g} "
+                                    "graus -- leve a mao mais para os "
+                                    "lados/baixo e refaca)")
                             else:
                                 _texto_gravacao = (
                                     "NAO gravado (pior que o melhor da "
@@ -3495,9 +3525,16 @@ def main():
                                  "NAO FECHADO -- repita as poses com "
                                  "mais calma (parado ~2 s em cada)"))
                     else:
+                        _verdades_v = dict(poses_verdade_por_lado or {})
+                        if any(len(_lista) != len(poses_fisicas.poses)
+                               for _lista in _verdades_v.values()):
+                            print("  AVISO: as verdades gravadas sao de "
+                                  "outro numero de poses (rode J de "
+                                  "novo com as 4 poses); usando as "
+                                  "nominais")
+                            _verdades_v = {}
                         relatorio_pose = poses_fisicas.verificar(
-                            fusions, poses_por_lado=(poses_verdade_por_lado
-                                                     or None))
+                            fusions, poses_por_lado=(_verdades_v or None))
                         print("VERIFICACAO POR POSES FISICAS terminada "
                               f"(limite {POSES_FISICAS_LIMITE_POSE1_DEG:g} graus "
                               "na pose 1 e "
@@ -4180,20 +4217,16 @@ def main():
                 else:
                     captura_palma_plano.parar()
                     verificacao_palma.parar()
-                    _poses_ref = (poses_fisicas_com_mesa(
-                                      mesa_normal_camera, sinal=mesa_sinal)
-                                  if mesa_normal_camera is not None
-                                  else POSES_FISICAS_CALIBRACAO)
-                    poses_fisicas = ColetorPosesFisicas(poses=_poses_ref)
+                    poses_fisicas = ColetorPosesFisicas()
                     poses_fisicas.iniciar(now, modo="verificar")
                     poses_fisicas_fase_vista = None
                     print(
                         "VERIFICACAO POR POSES FISICAS (item 114) -- "
                         f"{len(poses_fisicas.poses)} poses x "
                         f"{POSES_FISICAS_POSE_SEC:g} s, segure PARADO em cada "
-                        "uma, com a PALMA MIRANDO A LENTE: 1) mao no CENTRO "
-                        "do quadro; 2) deslocada para a ESQUERDA (mesma "
-                        "altura); 3) deslocada para BAIXO (mesma coluna). A "
+                        "uma, com a PALMA MIRANDO A LENTE e a mao PERTO do "
+                        "sensor (~50 cm): 1) CENTRO do quadro; 2) BEM A "
+                        "ESQUERDA; 3) BEM A DIREITA; 4) BEM PARA BAIXO. A "
                         "verdade e a DIRECAO mao->lente medida pelo Kinect "
                         "(mesmas verdades do J). No fim sai PASS/FAIL e o "
                         "CERTIFICADO; V de novo cancela.")
@@ -4207,11 +4240,7 @@ def main():
                 else:
                     captura_palma_plano.parar()
                     verificacao_palma.parar()
-                    _poses_ref = (poses_fisicas_com_mesa(
-                                      mesa_normal_camera, sinal=mesa_sinal)
-                                  if mesa_normal_camera is not None
-                                  else POSES_FISICAS_CALIBRACAO)
-                    poses_fisicas = ColetorPosesFisicas(poses=_poses_ref)
+                    poses_fisicas = ColetorPosesFisicas()
                     poses_fisicas.iniciar(now, modo="calibrar")
                     print("  referencia das normais: "
                           + ("PLANO DA MESA medido"
@@ -4224,14 +4253,15 @@ def main():
                         f"{len(poses_fisicas.poses)} poses x "
                         f"{POSES_FISICAS_POSE_SEC:g} s. A verdade e' FISICA, "
                         "nao vem de planura: e a DIRECAO da sua mao ate a "
-                        "LENTE, medida pelo Kinect. Siga a instrucao na tela, "
-                        "sempre com a PALMA MIRANDO A LENTE, em 3 posicoes "
-                        "diferentes: 1) mao no CENTRO do quadro; 2) mao "
-                        "deslocada para a ESQUERDA do quadro (mesma altura); "
-                        "3) mao deslocada para BAIXO no quadro (mesma "
-                        "coluna). Segure PARADO ~2 s e mantenha as DUAS "
-                        "maos visiveis (o Kinect mede a posicao). J de novo "
-                        "cancela; no fim refaz T/f e grava com backup.")
+                        "LENTE, medida pelo Kinect. Sao 4 posicoes BEM "
+                        "ESPALHADAS (se ficarem parecidas a calibracao fica "
+                        "mal condicionada e a seta erra quando a mao gira). "
+                        "Sempre com a PALMA MIRANDO A LENTE e a mao PERTO do "
+                        "sensor (~50 cm): 1) CENTRO do quadro; 2) BEM A "
+                        "ESQUERDA (ainda no quadro); 3) BEM A DIREITA; 4) BEM "
+                        "PARA BAIXO (mesma coluna). Segure PARADO ~2 s em cada "
+                        "e mantenha as DUAS maos visiveis. J de novo cancela; "
+                        "no fim refaz T/f e grava com backup.")
             elif key == ord("p"):
                 hand_calib_active = False
                 hand_calib_samples_aux = []

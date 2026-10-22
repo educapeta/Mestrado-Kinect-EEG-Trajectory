@@ -1086,15 +1086,22 @@ def normal_robusta(historico, normal_anterior=None, tolerancia_deg=10.0,
 #: plana (~10-20 graus de execucao medidos). Os vetores sao NOMINAIS (so
 #: exibicao/fallback); o J mede a posicao real e recalcula a verdade.
 POSES_FISICAS_CALIBRACAO = (
-    ("MAO NO CENTRO DO QUADRO, PALMA MIRANDO A LENTE DO KINECT",
-     (0.0, 0.0, -1.0)),
-    ("MAO DESLOCADA PARA A ESQUERDA DO QUADRO (mesma altura), PALMA "
-     "MIRANDO A LENTE",
-     (-0.30, 0.0, -0.95)),
-    ("MAO DESLOCADA PARA BAIXO NO QUADRO (mesma coluna), PALMA MIRANDO "
-     "A LENTE",
-     (0.0, 0.30, -0.95)),
+    ("MAO PERTO DA LENTE (~50 cm), NO CENTRO DO QUADRO, PALMA MIRANDO A "
+     "LENTE", (0.0, 0.0, -1.0)),
+    ("MAO PERTO DA LENTE, BEM A ESQUERDA DO QUADRO (ainda no quadro), "
+     "PALMA MIRANDO A LENTE", (0.45, 0.0, -0.89)),
+    ("MAO PERTO DA LENTE, BEM A DIREITA DO QUADRO (ainda no quadro), "
+     "PALMA MIRANDO A LENTE", (-0.45, 0.0, -0.89)),
+    ("MAO PERTO DA LENTE, BEM PARA BAIXO NO QUADRO (mesma coluna), "
+     "PALMA MIRANDO A LENTE", (0.0, 0.45, -0.89)),
 )
+#: Angulo minimo (graus) entre as verdades das poses para a calibracao ser
+#: considerada BEM CONDICIONADA. Se as 3-4 poses apontam quase para a mesma
+#: direcao, o T/f acerta aquelas poses mas erra feio em outras orientacoes --
+#: medido no alinhamento salvo do usuario (poses a 1-13 graus): erro mediano de
+#: 12 (R) e 39 (L) graus em direcoes arbitrarias. Com ~30-60 graus o erro cai
+#: para ~2 graus. Poses muito parecidas NAO fecham o certificado.
+POSES_FISICAS_SPREAD_MIN_DEG = 18.0
 #: Duracao de cada pose fisica (s) e tempo para chegar na pose.
 POSES_FISICAS_POSE_SEC = 3.0
 POSES_FISICAS_SETTLE_SEC = 0.8
@@ -1427,9 +1434,19 @@ class ColetorPosesFisicas:
                 resultado["lados"][lado] = {"sem_amostras": True,
                                             "poses_insuficientes": []}
                 continue
+            direcoes = [np.asarray(vetor, np.float64)
+                        for _nome, vetor in poses_lado]
+            espalhamento = []
+            for i in range(len(direcoes)):
+                for j in range(i + 1, len(direcoes)):
+                    angulo = _angulo_entre(direcoes[i], direcoes[j])
+                    if angulo is not None:
+                        espalhamento.append(angulo)
             dados = self._calibrar_lado(lado, tuple(poses_lado))
             dados["poses_usadas"] = tuple(poses_lado)
             dados["posicoes"] = [list(map(float, p)) for p in posicoes]
+            dados["espalhamento_min_deg"] = (
+                float(min(espalhamento)) if espalhamento else None)
             resultado["lados"][lado] = dados
         resultado["fechado"] = self._fechado(resultado["lados"])
         resultado["poses_verdade"] = {
@@ -1512,6 +1529,10 @@ class ColetorPosesFisicas:
                           else POSES_FISICAS_LIMITE_MESA_DEG)
                 if erro is None or erro > limite:
                     return False
+            espalhamento = dados.get("espalhamento_min_deg")
+            if (espalhamento is not None
+                    and espalhamento < POSES_FISICAS_SPREAD_MIN_DEG):
+                return False
         return True
 
     def calibrar(self):

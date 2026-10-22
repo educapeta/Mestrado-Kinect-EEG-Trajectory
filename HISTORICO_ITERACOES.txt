@@ -7498,3 +7498,55 @@ periodica. A seta vermelha (IMU) agora esta validada contra a direcao fisica
 mao->lente; a seta verde do Kinect pode continuar como referencia visual, mas
 o "erro" mostrado contra ela nao deve ser usado para julgar a calibracao.
 
+
+================================================================================
+ITEM 119 (22/10/2026) - POR QUE O VETOR VERMELHO NAO ACOMPANHAVA A PALMA:
+    CALIBRACAO MAL CONDICIONADA (as 3 poses de mira ficaram quase iguais)
+================================================================================
+RELATO DO USUARIO: depois do J (que fechou com residuo 3.65/3.71 e V PASS), ao
+mexer as maos o vetor vermelho do IMU nao acompanha a palma corretamente.
+DIAGNOSTICO (medido nos arquivos gravados)
+  - As verdades das 3 poses gravadas no mesa_kinect.json eram QUASE IGUAIS:
+      right: angulos entre poses = 12.4 / 6.4 / 7.9 graus
+      left : angulos entre poses = 1.1 / 13.1 / 13.4 graus
+    ("palma mirando a lente" no centro/esquerda/baixo do quadro deu direcoes
+    praticamente identicas: as maos estavam a ~1 m e deslocadas so' 0.2-0.3 m).
+  - Isso torna o problema MAL CONDICIONADO: existem muitos T/f que acertam
+    aquelas 3 direcoes mas erram feio em outras orientacoes. Simulacao usando o
+    alinhamento SALVO como verdade e as verdades salvas (solve_palm_alignment,
+    3000 rotacoes aleatorias):
+      calibracao salva: erro mediano 11.9 (right) / 39.0 (left) graus;
+      p90 18.2 / 60.6; maximo 19.7 / 65.8.
+    Ou seja: o J "fechar" nas 3 poses nao garante nada fora daquele cone.
+  - A formula do vetor vivo e' identica a da calibracao (`palm_direction` usa
+    T R f com o mesmo rotation_matrix do J) -- nao era bug do desenho/formula.
+  - Simulacao com 4 direcoes espalhadas (~30-60 graus): erro mediano cai para
+    ~2.5 (right) / ~0.005 (left) graus -- a correcao certa e' ESPALHAR.
+CORRECAO (item 119)
+  1) `POSES_FISICAS_CALIBRACAO` agora tem 4 poses BEM ESPALHADAS com a mao
+     PERTO da lente (~50 cm), palma SEMPRE mirando a lente:
+       1) CENTRO do quadro; 2) BEM A ESQUERDA; 3) BEM A DIREITA; 4) BEM PARA
+       BAIXO (mesma coluna). A verdade continua geometrica (direcao mao->lente
+       medida pelo Kinect) -- mas agora as 4 direcoes abrem ~27-60 graus.
+  2) GATE DE ESPALHAMENTO: `POSES_FISICAS_SPREAD_MIN_DEG = 18`. O
+     `calibrar_por_posicoes` mede o menor angulo entre as verdades e o
+     `_fechado` exige >= 18 graus; o J imprime o espalhamento por lado e avisa
+     "POSES MUITO PARECIDAS: leve a mao mais para os lados/baixo e refaca".
+  3) NAO GRAVA calibracao mal condicionada: o J so' salva se o espalhamento
+     for >= 18 graus (alem de ser melhor da sessao). Fim das calibracoes
+     "fechadas" que nao acompanham a mao.
+  4) J sem fallback para a mesa: se o Kinect nao medir a posicao da mao em
+     alguma pose, o J avisa com clareza e NAO grava (mantenha as maos
+     visiveis); a pose de 50 cm exige maos no quadro.
+  5) V: se as verdades gravadas forem de outro numero de poses (ex.: J antigo
+     de 3 poses), avisa e usa as nominais; cabecalho/linhas mostram limites
+     por pose (10/16 graus).
+TESTES: grupos 12-15 ajustados para os coletores de 3 poses e o novo
+espalhamento; SUITE COMPLETA 59/59; smoke do tool sem crash (dica do console
+atualizada para as 4 poses).
+PROXIMO PASSO: rodar J de novo com as 4 poses (mao a ~50 cm da lente, palma
+sempre mirando a lente, centro/esquerda/direita/baixo, parado ~2 s, duas maos
+visiveis); o J imprime o espalhamento e so' grava se >= 18 graus. Depois V e
+conferir visualmente o vetor vermelho ao girar a mao. A calibracao antiga
+(3.65/3.71) estava mal condicionada -- sera substituida pela nova.
+

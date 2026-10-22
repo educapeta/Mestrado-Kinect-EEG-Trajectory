@@ -583,7 +583,9 @@ if _resolvido is not None:
     check("poses fisicas: erro por pose < 1 grau (verdade geometrica)",
           max(_erros_pose) < 1.0, np.round(_erros_pose, 3))
 
-_coletor = gt.ColetorPosesFisicas(seg_pose=1.0, settle=0.2)
+_coletor = gt.ColetorPosesFisicas(
+    poses=tuple(gt.POSES_FISICAS_CALIBRACAO[:3]),
+    seg_pose=1.0, settle=0.2)
 _coletor.iniciar(0.0, "calibrar")
 for _indice, _rot in enumerate(_rotacoes):
     for _dt in (0.3, 0.5, 0.7, 0.9):
@@ -604,7 +606,9 @@ for _lado in ("right", "left"):
     _dados = _calibrado["lados"][_lado]
     _fusoes[_lado].set_palm_alignment(_dados["T"], _dados["f"],
                                       _dados["residuo"])
-_verificador = gt.ColetorPosesFisicas(seg_pose=1.0, settle=0.2)
+_verificador = gt.ColetorPosesFisicas(
+    poses=tuple(gt.POSES_FISICAS_CALIBRACAO[:3]),
+    seg_pose=1.0, settle=0.2)
 _verificador.iniciar(0.0, "verificar")
 for _indice, _rot in enumerate(_rotacoes):
     for _dt in (0.3, 0.5, 0.7, 0.9):
@@ -665,9 +669,8 @@ check("poses com mesa: pose 2 e 3 = -n e +n da mesa",
       and np.allclose(_poses_mesa[2][1], _n_verdade))
 check("plano da mesa: nuvem pequena -> None",
       gt.ajustar_plano_mesa(np.zeros((10, 3))) is None)
-check("tool mede a mesa no depth e usa como referencia",
+check("tool mede a mesa no depth (nivel/inclinacao)",
       "medir_plano_mesa" in fonte_tool
-      and "poses_fisicas_com_mesa" in fonte_tool
       and "mesa_kinect.json" in fonte_tool)
 _poses_sinal_menos = gt.poses_fisicas_com_mesa(_n_verdade, sinal=-1.0)
 check("poses com mesa: sinal -1 inverte as poses 2/3",
@@ -675,7 +678,9 @@ check("poses com mesa: sinal -1 inverte as poses 2/3",
       and np.allclose(_poses_sinal_menos[2][1], -_n_verdade))
 
 # calibra_mesa escolhe o sinal certo pelo residuo (y do Kinect ambiguo)
-_coletor_mesa = gt.ColetorPosesFisicas(seg_pose=1.0, settle=0.2)
+_coletor_mesa = gt.ColetorPosesFisicas(
+    poses=tuple(gt.POSES_FISICAS_CALIBRACAO[:3]),
+    seg_pose=1.0, settle=0.2)
 _coletor_mesa.iniciar(0.0, "calibrar")
 _poses_verdade = gt.poses_fisicas_com_mesa(_n_verdade, sinal=1.0)
 for _indice, (_nome, _vetor) in enumerate(_poses_verdade):
@@ -691,9 +696,9 @@ check("calibrar_mesa escolhe o sinal +1 e FECHA o certificado",
       (_resultado_mesa.get("sinal_mesa"),
        {_l: _resultado_mesa["lados"][_l].get("residuo")
         for _l in ("right", "left")}))
-check("tool resolve o sinal da mesa e usa no J/V",
-      "calibrar_mesa" in fonte_tool
-      and "mesa_sinal" in fonte_tool)
+check("tool usa calibracao por posicao + gate de espalhamento",
+      "calibrar_por_posicoes" in fonte_tool
+      and "POSES_FISICAS_SPREAD_MIN_DEG" in fonte_tool)
 
 # ============================================================================
 # 14) ANGULOS RELATIVOS DO KINECT: corrige a execucao da mao sem herdar
@@ -746,7 +751,9 @@ check("angulos relativos: reconstroi as verdades reais",
        for a, b in zip(_reconstruidas, _verdades_reais)])
 #: calibra com amostras sinteticas cujas rotacoes seguem as verdades
 #: reais e normais do Kinect com vies: o fit deve FECHAR
-_coletor_ang = gt.ColetorPosesFisicas(seg_pose=1.0, settle=0.2)
+_coletor_ang = gt.ColetorPosesFisicas(
+    poses=tuple(gt.POSES_FISICAS_CALIBRACAO[:3]),
+    seg_pose=1.0, settle=0.2)
 _coletor_ang.iniciar(0.0, "calibrar")
 for _indice, _vetor in enumerate(_verdades_reais):
     _alvo = _T_verdade.T @ _vetor
@@ -776,16 +783,18 @@ check("tool coleta normais do Kinect e usa no J/V",
 # 15) CALIBRACAO POR POSICAO DA MAO: verdade = direcao mao->lente (item 117)
 # ============================================================================
 print("15) calibracao por posicao da mao (palma mirando a lente)")
-_posicoes_verdade = [np.array([0.00, 0.00, 0.90]),
-                     np.array([0.35, 0.00, 0.90]),
-                     np.array([0.00, -0.35, 0.90])]
+_posicoes_verdade = [np.array([0.00, 0.00, 0.70]),
+                     np.array([0.40, 0.00, 0.70]),
+                     np.array([0.00, -0.40, 0.70])]
 _verdades_posicao = [(-p / np.linalg.norm(p))
                      for p in _posicoes_verdade]
 _rotacoes_posicao = []
 for _vetor in _verdades_posicao:
     _alvo = _T_verdade.T @ _vetor
     _rotacoes_posicao.append(_rot_entre(_f_verdade, _alvo))
-_coletor_pos = gt.ColetorPosesFisicas(seg_pose=1.0, settle=0.2)
+_coletor_pos = gt.ColetorPosesFisicas(
+    poses=tuple(gt.POSES_FISICAS_CALIBRACAO[:3]),
+    seg_pose=1.0, settle=0.2)
 _coletor_pos.iniciar(0.0, "calibrar")
 for _indice, _rot in enumerate(_rotacoes_posicao):
     for _dt in (0.3, 0.5, 0.7, 0.9):
@@ -813,7 +822,9 @@ for _lado in ("right", "left"):
 check("por posicao: verdade gravada = direcao mao->lente",
       bool(_erros_verdade) and max(_erros_verdade) < 1.0,
       np.round(_erros_verdade, 2))
-_coletor_sem_pos = gt.ColetorPosesFisicas(seg_pose=1.0, settle=0.2)
+_coletor_sem_pos = gt.ColetorPosesFisicas(
+    poses=tuple(gt.POSES_FISICAS_CALIBRACAO[:3]),
+    seg_pose=1.0, settle=0.2)
 _coletor_sem_pos.iniciar(0.0, "calibrar")
 for _indice, _rot in enumerate(_rotacoes_posicao):
     for _lado in ("right", "left"):
