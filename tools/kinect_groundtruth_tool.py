@@ -3391,12 +3391,18 @@ def main():
                                               "opostas; usar o apoio "
                                               "das maos ajuda")
                                 else:
-                                    print(f"  {_lado_diag}: Kinect nao "
-                                          "mediu as normais das 3 poses "
-                                          "(mao fora de quadro?) -- "
-                                          "usando o plano da mesa como "
-                                          "verdade; mantenha as maos "
-                                          "visiveis durante o J")
+                                    _modo_verdade_lado = resultado_poses.get(
+                                        "modo_verdade", "")
+                                    if _modo_verdade_lado == "posicao_da_mao":
+                                        print(f"  {_lado_diag}: verdade = "
+                                              "POSICAO da mao nas 3 poses "
+                                              "(direcao mao->lente medida pelo Kinect)")
+                                    else:
+                                        print(f"  {_lado_diag}: Kinect nao "
+                                              "mediu as normais das 3 poses "
+                                              "(mao fora de quadro?) -- usando o "
+                                              "plano da mesa como verdade; mantenha as "
+                                              "maos visiveis durante o J")
                         else:
                             resultado_poses = poses_fisicas.calibrar()
                             print("CALIBRACAO POR POSES FISICAS "
@@ -3493,8 +3499,9 @@ def main():
                             fusions, poses_por_lado=(poses_verdade_por_lado
                                                      or None))
                         print("VERIFICACAO POR POSES FISICAS terminada "
-                              f"(limite {POSES_FISICAS_LIMITE_DEG:g} "
-                              "graus/pose):")
+                              f"(limite {POSES_FISICAS_LIMITE_POSE1_DEG:g} graus "
+                              "na pose 1 e "
+                              f"{POSES_FISICAS_LIMITE_MESA_DEG:g} nas demais):")
                         for lado in ("right", "left"):
                             dados_pose = relatorio_pose["lados"].get(
                                 lado, {})
@@ -3519,7 +3526,9 @@ def main():
                                           f"{stats_pose['media']:.1f} | "
                                           f"p90 {stats_pose['p90']:.1f} | "
                                           f"max {stats_pose['max']:.1f} "
-                                          "graus -- "
+                                          "graus (limite "
+                                          f"{stats_pose.get('limite_graus', 12.0):.0f}) "
+                                          "-- "
                                           + ("PASS" if stats_pose["passou"]
                                              else "FAIL"))
                         if relatorio_pose["fechado"]:

@@ -1624,6 +1624,7 @@ class ColetorPosesFisicas:
                     limite = (POSES_FISICAS_LIMITE_POSE1_DEG if indice == 0
                               else POSES_FISICAS_LIMITE_MESA_DEG)
                     stats["passou"] = stats["media"] <= limite
+                    stats["limite_graus"] = float(limite)
                 else:
                     stats = {"n": len(valores), "media": None, "p90": None,
                              "max": None, "passou": False}

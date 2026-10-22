@@ -1,0 +1,67 @@
+{
+  "normal": [
+    0.02819146953566034,
+    0.6271312856422674,
+    -0.7784032320167336
+  ],
+  "tilt_deg": 51.16121030773878,
+  "inliers": 2438,
+  "fracao": 0.4873076154307416,
+  "sinal": 1.0,
+  "quando": "2026-10-22 17:34:21",
+  "poses_verdade": {
+    "right": [
+      [
+        "MAO NO CENTRO DO QUADRO, PALMA MIRANDO A LENTE DO KINECT",
+        [
+          -0.15222563693511226,
+          -0.3180309384650277,
+          -0.9357797164069934
+        ]
+      ],
+      [
+        "MAO DESLOCADA PARA A ESQUERDA DO QUADRO (mesma altura), PALMA MIRANDO A LENTE",
+        [
+          -0.31972716665438605,
+          -0.3053224706419375,
+          -0.8969686325754439
+        ]
+      ],
+      [
+        "MAO DESLOCADA PARA BAIXO NO QUADRO (mesma coluna), PALMA MIRANDO A LENTE",
+        [
+          -0.26789263076051484,
+          -0.4092496267174643,
+          -0.8722088519476436
+        ]
+      ]
+    ],
+    "left": [
+      [
+        "MAO NO CENTRO DO QUADRO, PALMA MIRANDO A LENTE DO KINECT",
+        [
+          0.09379495204470598,
+          -0.32708977326183103,
+          -0.9403269576048828
+        ]
+      ],
+      [
+        "MAO DESLOCADA PARA A ESQUERDA DO QUADRO (mesma altura), PALMA MIRANDO A LENTE",
+        [
+          -0.10294310528104206,
+          -0.33794834177312616,
+          -0.9355178434257098
+        ]
+      ],
+      [
+        "MAO DESLOCADA PARA BAIXO NO QUADRO (mesma coluna), PALMA MIRANDO A LENTE",
+        [
+          0.027032180315114267,
+          -0.3980002654211553,
+          -0.916986940993219
+        ]
+      ]
+    ]
+  },
+  "angulos": {}
+}

@@ -7450,3 +7450,51 @@ PROXIMO PASSO: rodar J (3 poses mirando a lente em centro/esquerda/baixo, duas
 maos visiveis e paradas ~2 s) e depois V. Se o Kinect nao enxergar a mao em
 alguma pose, o console avisa qual e cai para o plano da mesa.
 
+
+================================================================================
+ITEM 118 (22/10/2026) - CALIBRACAO FECHADA PELO USUARIO COM AS POSES POR
+    "PALMA MIRANDO A LENTE": residuos 3.65/3.71 graus e V com PASS em todas
+    as 6 poses
+================================================================================
+RESULTADO DO RUN DO USUARIO (comando --log-palma --exposicao "0:-7,1:-5"):
+  J (1a tentativa):
+    right: 69 amostras | residuo 4.88 graus | erros por pose 5.5 / 5.7 / 2.6
+    left : 69 amostras | residuo 3.71 graus | erros por pose 3.0 / 2.9 / 1.7
+    CERTIFICADO: FECHADO (3 poses dentro do limite)
+  J (2a tentativa, apos um COMError transitorio no depth):
+    right: residuo 3.65 (2.3 / 2.6 / 4.6) -> GRAVADO (melhorou)
+    left : residuo 3.96 -> NAO gravado (melhor da sessao 3.71 mantido)
+    CERTIFICADO: FECHADO
+  V (repete as 3 poses mirando a lente):
+    right: media 7.5 / 7.7 / 6.8 graus (p90 8.0 / 10.8 / 16.2) -- PASS
+    left : media 6.6 / 6.1 / 9.0 graus (p90 8.9 / 7.3 / 15.3) -- PASS
+    CERTIFICADO: FECHADO
+  Ou seja: o protocolo por DIRECAO MAO->LENTE (item 117) funcionou de primeira;
+  o melhor-da-sessao (item 116) impediu que a 2a tentativa piorasse o left;
+  os limits por pose (item 116: pose1 10 graus, demais 16) foram honrados.
+OBSERVACAO DE CAMPO
+  - Durante a 2a tentativa de J apareceu "ERRO no fluxo de profundidade
+    (AcquireFrame): COMError -2147467259" -- erro transitorio do runtime do
+    Kinect; o tool sobreviveu, reabriu/continuou e a captura terminou. Se
+    repetir, conferir USB/energia do adaptador.
+  - Os numeros AO VIVO "erro palma/erro plano" (contra o plano instantaneo do
+    Kinect) continuam grandes as vezes (20-60 graus) porque a referencia do
+    Kinect e ruidosa/viesada e NAO e' a verdade da calibracao. A validacao e'
+    o certificado contra as verdades geometricas (poses mirando a lente).
+AJUSTES DESTE ITEM
+  1) Mensagem do J no modo POSICAO: antes dizia "Kinect nao mediu as normais
+     das 3 poses... usando o plano da mesa"; agora diz "verdade = POSICAO da
+     mao nas 3 poses (direcao mao->lente)" quando `modo_verdade ==
+     "posicao_da_mao"`. A mensagem antiga so' aparece no fallback real.
+  2) V: cabecalho mostra os limites por pose (pose 1: 10 graus; demais: 16
+     graus) e cada linha de pose mostra o seu limite; `verificar` expoe
+     `limite_graus` em cada estatistica.
+TESTES: test_palma_plano PASS; SUITE COMPLETA 59/59; smoke do tool sem crash.
+ALINHAMENTOS SALVOS: imu_palm_alignment_right.json residuo 3.65;
+imu_palm_alignment_left.json residuo 3.71 (backups .json.bak guardados).
+PROXIMO PASSO: rodar o paradigma/experimento com o alinhamento fechado. Se
+quiser, repetir o J (o melhor da sessao e' mantido) ou usar o V como checagem
+periodica. A seta vermelha (IMU) agora esta validada contra a direcao fisica
+mao->lente; a seta verde do Kinect pode continuar como referencia visual, mas
+o "erro" mostrado contra ela nao deve ser usado para julgar a calibracao.
+
