@@ -6682,3 +6682,62 @@ PENDENCIAS
   - Rodar a suite completa com a bancada livre (tool aberto segura as portas
     UDP 4210/4211 e o ritual de calibracao falha de proposito).
 
+
+================================================================================
+ITEM 103 (22/10/2026) - CERTIFICADO GUIADO DA PALMA (tecla V): prova POSE A
+    POSE de que o vetor derivado do IMU bate com a direcao anatomica da palma
+================================================================================
+CONTEXTO/PEDIDO: "estamos tentando fechar esta questao do vetor para onde a
+palma aponta de uma vez por todas; os valores de rotacao do ESP tem que bater com
+aonde exatamente a palma da mao esta apontando."
+ESCLARECIMENTO DE ARQUITETURA (importante): o rpy do ESP32 NAO e' (e nunca sera')
+diretamente a orientacao no referencial da camera -- o filtro de 6 eixos nao tem
+magnetometro e o "mundo" do IMU e' arbitrario a cada boot (roll/pitch pela
+gravidade, yaw livre). O que PODE e DEVE bater e' a direcao da palma DERIVADA:
+`T R f` (T = mundo do IMU -> camera por luva, f = direcao da palma no corpo do
+sensor, os dois resolvidos na calibracao). A verificacao honesta e' comparar
+`T R f` com a direcao anatomica medida pelo Kinect (normal do PLANO MEDIO do
+dorso, item 102) POSE A POSE. E' isso que este item entrega.
+
+IMPLEMENTADO
+  - `VerificacaoPosesPalma` (kinect_imu_groundtruth.py): 6 poses guiadas
+    (palma para o Kinect, para cima, para baixo, para a esquerda, para a direita,
+    e girar o punho 360), 2,5 s cada, 0,6 s de settle por pose; guarda
+    (pose, rotacao, normal_plano); `relatorio(fusions)` calcula n/media/p90/max
+    do erro `T R f` x normal do plano para CADA pose e CADA mao e devolve
+    PASS/FAIL + CERTIFICADO FECHADO/NAO FECHADO (limite 15 graus).
+  - Tool groundtruth: tecla V liga/desliga. A pose atual aparece NO VIDEO
+    ("VERIFICACAO 3/6: PALMA PARA BAIXO (1.2 s)") e o console anuncia cada
+    troca; no fim imprime a tabela por lado e o certificado, listando as poses
+    ruins. Se NAO FECHADO: rodar J (refit pela verdade do plano) e repetir V.
+  - Analisador offline (tools/calibra_palma_plano.py) agora tambem imprime o
+    CERTIFICADO (verdade do plano) a partir do CSV do D.
+  - Diagnosticos: se o certificado falhar SO' nas poses de palma para cima/baixo
+    -> problema de sinal/f; se falhar em todas -> montagem/T (rodar J); se
+    falhar em UMA mao so' -> luva/montagem daquele lado (ou --imu-portas).
+
+MEDIDO
+  - CSV canonico de 19/10/2026 (D): certificado offline FECHADO -- fases <= 15
+    graus nos dois lados (right 11,9/4,1/14,4/10,8; left 7,6/6,3/1,4/4,9).
+  - D de 21/10: alinhamento SALVO errava 43-95 graus (left) nas poses de hoje
+    (boot/montagem diferentes) -> por isso o certificado FALHA ate' rodar J.
+  - No teste sintetico: alinhamento perfeito -> FECHADO com medias ~0; uma pose
+    deslocada 30 graus -> NAO FECHADO e a pose 2 e' identificada.
+
+TESTES: test_palma_plano.py ampliado (5 grupos; o 5o cobre o certificado:
+FECHADO com alinhamento perfeito, NAO FECHADO com pose de 30 graus identificada,
+settle, cancelar, sem alinhamento) PASS; regressoes test_palm_alignment,
+test_palm_seta_pose, test_reancora_yaw, test_imu_reset verdes.
+
+PROCEDIMENTO PARA FECHAR (no bench, ~1 min)
+  1) reiniciar o tool (carrega o codigo novo + ritual de bias dos IMUs com ENTER);
+  2) tecla J: girar as DUAS maos devagar 14 s (palma para o Kinect, cima, baixo,
+     lados) -> ele refita T/f com a verdade do plano e grava com backup;
+  3) tecla V: seguir as 6 poses na tela -> sai PASS/FAIL por pose e o
+     CERTIFICADO. FECHADO = questao encerrada com numero (<= 15 graus/pose);
+     NAO FECHADO = olhar QUAIS poses falharam (a mensagem diz) e repetir J/V.
+  4) opcional: mandar o CSV do D para o certificado offline registrar o numero.
+
+PENDENCIAS: rodar a suite completa com a bancada livre; registrar aqui o
+resultado do certificado V (FECHADO/NAO FECHADO + poses) da proxima sessao.
+

@@ -1801,7 +1801,7 @@ def main():
     }
     print(f"IMU: direita na porta {receivers['right'].port} | esquerda na porta "
           f"{receivers['left'].port}")
-    print("TECLAS (C/B/O/D/J/K/H/L/R): clique ANTES em uma janela de VIDEO -- sem "
+    print("TECLAS (C/B/O/D/J/K/H/L/R/V): clique ANTES em uma janela de VIDEO -- sem "
           "foco no video o OpenCV nao recebe a tecla (a tecla O parece nao "
           "funcionar e o console fica mudo).")
     for receiver in receivers.values():
@@ -1974,6 +1974,11 @@ def main():
     # tecla J): mesma mecanica da O, mas cada amostra usa a normal do plano
     # punho+4 MCPs (mais estavel que o produto vetorial de 3 pontos).
     captura_palma_plano = CapturaAlinhamentoPalma()
+    # VERIFICACAO GUIADA DA PALMA (item 103, tecla V): 6 poses com a verdade do
+    # plano do dorso -> certificado FECHADO/NAO FECHADO pose a pose. E' a prova
+    # objetiva de que o vetor derivado do IMU coincide com a direcao anatomica.
+    verificacao_palma = VerificacaoPosesPalma()
+    verif_fase_vista = None
     # Diagnostico da palma por MOVIMENTO PROGRAMADO (tecla D): grava
     # palm_diag_<data>_<hora>.csv e, no fim, o resumo por (fase, lado). E' o
     # log que faltava para separar "calibracao sistematicamente errada" de
@@ -2982,6 +2987,14 @@ def main():
                 if captura_palma_plano.ativa and normal_plano_lado is not None:
                     captura_palma_plano.coletar(lado, now, sample_lado,
                                                 normal_plano_lado)
+                if verificacao_palma.ativa and normal_plano_lado is not None:
+                    rotacao_verif = (None if sample_lado is None
+                                     else rotation_matrix(
+                                         sample_lado.roll_deg,
+                                         sample_lado.pitch_deg,
+                                         sample_lado.yaw_deg))
+                    verificacao_palma.coletar(lado, now, rotacao_verif,
+                                              normal_plano_lado)
                 # Diagnostico da palma (tecla D): a linha do CSV do diagnostico
                 # e' gravada AQUI, logo depois do erro ao vivo -- as tres coisas
                 # tem de ser do MESMO frame e da MESMA amostra de IMU, senao a
@@ -3092,6 +3105,53 @@ def main():
                           f"alinhamento ANTERIOR {erro_antes:.1f} graus | "
                           + (f"gravado em {palm_alignment_path(lado).name}"
                              if gravou else "NAO gravado"))
+            # --- VERIFICACAO GUIADA DA PALMA (tecla V, item 103) --------------
+            if verificacao_palma.ativa:
+                fase_verif = verificacao_palma.fase_atual(now)
+                if fase_verif is None:
+                    verificacao_palma.parar()
+                    relatorio_verif = verificacao_palma.relatorio(fusions)
+                    print("VERIFICACAO DA PALMA terminada (limite "
+                          f"{relatorio_verif['limite_graus']:g} graus/pose):")
+                    for lado in ("right", "left"):
+                        dados_verif = relatorio_verif["lados"][lado]
+                        if dados_verif.get("sem_alinhamento"):
+                            print(f"  {lado}: SEM ALINHAMENTO carregado -- "
+                                  "aperte O ou J antes de verificar")
+                            continue
+                        print(f"  {lado}:")
+                        for indice, nome in enumerate(relatorio_verif["poses"]):
+                            stats = dados_verif["poses"][indice]
+                            if stats["media"] is None:
+                                print(f"    {indice + 1}. {nome}: amostras "
+                                      f"insuficientes ({stats['n']}) -- FAIL")
+                            else:
+                                print(f"    {indice + 1}. {nome}: "
+                                      f"n={stats['n']} | media "
+                                      f"{stats['media']:.1f} | p90 "
+                                      f"{stats['p90']:.1f} | max "
+                                      f"{stats['max']:.1f} graus -- "
+                                      + ("PASS" if stats["passou"] else "FAIL"))
+                    if relatorio_verif["fechado"]:
+                        print("  CERTIFICADO: FECHADO -- o vetor do IMU bate com "
+                              "a direcao anatomica da palma em TODAS as poses "
+                              "(<= limite).")
+                    else:
+                        print("  CERTIFICADO: NAO FECHADO -- poses ruins: "
+                              + "; ".join(
+                                  f"{lado_v} {indice_v} ({nome_v}, "
+                                  f"{media_v:.1f} graus)"
+                                  for lado_v, indice_v, nome_v, media_v
+                                  in relatorio_verif["poses_ruins"]))
+                        print("  -> rode J (refit pelo plano do dorso) e repita "
+                              "V; se persistir, confira montagem/luvas "
+                              "trocadas (--imu-portas)")
+                    verif_fase_vista = None
+                elif fase_verif[0] != verif_fase_vista:
+                    verif_fase_vista = fase_verif[0]
+                    print(f"VERIFICACAO PALMA pose {fase_verif[0] + 1}/"
+                          f"{len(verificacao_palma.poses)}: {fase_verif[1]} "
+                          f"({fase_verif[2]:.1f} s)", flush=True)
             # --- DIAGNOSTICO DA PALMA (tecla D): fase e fim --------------------
             # Roda UMA vez por iteracao (depois do laco dos lados): trocar a
             # fase no meio do laco faria uma mao gravar na fase nova e a outra
@@ -3270,6 +3330,17 @@ def main():
                         tracker.draw_palm_vector_custom(
                             display, mao["landmarks"], normal_plano,
                             cor=(0, 255, 0), rotulo=rotulo)
+            if display is not None and verificacao_palma.ativa:
+                fase_verif_display = verificacao_palma.fase_atual(now)
+                if fase_verif_display is not None:
+                    cv2.putText(
+                        display,
+                        f"VERIFICACAO {fase_verif_display[0] + 1}/"
+                        f"{len(verificacao_palma.poses)}: "
+                        f"{fase_verif_display[1]} "
+                        f"({fase_verif_display[2]:.1f} s)",
+                        (12, 80), cv2.FONT_HERSHEY_SIMPLEX, 0.7,
+                        (0, 255, 255), 2)
             depth_status = "depth: sem frame"
             stats = tracker.depth_stats()
             if stats is not None:
@@ -3490,6 +3561,20 @@ def main():
                         overlay_log_file.close()
                         overlay_log_file = None
                     print(f"Log overlay DESLIGADO (arquivo em {OVERLAY_LOG_PATH.name})")
+            elif key == ord("v"):
+                # VERIFICACAO GUIADA (item 103): 6 poses -> certificado.
+                if verificacao_palma.ativa:
+                    verificacao_palma.parar()
+                    print("Verificacao guiada da palma cancelada.")
+                else:
+                    verificacao_palma.iniciar(now)
+                    verif_fase_vista = None
+                    print(
+                        "VERIFICACAO GUIADA DA PALMA (6 poses x "
+                        f"{VERIFICACAO_POSE_SEC:g} s): siga a instrucao na "
+                        "tela. A verdade e' o PLANO MEDIO do dorso; no fim sai "
+                        "PASS/FAIL por pose e o CERTIFICADO FECHADO/NAO "
+                        "FECHADO. Use as DUAS maos; V de novo cancela.")
             elif key == ord("j"):
                 # CALIBRACAO POR PLANO DO DORSO (item 102): a verdade e' o plano
                 # medio punho+4 MCPs (mais estavel que os 3 pontos da O). No fim

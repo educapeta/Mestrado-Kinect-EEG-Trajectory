@@ -840,6 +840,177 @@ def palm_normal_from_plane(pontos, lado=None, eps=1e-9, rms_max_m=0.030):
         return None, None
     return normal, rms
 
+
+#: Poses da VERIFICACAO GUIADA da palma (tecla V do groundtruth tool, item 103).
+#: As 5 primeiras cobrem o espaco de orientacoes (frente/cima/baixo/lados); a
+#: sexta exercita o punho girando. Cada linha e' a instrucao que aparece no video
+#: e no console: o experimentador faz a pose e segura ate' a troca.
+POSES_VERIFICACAO_PALMA = (
+    "PALMA PARA O KINECT (de frente para o sensor)",
+    "PALMA PARA CIMA (para o teto)",
+    "PALMA PARA BAIXO (para a mesa)",
+    "PALMA PARA A ESQUERDA",
+    "PALMA PARA A DIREITA",
+    "GIRE O PUNHO DEVAGAR (360 graus, sem sair do quadro)",
+)
+#: Duracao de cada pose da verificacao guiada (s).
+VERIFICACAO_POSE_SEC = 2.5
+#: Tempo (s) descartado no inicio de cada pose (tempo de chegar na pose).
+VERIFICACAO_SETTLE_SEC = 0.6
+#: Limite (graus) do certificado "FECHADO" -- o MESMO espirito do limite por
+#: fase do diagnostico (15 graus), mas aqui e' a prova pose a pose.
+VERIFICACAO_LIMITE_DEG = 15.0
+
+
+class VerificacaoPosesPalma:
+    """Coleta pose a pose e emite o CERTIFICADO: o vetor do IMU bate com a verdade?
+
+    A verdade e' a normal do PLANO MEDIO DO DORSO (`palm_normal_from_plane`,
+    item 102). A previsao e' `T R f` do alinhamento carregado -- o MESMO da seta
+    do video. Para cada pose (direita e esquerda) calcula n/media/p90/max do
+    erro e classifica PASS/FAIL; no fim da' o veredito FECHADO (todas as poses
+    <= `limite` graus) ou NAO FECHADO (lista as poses ruins). E' como se fecha a
+    questao "o IMU aponta para onde a palma aponta?" com numeros, nao com
+    impressao -- se nao fechar, o proximo passo e' refitar (tecla J) e repetir.
+
+    Nao depende de Kinect/cv2: o tool injeta `(rotacao, normal_plano)` por frame
+    e chama `relatorio(fusions)` no fim (testavel com fusions falsas).
+    """
+
+    def __init__(self, poses=POSES_VERIFICACAO_PALMA,
+                 seg_pose=VERIFICACAO_POSE_SEC,
+                 settle=VERIFICACAO_SETTLE_SEC,
+                 limite=VERIFICACAO_LIMITE_DEG):
+        self.poses = tuple(poses)
+        self.seg_pose = float(seg_pose)
+        self.settle = float(settle)
+        self.limite_graus = float(limite)
+        self._ativa = False
+        self._t0 = 0.0
+        self._amostras = {"right": [], "left": []}   # [(pose_idx, R, normal)]
+
+    def iniciar(self, agora):
+        self._ativa = True
+        self._t0 = float(agora)
+        self._amostras = {"right": [], "left": []}
+
+    def parar(self):
+        self._ativa = False
+
+    @property
+    def ativa(self):
+        return self._ativa
+
+    @property
+    def duracao_s(self):
+        return len(self.poses) * self.seg_pose
+
+    def fase_atual(self, agora):
+        """(indice, nome, restante_s) da pose agora, ou None se terminou."""
+        if not self._ativa:
+            return None
+        decorrido = float(agora) - self._t0
+        if decorrido < 0.0:
+            return None
+        total = self.duracao_s
+        if decorrido >= total:
+            return None
+        indice = int(decorrido // self.seg_pose)
+        indice = min(max(indice, 0), len(self.poses) - 1)
+        restante = (indice + 1) * self.seg_pose - decorrido
+        return indice, self.poses[indice], max(0.0, restante)
+
+    def coletar(self, lado, agora, rotacao, normal_camera):
+        """Guarda uma amostra (pose atual) se passou o settle da pose."""
+        if not self._ativa:
+            return False
+        fase = self.fase_atual(agora)
+        if fase is None:
+            return False
+        indice = fase[0]
+        dentro = (float(agora) - self._t0) - indice * self.seg_pose
+        if dentro < self.settle:
+            return False
+        if rotacao is None or normal_camera is None:
+            return False
+        rot = np.asarray(rotacao, np.float64).reshape(3, 3)
+        normal = np.asarray(normal_camera, np.float64).reshape(3)
+        norma = float(np.linalg.norm(normal))
+        if not (np.isfinite(rot).all() and np.isfinite(normal).all()):
+            return False
+        if norma < 1e-9:
+            return False
+        self._amostras[lado].append((indice, rot, normal / norma))
+        return True
+
+    def contar(self, lado, indice_pose=None):
+        if indice_pose is None:
+            return len(self._amostras.get(lado, ()))
+        return sum(1 for pose, _r, _n in self._amostras.get(lado, ())
+                   if pose == indice_pose)
+
+    def relatorio(self, fusions, limite=None):
+        """CERTIFICADO: {lados: {lado: {poses: {...}}}, fechado, poses_ruins}.
+
+        `fusions` = {"right": PositionFusion, "left": PositionFusion} (ou um
+        objeto com `.get`/intexacao). Usa `imu_to_camera` e
+        `palm_reference_body` -- se faltar, marca o lado sem alinhamento.
+        """
+        limite = self.limite_graus if limite is None else float(limite)
+
+        def erro_graus(previsto, verdade):
+            norma = float(np.linalg.norm(previsto))
+            if norma < 1e-9:
+                return float("nan")
+            cosseno = float(np.dot(previsto / norma, verdade))
+            return float(np.degrees(np.arccos(np.clip(cosseno, -1.0, 1.0))))
+
+        resultado = {"limite_graus": limite, "poses": self.poses,
+                     "lados": {}, "fechado": False, "poses_ruins": []}
+        for lado in ("right", "left"):
+            fusao = (fusions.get(lado) if hasattr(fusions, "get")
+                     else fusions[lado])
+            t_matriz = getattr(fusao, "imu_to_camera", None)
+            f_corpo = getattr(fusao, "palm_reference_body", None)
+            dados = {"poses": {}, "sem_alinhamento": False}
+            if t_matriz is None or f_corpo is None:
+                dados["sem_alinhamento"] = True
+                resultado["lados"][lado] = dados
+                continue
+            t_matriz = np.asarray(t_matriz, np.float64).reshape(3, 3)
+            f_corpo = np.asarray(f_corpo, np.float64).reshape(3)
+            f_corpo = f_corpo / max(1e-12, float(np.linalg.norm(f_corpo)))
+            erros_pose = {}
+            for indice, rotacao, normal in self._amostras[lado]:
+                previsto = t_matriz @ rotacao @ f_corpo
+                erros_pose.setdefault(indice, []).append(
+                    erro_graus(previsto, normal))
+            ok_lado = True
+            for indice, nome in enumerate(self.poses):
+                valores = np.asarray([v for v in erros_pose.get(indice, [])
+                                      if np.isfinite(v)])
+                if valores.size >= 3:
+                    stats = {"n": int(valores.size),
+                             "media": float(np.mean(valores)),
+                             "p90": float(np.percentile(valores, 90)),
+                             "max": float(np.max(valores))}
+                    stats["passou"] = stats["media"] <= limite
+                else:
+                    stats = {"n": int(valores.size), "media": None,
+                             "p90": None, "max": None, "passou": False}
+                dados["poses"][indice] = stats
+                if not stats["passou"]:
+                    ok_lado = False
+                    resultado["poses_ruins"].append(
+                        (lado, indice + 1, nome, stats.get("media")))
+            dados["fechado"] = ok_lado
+            resultado["lados"][lado] = dados
+        resultado["fechado"] = all(
+            dados.get("fechado") for dados in resultado["lados"].values()
+        )
+        return resultado
+
+
 BODY_CONNECTIONS = [
     (PyKinectV2.JointType_Head, PyKinectV2.JointType_Neck),
     (PyKinectV2.JointType_Neck, PyKinectV2.JointType_SpineShoulder),

@@ -265,12 +265,30 @@ def analisa(caminho, salvar=False, settle=SETTLE_S, limite=LIMITE_DEG):
         else:
             print(f"  sem {caminho_salvo.name}: nada carregado pelo tool")
         resultados[lado] = {"t_novo": t_novo, "f_novo": f_novo,
-                            "residuo": residuo_novo}
+                            "residuo": residuo_novo,
+                            "fases_salvo": {fase: erro
+                                            for fase, (_n, erro)
+                                            in erros_salvo.items()}}
         if salvar and salvo is not None:
             if _grava_alinhamento(lado, t_novo, f_novo, residuo_novo):
                 print(f"  gravado: {ARQUIVOS_ALINHAMENTO[lado]} (anterior em "
                       ".json.bak)")
 
+    # --- CERTIFICADO FINAL (verdade do plano) -----------------------------
+    # Fecha a questao "o vetor do IMU aponta para onde a palma aponta?" com
+    # numeros: todas as fases do CSV <= limite nos dois lados = FECHADO.
+    ruins = []
+    for lado, dados in resultados.items():
+        for fase, erro in dados.get("fases_salvo", {}).items():
+            if np.isfinite(erro) and erro > limite:
+                ruins.append(f"{lado} {fase} ({erro:.1f})")
+    print()
+    if ruins:
+        print("CERTIFICADO (verdade do plano): NAO FECHADO -- fases acima do "
+              f"limite {limite:g} graus: " + "; ".join(ruins))
+    elif resultados:
+        print("CERTIFICADO (verdade do plano): FECHADO -- todas as fases "
+              f"<= {limite:g} graus nos dois lados")
     print()
     if salvar:
         print("para o tool carregar agora: reinicie-o (ele le o JSON no inicio) "

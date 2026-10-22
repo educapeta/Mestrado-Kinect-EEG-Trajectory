@@ -196,6 +196,107 @@ if os.path.exists(csv_canonico):
 else:
     check("CSV canonico de 19/10 presente (para o teste offline)", False)
 
+# ============================================================================
+# 5) CERTIFICADO GUIADO POR POSES (tecla V) -- fecha a questao com numeros
+# ============================================================================
+print("5) certificado guiado por poses (VerificacaoPosesPalma, tecla V)")
+
+
+class FusaoFalsa:
+    """PositionFusion minima: so' o que o certificado usa."""
+
+    def __init__(self, t, f):
+        self.imu_to_camera = np.asarray(t, dtype=float)
+        self.palm_reference_body = np.asarray(f, dtype=float)
+
+
+rng = np.random.default_rng(99)
+T_verdade = imu.rotation_matrix(20.0, -10.0, 40.0)
+f_verdade = np.array([0.1, -0.05, -0.99])
+f_verdade = f_verdade / np.linalg.norm(f_verdade)
+fusoes = {"right": FusaoFalsa(T_verdade, f_verdade),
+          "left": FusaoFalsa(imu.rotation_matrix(30.0, 5.0, -70.0), f_verdade)}
+poses = ("POSE A", "POSE B", "POSE C")
+verif = gt.VerificacaoPosesPalma(poses=poses, seg_pose=1.0, settle=0.2,
+                                 limite=15.0)
+verif.iniciar(0.0)
+for indice in range(3):
+    for instante in (0.5 + indice * 1.0, 0.7 + indice * 1.0,
+                     0.9 + indice * 1.0):
+        for lado, fusao in fusoes.items():
+            rot = imu.rotation_matrix(*rng.uniform(-60, 60, 3))
+            normal = fusao.imu_to_camera @ rot @ fusao.palm_reference_body
+            verif.coletar(lado, instante, rot, normal)
+rel = verif.relatorio(fusoes)
+check("certificado: FECHADO com alinhamento perfeito",
+      rel["fechado"] is True, rel)
+check("certificado: 3 poses por lado",
+      all(len(rel["lados"][lado]["poses"]) == 3 for lado in ("right", "left")))
+check("certificado: media ~0 em todas as poses", all(
+    stats["media"] is not None and stats["media"] < 1.0
+    for lado in ("right", "left")
+    for stats in rel["lados"][lado]["poses"].values()))
+
+# uma pose com a verdade 30 graus fora do alinhamento -> NAO FECHADO
+verif2 = gt.VerificacaoPosesPalma(poses=poses, seg_pose=1.0, settle=0.2)
+verif2.iniciar(0.0)
+for indice in range(3):
+    for instante in (0.5 + indice * 1.0, 0.7 + indice * 1.0,
+                     0.9 + indice * 1.0):
+        rot = np.eye(3)
+        normal = T_verdade @ rot @ f_verdade
+        if indice == 1:
+            eixo = np.cross(normal, [0.0, 1.0, 0.0])
+            norma = np.linalg.norm(eixo)
+            eixo = (eixo / norma if norma > 1e-9
+                    else np.array([1.0, 0.0, 0.0]))
+            angulo = np.radians(30.0)
+            cosseno, seno = np.cos(angulo), np.sin(angulo)
+            k_matriz = np.array([[0.0, -eixo[2], eixo[1]],
+                                 [eixo[2], 0.0, -eixo[0]],
+                                 [-eixo[1], eixo[0], 0.0]])
+            rotacao_erro = (np.eye(3) * cosseno + seno * k_matriz
+                            + (1.0 - cosseno) * np.outer(eixo, eixo))
+            normal = rotacao_erro @ normal
+        for lado in ("right", "left"):
+            verif2.coletar(lado, instante, rot, normal)
+rel2 = verif2.relatorio({"right": FusaoFalsa(T_verdade, f_verdade),
+                         "left": FusaoFalsa(T_verdade, f_verdade)})
+check("certificado: NAO FECHADO com uma pose de 30 graus",
+      rel2["fechado"] is False, rel2["fechado"])
+check("certificado: lista a pose 2 como ruim",
+      any(indice == 2 for _lado, indice, _nome, _media
+          in rel2["poses_ruins"]), rel2["poses_ruins"])
+
+# settle: amostra antes do settle da pose nao entra
+verif3 = gt.VerificacaoPosesPalma(poses=poses, seg_pose=1.0, settle=0.2)
+verif3.iniciar(0.0)
+check("settle: amostra em t=0.1 e' ignorada",
+      verif3.coletar("right", 0.1, np.eye(3), [0.0, 0.0, 1.0]) is False)
+verif3.parar()
+check("cancelar: nao coleta depois de parar",
+      verif3.coletar("right", 0.5, np.eye(3), [0.0, 0.0, 1.0]) is False)
+
+# sem alinhamento carregado: nao fecha e marca o lado
+vazio = gt.VerificacaoPosesPalma(poses=poses, seg_pose=1.0, settle=0.2)
+vazio.iniciar(0.0)
+
+
+class SemAlinhamento:
+    imu_to_camera = None
+    palm_reference_body = None
+
+
+rel3 = vazio.relatorio({"right": SemAlinhamento(), "left": SemAlinhamento()})
+check("sem alinhamento: NAO FECHADO e marca os lados",
+      rel3["fechado"] is False
+      and all(rel3["lados"][lado]["sem_alinhamento"]
+              for lado in ("right", "left")))
+check("tool tem a tecla V", 'key == ord("v")' in fonte_tool)
+check("tool usa VerificacaoPosesPalma", "VerificacaoPosesPalma" in fonte_tool)
+check("tool imprime o CERTIFICADO", "CERTIFICADO" in fonte_tool)
+
+
 if FALHAS:
     print()
     print(f"PALMA_PLANO_FALHOU: {len(FALHAS)} verificacao(oes): "
