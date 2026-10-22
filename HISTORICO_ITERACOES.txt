@@ -6605,3 +6605,80 @@ PENDENCIAS
     adicionar na tela de preparacao (nao feito para nao mexer no layout sem
     bancada).
 
+
+================================================================================
+ITEM 102 (22/10/2026) - CALIBRACAO DA PALMA PELO PLANO MEDIO DO DORSO
+    (tecla J no tool + analisador offline): a verdade do Kinect deixa de ser
+    o produto vetorial de 3 pontos e passa a ser o plano punho+4 MCPs
+================================================================================
+PEDIDO DO USUARIO: o tool "ainda esta' ruim, apontando para lugares ruins";
+queria uma ferramenta que compare o vetor dos IMUs com o vetor projetado do
+Kinect a partir de um PLANO MEDIO entre os nos do dorso (o vetor normal de onde
+a palma aponta).
+
+COMO A VERDADE E' MEDIDA AGORA (kinect_imu_groundtruth.py)
+  - `palm_normal_from_plane(pontos, lado=None, rms_max_m=0.030)`:
+      * pontos do DORSO: punho (0) + MCPs indicador (5), medio (9), anelar (13)
+        e minimo (17) -- 5 lookups de profundidade, >=4 validos;
+      * ajuste de PLANO por minimos quadrados (SVD: menor vetor singular);
+      * sinal ANATOMICO na MESMA convencao do item 79: orienta pelo produto
+        vetorial (index-punho)x(pinky-punho) e depois right=+1 / left=-1
+        (sem `lado` mantem nz<0 legado);
+      * RMS dos pontos ao plano como CONTROLE DE QUALIDADE: acima de
+        `rms_max_m` (3 cm) a amostra e' DESCARTADA -- mao na borda/ocludida/
+        ruidosa nao produz normal inventada.
+  - `KinectHandTracker.palm_plane_camera(landmarks, lado)` expoe isso no tool.
+
+MEDIDO (teste sintetico, test_palma_plano.py): com 2 mm de ruido por
+coordenada o plano medio erra 4,05 graus contra 5,65 do produto vetorial de 3
+pontos; caso degenerado (colinear/<4 pontos/sem sinal) devolve (None,None).
+
+TOOL (tools/kinect_groundtruth_tool.py) - tecla J "calibrar por plano do dorso"
+  - a cada frame calcula a normal do PLANO e a guarda em palm_normal_plano /
+    palm_plano_rms_m / palm_erro_plano_deg; o [status] agora mostra
+    "erro plano" (Kinect plano x seta do IMU) ao lado do erro da normal antiga;
+  - VIDEO mostra as DUAS setas saindo da mao: VERMELHA = seta do IMU (T R f),
+    VERDE = normal do PLANO do dorso, com rotulo "(err N)" -- e' a comparacao
+    ao vivo que o usuario pediu;
+  - J inicia captura de 14 s (girar a mao devagar em varias direcoes; as duas
+    maos juntas); no fim, por lado: refit T/f com a verdade do plano, imprime
+    RESIDUO DO PLANO e o ERRO DO ALINHAMENTO ANTERIOR nas mesmas amostras,
+    aplica na fusao e GRAVA o JSON com backup .json.bak (mesma politica da O);
+  - J de novo cancela; a tecla O (3 pontos) continua existindo.
+
+ANALISADOR OFFLINE (tools/calibra_palma_plano.py) - responde "a seta esta' boa?"
+  Le um palm_diag_*.csv (colunas cruas do item 78), reconstroi a normal do
+  plano em cada linha, e por lado mostra: RMS do plano; diferenca plano x 3
+  pontos; residuo do refit com a verdade antiga x verdade do plano; ERRO POR
+  FASE do alinhamento SALVO contra a verdade do plano; veredito (<=15 graus).
+  `--salvar` grava o refit por plano (com .json.bak).
+
+DIAGNOSTICO DAS SESSOES D DE HOJE (21/10/2026), rodado offline:
+  - 19/10 18:07 (canonico): plano x 3 pontos 1,8/0,8 graus; refit melhora
+    14,44->13,68 (right) e 10,64->10,13 (left); SALVO mediano 11,4 (R) e 5,6
+    (L) -> seta OK.
+  - 21/10 15:39 / 15:42 / 15:44 (as de hoje): o alinhamento SALVO (refit de
+    19/10) erra MUITO nas fases de hoje: left mediana 43,0 / 66,5 / 94,8 graus;
+    right 16,8 / 48,2 / 25,1 -- e' o "apontando para lugares ruins";
+    com o refit pela verdade do PLANO, o left cai para 9-12 / 6-10 / 8-10
+    graus e o right PREPARO/KINECT cai para 3,9-12,4; porem o REZANDO do right
+    nessas capturas ficou 24,7-30,9 graus (pose nao foi mantida/parada) ->
+    refazer com a tecla J no tool (girando a mao devagar, as duas maos).
+  - Confirmacao do reset dos IMUs no inicio do groundtruth: os biases do
+    firmware foram lidos e o boot saiu limpo (usuario confirmou "parece que
+    funcionou").
+
+TESTES: test_palma_plano.py (novo, 4 grupos: plano sintetico/rotacao/sinal,
+ruido x 3 pontos, degenerados + rms_max_m, integracao no tracker/tool/analisador
+offline) PASS; regressos verdes test_palm_alignment, test_palm_seta_pose,
+test_reancora_yaw, test_imu_reset.
+
+PENDENCIAS
+  - REINICIAR o tool para carregar a tecla J (a instancia aberta as 14:31 e'
+    anterior a esta mudanca); no bench: J -> girar as duas maos 14 s -> conferir
+    setas verde/vermelha e o console (erro anterior x residuo do plano).
+  - Se o right continuar com residuo alto no REZANDO, repetir com a mao parada
+    em cada orientacao e o dorso virado para o Kinect.
+  - Rodar a suite completa com a bancada livre (tool aberto segura as portas
+    UDP 4210/4211 e o ritual de calibracao falha de proposito).
+

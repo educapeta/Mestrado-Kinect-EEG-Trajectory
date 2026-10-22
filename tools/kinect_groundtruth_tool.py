@@ -1801,7 +1801,7 @@ def main():
     }
     print(f"IMU: direita na porta {receivers['right'].port} | esquerda na porta "
           f"{receivers['left'].port}")
-    print("TECLAS (C/B/O/D/K/H/L/R): clique ANTES em uma janela de VIDEO -- sem "
+    print("TECLAS (C/B/O/D/J/K/H/L/R): clique ANTES em uma janela de VIDEO -- sem "
           "foco no video o OpenCV nao recebe a tecla (a tecla O parece nao "
           "funcionar e o console fica mudo).")
     for receiver in receivers.values():
@@ -1970,6 +1970,10 @@ def main():
                   "DO BOOT automaticamente (mova a mao -- a palma nao pode ficar "
                   "o tempo todo apoiada/vertical para o yaw ser observavel)")
     captura_palma = CapturaAlinhamentoPalma()
+    # Captura de alinhamento pela VERDADE do PLANO MEDIO do dorso (item 102,
+    # tecla J): mesma mecanica da O, mas cada amostra usa a normal do plano
+    # punho+4 MCPs (mais estavel que o produto vetorial de 3 pontos).
+    captura_palma_plano = CapturaAlinhamentoPalma()
     # Diagnostico da palma por MOVIMENTO PROGRAMADO (tecla D): grava
     # palm_diag_<data>_<hora>.csv e, no fim, o resumo por (fase, lado). E' o
     # log que faltava para separar "calibracao sistematicamente errada" de
@@ -2953,6 +2957,31 @@ def main():
                     if (mao["palm_direction"] is None or normal_lado is None)
                     else angle_between(normal_lado, mao["palm_direction"])
                 )
+                # --- PLANO MEDIO DO DORSO (item 102, tecla J) ----------------
+                # Verdade mais estavel que o produto vetorial de 3 pontos: o
+                # ruido de profundidade de um no' girava a normal inteira. A
+                # normal do plano (punho + 4 MCPs) e' o que o usuario pediu
+                # ("plano medio entre os nos do dorso") e serve para comparar
+                # ao vivo com o vetor do IMU e para refazer T/f.
+                plano_lado = (None if landmarks_lado is None
+                              else tracker.palm_plane_camera(landmarks_lado,
+                                                             lado))
+                if plano_lado is None:
+                    normal_plano_lado, rms_plano_lado = None, None
+                else:
+                    normal_plano_lado, rms_plano_lado = plano_lado
+                mao["palm_normal_plano"] = normal_plano_lado
+                mao["palm_plano_rms_m"] = rms_plano_lado
+                mao["palm_erro_plano_deg"] = (
+                    None
+                    if (normal_plano_lado is None
+                        or mao["palm_direction"] is None)
+                    else angle_between(normal_plano_lado,
+                                       mao["palm_direction"])
+                )
+                if captura_palma_plano.ativa and normal_plano_lado is not None:
+                    captura_palma_plano.coletar(lado, now, sample_lado,
+                                                normal_plano_lado)
                 # Diagnostico da palma (tecla D): a linha do CSV do diagnostico
                 # e' gravada AQUI, logo depois do erro ao vivo -- as tres coisas
                 # tem de ser do MESMO frame e da MESMA amostra de IMU, senao a
@@ -3030,6 +3059,39 @@ def main():
                               "dorso e mantenha a mao dentro do quadro; se "
                               "persistir, confira se as luvas nao estao "
                               "trocadas (--imu-portas)")
+            # --- fim da captura do alinhamento por PLANO DO DORSO (tecla J) ---
+            if captura_palma_plano.ativa and captura_palma_plano.restante_s <= 0.0:
+                captura_palma_plano.parar()
+                print("Captura do alinhamento por PLANO DO DORSO terminada.")
+                for lado in ("right", "left"):
+                    amostras_lado = captura_palma_plano.contar(lado)
+                    resolvido = captura_palma_plano.resolver(lado)
+                    if resolvido is None:
+                        print(f"  {lado}: amostras insuficientes "
+                              f"({amostras_lado}; precisa de "
+                              f"{PALM_ALIGNMENT_MIN_SAMPLES} com a mao girando) "
+                              "-- alinhamento NAO atualizado")
+                        continue
+                    t_lado, f_lado, residuo = resolvido
+                    erros_antes = []
+                    for rotacao_amostra, normal_amostra in captura_palma_plano.amostras[lado]:
+                        vetor = (fusions[lado].imu_to_camera @ rotacao_amostra
+                                 @ fusions[lado].palm_reference_body)
+                        norma = float(np.linalg.norm(vetor))
+                        if norma > 1e-9:
+                            erros_antes.append(angle_between(
+                                normal_amostra, vetor / norma))
+                    erro_antes = (float(np.mean(erros_antes))
+                                  if erros_antes else float("nan"))
+                    fusions[lado].set_palm_alignment(t_lado, f_lado, residuo)
+                    gravou = save_palm_alignment(fusions[lado], lado)
+                    veredito = ("OK" if residuo <= PALM_ALIGNMENT_MAX_RESIDUAL_DEG
+                                else "RESIDUO ALTO")
+                    print(f"  {lado}: {amostras_lado} amostras | residuo do "
+                          f"PLANO {residuo:.2f} graus ({veredito}) | erro do "
+                          f"alinhamento ANTERIOR {erro_antes:.1f} graus | "
+                          + (f"gravado em {palm_alignment_path(lado).name}"
+                             if gravou else "NAO gravado"))
             # --- DIAGNOSTICO DA PALMA (tecla D): fase e fim --------------------
             # Roda UMA vez por iteracao (depois do laco dos lados): trocar a
             # fase no meio do laco faria uma mao gravar na fase nova e a outra
@@ -3152,6 +3214,7 @@ def main():
                     status_counts[lado] = recebidas
                 alinhamentos = []
                 erros_palma = []
+                erros_plano = []
                 for lado in ("right", "left"):
                     sigla = lado[0].upper()
                     estado = fusions[lado].palm_alignment_state()
@@ -3164,10 +3227,16 @@ def main():
                     erros_palma.append(
                         f"{sigla} " + ("--" if erro is None
                                        else f"{erro:.1f} graus"))
+                    erro_plano = (None if mao_l is None
+                                  else mao_l.get("palm_erro_plano_deg"))
+                    erros_plano.append(
+                        f"{sigla} " + ("--" if erro_plano is None
+                                       else f"{erro_plano:.1f} graus"))
                 falta_o = "NAO" in " ".join(alinhamentos)
                 print(f"[status] IMU R {taxas[0]} | L {taxas[1]} | "
                       f"alinhamento O: {' / '.join(alinhamentos)} | "
-                      f"erro palma: {' | '.join(erros_palma)}"
+                      f"erro palma: {' | '.join(erros_palma)} | "
+                      f"erro plano: {' | '.join(erros_plano)}"
                       + (" | SEM ALINHAMENTO -- aperte O (14 s girando a mao)"
                          if falta_o else ""),
                       flush=True)
@@ -3182,12 +3251,25 @@ def main():
                 status_log_t0 = now
             if display is not None:
                 for lado, mao in resultados_por_lado.items():
-                    if mao is None:
+                    if mao is None or mao["landmarks"] is None:
                         continue
-                    if mao["palm_direction"] is not None and mao["landmarks"] is not None:
+                    # Comparacao AO VIVO (item 102, tecla J): VERMELHO = seta do
+                    # IMU (T R f); VERDE = normal do PLANO MEDIO do dorso
+                    # medida pelo Kinect (a verdade mais estavel). O rotulo traz
+                    # o erro entre as duas em graus.
+                    if mao["palm_direction"] is not None:
                         tracker.draw_palm_vector(
                             display, mao["landmarks"], mao["palm_direction"]
                         )
+                    normal_plano = mao.get("palm_normal_plano")
+                    if normal_plano is not None:
+                        rotulo = "plano dorso"
+                        if mao["palm_direction"] is not None:
+                            rotulo += (" (err %.0f)" % angle_between(
+                                normal_plano, mao["palm_direction"]))
+                        tracker.draw_palm_vector_custom(
+                            display, mao["landmarks"], normal_plano,
+                            cor=(0, 255, 0), rotulo=rotulo)
             depth_status = "depth: sem frame"
             stats = tracker.depth_stats()
             if stats is not None:
@@ -3408,6 +3490,25 @@ def main():
                         overlay_log_file.close()
                         overlay_log_file = None
                     print(f"Log overlay DESLIGADO (arquivo em {OVERLAY_LOG_PATH.name})")
+            elif key == ord("j"):
+                # CALIBRACAO POR PLANO DO DORSO (item 102): a verdade e' o plano
+                # medio punho+4 MCPs (mais estavel que os 3 pontos da O). No fim
+                # compara com o alinhamento ATUAL, refaz T/f e grava com backup.
+                if captura_palma_plano.ativa:
+                    captura_palma_plano.parar()
+                    print("Captura do alinhamento por PLANO DO DORSO cancelada.")
+                else:
+                    captura_palma_plano.iniciar(now)
+                    print(
+                        "CALIBRACAO DA PALMA POR PLANO DO DORSO (14 s): gire a "
+                        "mao DEVAGAR em varias direcoes (palma para o Kinect, "
+                        "para cima, para baixo, laterais) com a mao INTEIRA no "
+                        "quadro; as duas maos podem ser capturadas juntas. A "
+                        "verdade e' o PLANO MEDIO do dorso (punho + 4 MCPs), "
+                        "mais estavel que os 3 pontos antigos. No fim ele "
+                        "compara com o alinhamento ATUAL, refaz T/f e grava com "
+                        "backup (.json.bak). J de novo cancela."
+                    )
             elif key == ord("p"):
                 hand_calib_active = False
                 hand_calib_samples_aux = []

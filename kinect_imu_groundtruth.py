@@ -762,6 +762,84 @@ def palm_angles(normal, direction):
         result["valid"] = 1
     return result
 
+
+#: Landmarks do DORSO da mao usados no PLANO MEDIO: punho (0) + os MCPs
+#: indicador (5), medio (9), anelar (13) e minimo (17). O ajuste de plano por
+#: MINIMOS QUADRADOS nesses pontos e' mais estavel que o produto vetorial de 3
+#: pontos: o ruido de profundidade de um unico no' rotaciona a normal inteira,
+#: enquanto no plano medio ele entra dividido entre 5 pontos (item 102).
+PONTOS_DORSO_PALMA = {"wrist": 0, "index": 5, "middle": 9, "ring": 13,
+                      "pinky": 17}
+
+
+def palm_normal_from_plane(pontos, lado=None, eps=1e-9, rms_max_m=0.030):
+    """(normal, rms_m) do PLANO MEDIO do dorso da mao, ou (None, None).
+
+    Por que existe (item 102): a normal da palma era o produto vetorial de 3
+    pontos (punho, MCP do indicador, MCP do minimo). Com o ruido de
+    profundidade do Kinect, UM ponto errado gira a normal inteira -- e o
+    vetor da palma sai "apontando para lugares ruins" mesmo com T/f bons. Aqui
+    ajusta-se um PLANO MEDIO por minimos quadrados (SVD) nos nos do DORSO
+    (punho + 4 MCPs) e a normal e' o vetor singular minimo, bem mais estavel.
+
+    `pontos`: dict {"wrist","index","middle","ring","pinky": (3,)} em metros no
+    camera space (valores None/invalidos sao ignorados). Precisa de >=4 pontos
+    validos e dos tres do sinal anatomico (wrist, index, pinky).
+
+    Orientacao: o sinal segue a MESMA convencao de `palm_normal_from_points`
+    (anatomica, item 79) -- o plano e' orientado no hemisferio do produto
+    vetorial `(index-wrist) x (pinky-wrist)` e depois: lado 'right' = +1,
+    'left' = -1; lado None = forcado para nz < 0 (compatibilidade antiga).
+
+    `rms_m`: RMS (m) da distancia dos pontos ao plano -- e' o controle de
+    qualidade da medida (mao perto da borda/ocludida/ruidosa estoura o
+    `rms_max_m` e a amostra e' descartada: melhor nao medir do que medir errado).
+    """
+    validos = []
+    for nome in ("wrist", "index", "middle", "ring", "pinky"):
+        valor = pontos.get(nome) if isinstance(pontos, dict) else None
+        if valor is None:
+            continue
+        valor = np.asarray(valor, np.float64).reshape(3)
+        if np.isfinite(valor).all():
+            validos.append((nome, valor))
+    if len(validos) < 4:
+        return None, None
+    nomes = {nome for nome, _valor in validos}
+    if not {"wrist", "index", "pinky"} <= nomes:
+        return None, None
+    matriz = np.array([valor for _nome, valor in validos], dtype=np.float64)
+    centro = matriz.mean(axis=0)
+    centrado = matriz - centro
+    try:
+        _u, _s, vt = np.linalg.svd(centrado, full_matrices=False)
+    except np.linalg.LinAlgError:
+        return None, None
+    normal = np.asarray(vt[-1], np.float64).reshape(3)
+    norma = float(np.linalg.norm(normal))
+    if norma < eps:
+        return None, None
+    normal = normal / norma
+    por_nome = {nome: valor for nome, valor in validos}
+    referencia = np.cross(por_nome["index"] - por_nome["wrist"],
+                          por_nome["pinky"] - por_nome["wrist"])
+    norma_ref = float(np.linalg.norm(referencia))
+    if norma_ref < eps:
+        return None, None
+    if float(np.dot(normal, referencia / norma_ref)) < 0.0:
+        normal = -normal
+    if lado == "right":
+        pass
+    elif lado == "left":
+        normal = -normal
+    elif normal[2] > 0.0:
+        normal = -normal            # legado sem `lado` (nz < 0)
+    distancias = centrado @ normal
+    rms = float(np.sqrt(np.mean(distancias ** 2)))
+    if rms_max_m is not None and rms > float(rms_max_m):
+        return None, None
+    return normal, rms
+
 BODY_CONNECTIONS = [
     (PyKinectV2.JointType_Head, PyKinectV2.JointType_Neck),
     (PyKinectV2.JointType_Neck, PyKinectV2.JointType_SpineShoulder),
@@ -2843,6 +2921,28 @@ class KinectHandTracker:
         middle_mcp = self._landmark_camera_point(landmarks[9])
         return palm_frame(wrist, index_mcp, pinky_mcp, middle_mcp, lado=lado)
 
+    def palm_plane_camera(self, landmarks, lado=None):
+        """(normal, rms_m) do PLANO MEDIO do dorso pelo depth do Kinect.
+
+        Usa 5 lookups de profundidade (punho + MCPs indicador/medio/anelar/
+        minimo) e `palm_normal_from_plane` -- a verdade mais ESTAVEL para a
+        calibracao da palma (item 102: tecla J do tool). Devolve (None, None)
+        se os pontos nao fecharem um plano confiavel (borda/oclusao/ruido) --
+        nunca uma normal inventada.
+        """
+        pontos = {}
+        for nome, indice in PONTOS_DORSO_PALMA.items():
+            try:
+                ponto = self._landmark_camera_point(landmarks[indice])
+            except (AttributeError, IndexError, TypeError):
+                ponto = None
+            if ponto is None:
+                continue
+            ponto = np.asarray(ponto, np.float64).reshape(3)
+            if np.isfinite(ponto).all():
+                pontos[nome] = ponto
+        return palm_normal_from_plane(pontos, lado=lado)
+
     @staticmethod
     def _tronco_base_y(joints):
         """y (camera space, Y pra cima) do fim do tronco (SpineBase) ou None.
@@ -3868,11 +3968,26 @@ class KinectHandTracker:
                 f"{CHECKERBOARD_SIZE[0] * CHECKERBOARD_SIZE[1]} cantos)"
             )
 
-    def draw_palm_vector(self, frame, landmarks, direction_camera):
-        palm = self._landmark_camera_point(landmarks[9])
-        endpoint = None if palm is None else palm + direction_camera * PALM_VECTOR_LENGTH_M
-        if endpoint is None:
+    def draw_palm_vector_custom(self, frame, landmarks, direction_camera,
+                                cor=(0, 0, 255), rotulo="direcao da palma",
+                                espessura=5):
+        """Seta de um vetor da palma (camera space) no video, com cor/rotulo.
+
+        `direction_camera` e' QUALQUER versor (a previsao do IMU, a normal do
+        plano do Kinect...): e' o desenho que permite comparar as duas lado a
+        lado na calibracao por plano do dorso (tecla J, item 102).
+        """
+        if direction_camera is None:
             return
+        direcao = np.asarray(direction_camera, np.float64).reshape(3)
+        norma = float(np.linalg.norm(direcao))
+        if not np.isfinite(direcao).all() or norma < 1e-9:
+            return
+        direcao = direcao / norma
+        palm = self._landmark_camera_point(landmarks[9])
+        if palm is None:
+            return
+        endpoint = palm + direcao * PALM_VECTOR_LENGTH_M
         start_point = PyKinectV2._CameraSpacePoint(*palm)
         end_point = PyKinectV2._CameraSpacePoint(*endpoint)
         start = self.mapper.MapCameraPointToColorSpace(start_point)
@@ -3880,8 +3995,13 @@ class KinectHandTracker:
         start_pixel = (int(round(start.x)), int(round(start.y)))
         end_pixel = (int(round(end.x)), int(round(end.y)))
         if all(np.isfinite((start.x, start.y, end.x, end.y))):
-            cv2.arrowedLine(frame, start_pixel, end_pixel, (0, 0, 255), 5, tipLength=0.2)
-            cv2.putText(frame, "direcao da palma", end_pixel, cv2.FONT_HERSHEY_SIMPLEX, 0.65, (0, 0, 255), 2)
+            cv2.arrowedLine(frame, start_pixel, end_pixel, cor, espessura,
+                            tipLength=0.2)
+            cv2.putText(frame, rotulo, end_pixel, cv2.FONT_HERSHEY_SIMPLEX,
+                        0.65, cor, 2)
+
+    def draw_palm_vector(self, frame, landmarks, direction_camera):
+        self.draw_palm_vector_custom(frame, landmarks, direction_camera)
 
     def close(self):
         self.hands.close()
