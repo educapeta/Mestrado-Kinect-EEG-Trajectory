@@ -184,8 +184,11 @@ assert "4) webcams" not in saida, "`--sem-webcams` nao desligou o bloco"
 assert "5) calibracoes" not in saida, "`--sem-calibracoes` nao desligou o bloco"
 assert "1) pykinect2 + compatibilidade" in saida, saida
 assert "3) abertura OFICIAL do projeto" in saida, saida
-#: Esta maquina HOJE nao entrega frame: o codigo tem de ser 1 (ou 2 sem import).
-assert codigo in (1, 2), codigo
+#: O codigo depende do HARDWARE no momento: 1 = nao entregou frame, 2 = sem
+#: import, 0 = Kinect entregou frame (a maquina esta funcionando agora).
+#: O teste aceita os tres e confere a mensagem correspondente, sem depender
+#: do estado do bench (antes exigia 1/2 e quebrava quando o Kinect voltava).
+assert codigo in (0, 1, 2), codigo
 if codigo == 1:
     assert "NAO entregou frame" in saida, saida
     assert "NAO monte o tabuleiro" in saida, saida

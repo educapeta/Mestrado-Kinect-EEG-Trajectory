@@ -563,7 +563,8 @@ _vetores = []
 for _nome, _vetor in gt.POSES_FISICAS_CALIBRACAO:
     _alvo = _T_verdade.T @ np.asarray(_vetor, np.float64)
     _rotacoes.append(_rot_entre(_f_verdade, _alvo))
-    _vetores.append(np.asarray(_vetor, np.float64))
+    _vetores.append(np.asarray(_vetor, np.float64)
+                   / np.linalg.norm(np.asarray(_vetor, np.float64)))
 # o solver pede PALM_ALIGNMENT_MIN_SAMPLES pares; repete as 3 poses
 _rotacoes_solver = [r for r in _rotacoes for _ in range(4)]
 _vetores_solver = [v for v in _vetores for _ in range(4)]
@@ -770,6 +771,60 @@ check("tool coleta normais do Kinect e usa no J/V",
       "coletar_normal_kinect" in fonte_tool
       and "poses_verdade_por_lado" in fonte_tool
       and "melhor_palma_sessao" in fonte_tool)
+
+# ============================================================================
+# 15) CALIBRACAO POR POSICAO DA MAO: verdade = direcao mao->lente (item 117)
+# ============================================================================
+print("15) calibracao por posicao da mao (palma mirando a lente)")
+_posicoes_verdade = [np.array([0.00, 0.00, 0.90]),
+                     np.array([0.35, 0.00, 0.90]),
+                     np.array([0.00, -0.35, 0.90])]
+_verdades_posicao = [(-p / np.linalg.norm(p))
+                     for p in _posicoes_verdade]
+_rotacoes_posicao = []
+for _vetor in _verdades_posicao:
+    _alvo = _T_verdade.T @ _vetor
+    _rotacoes_posicao.append(_rot_entre(_f_verdade, _alvo))
+_coletor_pos = gt.ColetorPosesFisicas(seg_pose=1.0, settle=0.2)
+_coletor_pos.iniciar(0.0, "calibrar")
+for _indice, _rot in enumerate(_rotacoes_posicao):
+    for _dt in (0.3, 0.5, 0.7, 0.9):
+        for _lado in ("right", "left"):
+            _coletor_pos.coletar(_lado, _indice * 1.0 + _dt, _rot)
+            _coletor_pos.coletar_posicao_palma(
+                _lado, _indice,
+                _posicoes_verdade[_indice]
+                + np.array([0.005, -0.004, 0.003]))
+_resultado_pos = _coletor_pos.calibrar_por_posicoes()
+_residuos_pos = [_resultado_pos["lados"][_l].get("residuo")
+                 for _l in ("right", "left")]
+check("por posicao: calibra e FECHA (verdade geometrica exata)",
+      _resultado_pos["fechado"] is True
+      and all(r is not None and r < 2.0 for r in _residuos_pos),
+      _residuos_pos)
+_verdades_gravadas = _resultado_pos.get("poses_verdade", {})
+_erros_verdade = []
+for _lado in ("right", "left"):
+    _lista = _verdades_gravadas.get(_lado) or ()
+    for (_nome, _vec), _verd in zip(_lista, _verdades_posicao):
+        _vec = np.asarray(_vec, np.float64)
+        _erros_verdade.append(float(np.degrees(np.arccos(
+            np.clip(float(np.dot(_vec, _verd)), -1.0, 1.0)))))
+check("por posicao: verdade gravada = direcao mao->lente",
+      bool(_erros_verdade) and max(_erros_verdade) < 1.0,
+      np.round(_erros_verdade, 2))
+_coletor_sem_pos = gt.ColetorPosesFisicas(seg_pose=1.0, settle=0.2)
+_coletor_sem_pos.iniciar(0.0, "calibrar")
+for _indice, _rot in enumerate(_rotacoes_posicao):
+    for _lado in ("right", "left"):
+        _coletor_sem_pos.coletar(_lado, _indice * 1.0 + 0.5, _rot)
+_resultado_sem = _coletor_sem_pos.calibrar_por_posicoes()
+check("por posicao: sem posicao da mao -> faltam_posicoes",
+      set(_resultado_sem.get("faltam_posicoes") or []) ==
+      {"right", "left"})
+check("tool coleta posicao e calibra por ela no J/V",
+      "calibrar_por_posicoes" in fonte_tool
+      and "coletar_posicao_palma" in fonte_tool)
 
 if FALHAS:
     print()

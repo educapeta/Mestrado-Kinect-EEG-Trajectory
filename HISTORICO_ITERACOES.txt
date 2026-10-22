@@ -7397,3 +7397,56 @@ luva/caixa inclina a mao) -- manter a mao paralela logo acima da mesa usando a
 mesa como referencia. O console agora mostra os angulos: se 2-3 ficar perto de
 180, o certificado fecha.
 
+
+================================================================================
+ITEM 117 (22/10/2026) - POSES POR "PALMA MIRANDO A LENTE" EM 3 POSICOES:
+    verdade = DIRECAO GEOMETRICA mao->lente (sem planura, sem angulos, sem
+    depender da normal do Kinect na pose de frente)
+================================================================================
+O QUE O LOG DO USUARIO MOSTROU (rodada pos-item 116)
+  - right: "Kinect nao mediu as normais das 3 poses (mao fora de quadro?)" ->
+    sem normais, caiu no plano da mesa, residuo 17.75.
+  - left: angulos medidos (1-2, 1-3, 2-3) = 3.2, 74.5, 71.7 graus. Esperado
+    (~141, ~39, ~180) com o tilt real de 51 graus -- e mesmo o aviso "esperado
+    ~90" impresso estava errado (nao considerava o tilt da camera). O 3.2 grau
+    entre pose1 e pose2 e' a assinatura da normal do Kinect MAL CONDICIONADA na
+    pose "palma p/ a camera": com a palma quase paralela ao image plane, a
+    variacao de depth dentro da mao e' de poucos mm -> a normal vira ruido.
+    Ou seja: a pose 1, que o usuario EXECUTA muito bem (IMU deu 0.5-5.5 graus),
+    era justamente a que o Kinect media mal -- e as poses de mesa continuam
+    limitadas pela luva (~10-20 graus de execucao). Nao havia como fechar assim.
+NOVA PROTOCOLO (a habilidade em que o usuario e' demonstradamente preciso)
+  As 3 poses agora sao "PALMA MIRANDO A LENTE do Kinect" em 3 POSICOES do
+  quadro: 1) mao no CENTRO; 2) deslocada para a ESQUERDA (mesma altura);
+  3) deslocada para BAIXO (mesma coluna). A verdade de cada pose e' GEOMETRICA:
+  direcao do centro da palma ate a lente = -normalize(posicao_da_palma), com a
+  posicao medida pelo depth do Kinect (erro de 1 cm a 1 m = ~0.6 grau). Nao
+  depende de a mao ficar plana, nem da normal do plano (que era mal condicionada
+  na pose de frente), nem de angulos relativos. A mira da palma na lente e' a
+  mesma habilidade da pose 1 das rodadas antigas (0.5-5.5 graus de erro).
+IMPLEMENTADO
+  1) `POSES_FISICAS_CALIBRACAO` reescrita para as 3 poses/posicoes (vetores
+     nominais so p/ exibicao/fallback).
+  2) `ColetorPosesFisicas.coletar_posicao_palma(lado, indice, posicao)` guarda
+     a posicao 3D do landmark 9 por pose; `calibrar_por_posicoes()` calcula por
+     lado a verdade -P/|P|, resolve T/f com `_calibrar_lado`, devolve
+     `poses_usadas` (verdades), `posicoes`, `faltam_posicoes` e certificado.
+  3) Tool: durante J/V coleta a posicao pelo MESMO caminho/frame da normal
+     (`_landmark_camera_point(landmark 9, lado)`); J usa calibrar_por_posicoes
+     (fallback: plano da mesa se faltar posicao de alguma pose -- mao fora de
+     quadro); verdades gravadas em mesa_kinect.json e o V usa exatamente as
+     mesmas (`poses_verdade_por_lado`). Instrucoes na tela/console atualizadas.
+  4) O aviso de angulos (modo fallback mesa) agora calcula o "esperado" das
+     poses atuais em vez de imprimir ~90/~90/~180 fixo.
+  5) `test_checa_kinect.py`: o exit code depende do hardware no momento
+     (0 quando o Kinect entrega frame); o teste agora aceita 0/1/2 e confere a
+     mensagem correspondente (antes quebrava quando o Kinect voltava a
+     funcionar -- nao tem relacao com a palma).
+TESTES: grupo 15 do test_palma_plano -- calibracao por posicao FECHA com
+residuo <2 graus, verdades gravadas = direcao mao->lente (erro <1 grau), sem
+posicao -> faltam_posicoes, guards do tool; grupos 1-14 continuam PASS.
+SUITE COMPLETA 59/59. Smoke do tool sem crash.
+PROXIMO PASSO: rodar J (3 poses mirando a lente em centro/esquerda/baixo, duas
+maos visiveis e paradas ~2 s) e depois V. Se o Kinect nao enxergar a mao em
+alguma pose, o console avisa qual e cai para o plano da mesa.
+

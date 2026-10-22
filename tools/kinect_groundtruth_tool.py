@@ -3084,6 +3084,17 @@ def main():
                 fusion = fusions[lado]
                 camera_position_lado = mao["position"]
                 landmarks_lado = mao["landmarks"]
+                if poses_fisicas.ativa:
+                    _fase_posicao = poses_fisicas.fase_atual(now)
+                    if _fase_posicao is not None:
+                        try:
+                            _posicao_modelo = tracker._landmark_camera_point(
+                                landmarks_lado[9], lado)
+                        except (AttributeError, IndexError, TypeError):
+                            _posicao_modelo = None
+                        if _posicao_modelo is not None:
+                            poses_fisicas.coletar_posicao_palma(
+                                lado, _fase_posicao[0], _posicao_modelo)
                 # Normal da palma medida pelo Kinect (depth): e' a referencia do
                 # vetor da palma -- usada para ancorar, para a captura do
                 # alinhamento (tecla O) e para o ERRO AO VIVO (Kinect x IMU).
@@ -3335,8 +3346,15 @@ def main():
                     poses_fisicas_fase_vista = None
                     if modo_pose == "calibrar":
                         if mesa_normal_camera is not None:
-                            resultado_poses = poses_fisicas.calibrar_mesa(
-                                mesa_normal_camera)
+                            resultado_poses = poses_fisicas.calibrar_por_posicoes()
+                            if resultado_poses.get("faltam_posicoes"):
+                                print("  AVISO: o Kinect nao mediu a "
+                                      "POSICAO da mao em todas as poses "
+                                      "(faltam: "
+                                      f"{resultado_poses['faltam_posicoes']}); "
+                                      "caindo para o plano da mesa")
+                                resultado_poses = poses_fisicas.calibrar_mesa(
+                                    mesa_normal_camera)
                             mesa_sinal = float(
                                 resultado_poses.get("sinal_mesa") or 1.0)
                             poses_verdade_por_lado = {
@@ -3345,19 +3363,28 @@ def main():
                                 in resultado_poses.get("lados", {}).items()
                                 if _dados_v.get("poses_usadas")}
                             print("CALIBRACAO POR POSES FISICAS "
-                                  "terminada (verdade: pose 1 geometrica "
-                                  "+ angulos relativos do Kinect, "
-                                  f"sinal da mesa {mesa_sinal:+.0f}):")
+                                  "terminada (verdade: DIRECAO MAO->LENTE "
+                                  "medida pelo Kinect nas 3 posicoes):")
                             for _lado_diag in ("right", "left"):
                                 _ang = resultado_poses.get(
                                     "angulos", {}).get(_lado_diag)
                                 if _ang:
+                                    _exp12 = _angulo_entre(
+                                        poses_fisicas.poses[0][1],
+                                        poses_fisicas.poses[1][1])
+                                    _exp13 = _angulo_entre(
+                                        poses_fisicas.poses[0][1],
+                                        poses_fisicas.poses[2][1])
+                                    _exp23 = _angulo_entre(
+                                        poses_fisicas.poses[1][1],
+                                        poses_fisicas.poses[2][1])
                                     print(f"  {_lado_diag}: angulos "
                                           "medidos entre poses "
                                           f"(1-2, 1-3, 2-3) = "
                                           f"{_ang[0]:.1f}, {_ang[1]:.1f}, "
                                           f"{_ang[2]:.1f} graus "
-                                          "(esperado ~90, ~90, ~180)")
+                                          f"(esperado ~{_exp12:.0f}, "
+                                          f"~{_exp13:.0f}, ~{_exp23:.0f})")
                                     if abs(_ang[2] - 180.0) > 12.0:
                                         print("    AVISO: as poses de "
                                               "mesa nao ficaram "
@@ -4155,10 +4182,12 @@ def main():
                         "VERIFICACAO POR POSES FISICAS (item 114) -- "
                         f"{len(poses_fisicas.poses)} poses x "
                         f"{POSES_FISICAS_POSE_SEC:g} s, segure PARADO em cada "
-                        "uma (a rotacao do IMU e' coletada; o Kinect nao e' "
-                        "usado como verdade). No fim sai PASS/FAIL por pose e "
-                        "o CERTIFICADO FECHADO/NAO FECHADO contra as normais "
-                        "fisicas conhecidas; V de novo cancela.")
+                        "uma, com a PALMA MIRANDO A LENTE: 1) mao no CENTRO "
+                        "do quadro; 2) deslocada para a ESQUERDA (mesma "
+                        "altura); 3) deslocada para BAIXO (mesma coluna). A "
+                        "verdade e a DIRECAO mao->lente medida pelo Kinect "
+                        "(mesmas verdades do J). No fim sai PASS/FAIL e o "
+                        "CERTIFICADO; V de novo cancela.")
             elif key == ord("j"):
                 # CALIBRACAO POR POSES FISICAS (item 114): 3 orientacoes com a
                 # normal da palma CONHECIDA (sem depender do Kinect). No fim
@@ -4185,13 +4214,15 @@ def main():
                         "CALIBRACAO POR POSES FISICAS (item 114) -- "
                         f"{len(poses_fisicas.poses)} poses x "
                         f"{POSES_FISICAS_POSE_SEC:g} s. A verdade e' FISICA, "
-                        "nao vem do Kinect (o Kinect so' precisa ver o IMU "
-                        "enviando). Siga a instrucao na tela e SEGURE PARADO: "
-                        "1) palma de frente para o Kinect, dedos p/ cima, mao "
-                        "na linha do sensor; 2) palma para BAIXO apoiada na "
-                        "mesa, dedos p/ frente; 3) palma para CIMA com o DORSO "
-                        "apoiado na mesa. J de novo cancela; no fim refaz T/f "
-                        "e grava com backup (.json.bak).")
+                        "nao vem de planura: e a DIRECAO da sua mao ate a "
+                        "LENTE, medida pelo Kinect. Siga a instrucao na tela, "
+                        "sempre com a PALMA MIRANDO A LENTE, em 3 posicoes "
+                        "diferentes: 1) mao no CENTRO do quadro; 2) mao "
+                        "deslocada para a ESQUERDA do quadro (mesma altura); "
+                        "3) mao deslocada para BAIXO no quadro (mesma "
+                        "coluna). Segure PARADO ~2 s e mantenha as DUAS "
+                        "maos visiveis (o Kinect mede a posicao). J de novo "
+                        "cancela; no fim refaz T/f e grava com backup.")
             elif key == ord("p"):
                 hand_calib_active = False
                 hand_calib_samples_aux = []

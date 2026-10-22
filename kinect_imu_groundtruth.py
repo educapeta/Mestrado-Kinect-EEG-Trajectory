@@ -1076,13 +1076,24 @@ def normal_robusta(historico, normal_anterior=None, tolerancia_deg=10.0,
 #:       -> normal aponta para o teto = (0,+1,0)
 #: Com as rotacoes do IMU nessas 3 poses, `solve_palm_alignment` resolve T e f
 #: SEM depender de landmark/depth/sinal do Kinect (que oscilavam).
+#: POSES FISICAS (item 117): as 3 poses sao "palma MIRANDO A LENTE do
+#: Kinect" em 3 POSICOES diferentes do quadro. A verdade de cada pose nao
+#: depende da planura da mao: e a direcao GEOMETRICA do centro da palma ate
+#: a lente (origem do camera space), medida pelo proprio Kinect (1 cm a 1 m
+#: = ~0.6 grau). E a habilidade em que o usuario e mais preciso (a pose
+#: "palma p/ Kinect" teve 0.5-5.5 graus em todas as rodadas). As poses de
+#: MESA foram aposentadas como calibracao: a luva impede a mao de ficar
+#: plana (~10-20 graus de execucao medidos). Os vetores sao NOMINAIS (so
+#: exibicao/fallback); o J mede a posicao real e recalcula a verdade.
 POSES_FISICAS_CALIBRACAO = (
-    ("PALMA DE FRENTE PARA O KINECT (dedos p/ cima, mao na linha do sensor)",
+    ("MAO NO CENTRO DO QUADRO, PALMA MIRANDO A LENTE DO KINECT",
      (0.0, 0.0, -1.0)),
-    ("PALMA PARA BAIXO, apoiada na MESA (dedos p/ frente)",
-     (0.0, -1.0, 0.0)),
-    ("PALMA PARA CIMA, com o DORSO apoiado na MESA",
-     (0.0, 1.0, 0.0)),
+    ("MAO DESLOCADA PARA A ESQUERDA DO QUADRO (mesma altura), PALMA "
+     "MIRANDO A LENTE",
+     (-0.30, 0.0, -0.95)),
+    ("MAO DESLOCADA PARA BAIXO NO QUADRO (mesma coluna), PALMA MIRANDO "
+     "A LENTE",
+     (0.0, 0.30, -0.95)),
 )
 #: Duracao de cada pose fisica (s) e tempo para chegar na pose.
 POSES_FISICAS_POSE_SEC = 3.0
@@ -1293,6 +1304,9 @@ class ColetorPosesFisicas:
         self._t0 = 0.0
         self._amostras = {"right": [], "left": []}
         self._normais = {"right": {}, "left": {}}   # lado -> {idx: [n]}
+        #: Posicao 3D do centro da palma por pose (verdade = direcao p/ a
+        #: lente, item 117): lado -> {idx: [posicao (3,)]}.
+        self._posicoes = {"right": {}, "left": {}}
 
     def iniciar(self, agora, modo="calibrar"):
         self.modo = str(modo)
@@ -1300,6 +1314,7 @@ class ColetorPosesFisicas:
         self._t0 = float(agora)
         self._amostras = {"right": [], "left": []}
         self._normais = {"right": {}, "left": {}}
+        self._posicoes = {"right": {}, "left": {}}
 
     def parar(self):
         self._ativa = False
@@ -1361,6 +1376,66 @@ class ColetorPosesFisicas:
 
     def contar_normais(self, lado):
         return sum(len(v) for v in self._normais.get(lado, {}).values())
+
+    def coletar_posicao_palma(self, lado, indice, posicao):
+        """Guarda a POSICAO 3D do centro da palma (camera space) na pose."""
+        if not self._ativa or posicao is None:
+            return False
+        vetor = np.asarray(posicao, np.float64).reshape(3)
+        if not np.isfinite(vetor).all() or float(np.linalg.norm(vetor)) < 0.2:
+            return False
+        try:
+            indice = int(indice)
+        except (TypeError, ValueError):
+            return False
+        self._posicoes.setdefault(lado, {}).setdefault(indice, []).append(
+            vetor)
+        return True
+
+    def _representante_posicao(self, lado, indice):
+        lista = self._posicoes.get(lado, {}).get(indice, [])
+        if len(lista) < 3:
+            return None
+        return np.median(np.asarray(lista, np.float64), axis=0)
+
+    def calibrar_por_posicoes(self):
+        """Calibra usando a DIRECAO mao->lente (verdade geometrica)."""
+        resultado = {"modo": "calibrar", "lados": {}, "fechado": False,
+                     "modo_verdade": "posicao_da_mao",
+                     "faltam_posicoes": []}
+        for lado in ("right", "left"):
+            posicoes = [self._representante_posicao(lado, indice)
+                        for indice in range(len(self.poses))]
+            if any(posicao is None for posicao in posicoes):
+                resultado["faltam_posicoes"].append(lado)
+                resultado["lados"][lado] = {
+                    "sem_amostras": True,
+                    "poses_insuficientes": [indice + 1
+                                            for indice, posicao
+                                            in enumerate(posicoes)
+                                            if posicao is None]}
+                continue
+            poses_lado = []
+            for indice, posicao in enumerate(posicoes):
+                direcao = _normalizar_vetor(-np.asarray(posicao, np.float64))
+                if direcao is None:
+                    resultado["faltam_posicoes"].append(lado)
+                    break
+                poses_lado.append((self.poses[indice][0],
+                                   tuple(float(v) for v in direcao)))
+            if len(poses_lado) != len(self.poses):
+                resultado["lados"][lado] = {"sem_amostras": True,
+                                            "poses_insuficientes": []}
+                continue
+            dados = self._calibrar_lado(lado, tuple(poses_lado))
+            dados["poses_usadas"] = tuple(poses_lado)
+            dados["posicoes"] = [list(map(float, p)) for p in posicoes]
+            resultado["lados"][lado] = dados
+        resultado["fechado"] = self._fechado(resultado["lados"])
+        resultado["poses_verdade"] = {
+            lado: list(dados.get("poses_usadas") or ())
+            for lado, dados in resultado["lados"].items()}
+        return resultado
 
     def _por_pose(self, lado):
         grupos = {}
