@@ -1089,17 +1089,20 @@ POSES_FISICAS_POSE_SEC = 3.0
 POSES_FISICAS_SETTLE_SEC = 0.8
 #: Limite (graus) do certificado das poses fisicas.
 POSES_FISICAS_LIMITE_DEG = 12.0
+#: Limites do certificado por pose: a pose 1 (palma p/ a camera) e' a mais
+#: precisa (medida 1-3 graus na bancada); as poses de mesa carregam o erro de
+#: execucao da mao/luva (a palma nao fica exatamente paralela a mesa).
+POSES_FISICAS_LIMITE_POSE1_DEG = 10.0
+POSES_FISICAS_LIMITE_MESA_DEG = 16.0
 
 
 def ajustar_plano_mesa(pontos, limiar_m=0.02, iteracoes=120, semente=1):
     """Plano dominante (a MESA) da nuvem 3D do depth, normal apontando p/ CIMA.
 
-    Por que existe (item 115): o usuario confirmou que o Kinect esta' nivelado em
-    relacao a mesa, mas "temos que alinhar ele antes". Em vez de exigir um
-    Kinect perfeito, medimos o PLANO DA MESA com o proprio depth (RANSAC + minimos
-    quadrados nos inliers) e usamos a normal medida como referencia de gravidade
-    das poses 2/3 (palma p/ baixo / p/ cima). Assim a calibracao compensa a
-    inclinacao do sensor/mesa em vez de assumi-la zero.
+    Mede o plano da mesa com RANSAC + minimos quadrados nos inliers e devolve a
+    normal no referencial da camera (item 115). O codigo antigo do eixo Y do
+    camera space e' ambiguo entre trechos; por isso quem usa a normal testa os
+    dois sentidos de "para cima" e escolhe pelo residuo.
     """
     nuvem = np.asarray(pontos, np.float64).reshape(-1, 3)
     nuvem = nuvem[np.isfinite(nuvem).all(axis=1)]
@@ -1130,8 +1133,6 @@ def ajustar_plano_mesa(pontos, limiar_m=0.02, iteracoes=120, semente=1):
     _u, _s, vt = np.linalg.svd(ajustados - centroide)
     normal = vt[-1]
     normal = normal / max(1e-12, float(np.linalg.norm(normal)))
-    #: A mesa esta' ABAIXO do Kinect: a normal para CIMA e' a que aponta para o
-    #: eixo Y da camera (sensor nao esta' de cabeca para baixo).
     if normal[1] < 0.0:
         normal = -normal
     tilt_deg = float(np.degrees(np.arccos(np.clip(float(normal[1]), -1.0, 1.0))))
@@ -1148,18 +1149,14 @@ def ajustar_plano_mesa(pontos, limiar_m=0.02, iteracoes=120, semente=1):
 def poses_fisicas_com_mesa(normal_mesa, sinal=1.0):
     """Poses fisicas (item 114) com as normais 2/3 tiradas do PLANO DA MESA.
 
-    Pose 1 continua "palma de frente para o Kinect" = eixo da camera (0,0,-1).
-    Poses 2/3 usam +-normal da mesa (medida pelo depth): a calibracao deixa de
-    assumir o sensor perfeitamente nivelado.
+    Pose 1 = "palma de frente para o Kinect" = eixo da camera (0,0,-1).
+    Poses 2/3 usam +-normal da mesa (medida pelo depth). `sinal` resolve o
+    sentido ambiguo do eixo Y do camera space (testado pelo calibrador).
     """
     normal = np.asarray(normal_mesa, np.float64).reshape(3)
     normal = normal / max(1e-12, float(np.linalg.norm(normal)))
     if normal[1] < 0.0:
         normal = -normal
-    #: `sinal` diz qual sentido da normal medida e' "para CIMA". Como o
-    #: sentido do eixo Y do camera space do Kinect nao e' documentado de
-    #: forma confiavel (o codigo antigo usa +y num lugar e -y em outro), o
-    #: calibrador testa os DOIS sinais e escolhe o de MENOR residuo.
     orientada = float(sinal) * normal
     return (
         (POSES_FISICAS_CALIBRACAO[0][0], (0.0, 0.0, -1.0)),
@@ -1168,17 +1165,119 @@ def poses_fisicas_com_mesa(normal_mesa, sinal=1.0):
     )
 
 
+def _normalizar_vetor(vetor):
+    vetor = np.asarray(vetor, np.float64).reshape(3)
+    norma = float(np.linalg.norm(vetor))
+    if not np.isfinite(vetor).all() or norma < 1e-9:
+        return None
+    return vetor / norma
+
+
+def _mediana_vetores(vetores, referencia=None):
+    """Mediana vetorial (com alinhamento de sinal) ou None."""
+    lista = [_normalizar_vetor(v) for v in vetores]
+    lista = [v for v in lista if v is not None]
+    if not lista:
+        return None
+    ref = _normalizar_vetor(referencia) if referencia is not None else lista[0]
+    if ref is None:
+        ref = lista[0]
+    alinhados = np.array([v if float(np.dot(v, ref)) >= 0.0 else -v
+                          for v in lista])
+    mediana = _normalizar_vetor(np.median(alinhados, axis=0))
+    return mediana
+
+
+def _angulo_entre(a, b):
+    a = _normalizar_vetor(a)
+    b = _normalizar_vetor(b)
+    if a is None or b is None:
+        return None
+    return float(np.degrees(np.arccos(np.clip(float(np.dot(a, b)),
+                                             -1.0, 1.0))))
+
+
+def verdades_por_angulos(v1, normal_mesa, theta12_deg, theta13_deg,
+                         theta23_deg):
+    """Constroi as 3 direcoes de verdade a partir dos ANGULOS relativos.
+
+    Por que (item 116): nas poses de mesa a mao NAO fica exatamente paralela a
+    mesa (luva/encaixe), o que gera erro de execucao de 10-20 graus. O Kinect
+    mede a orientacao absoluta com viés (offset de calibracao/geometria), mas o
+    ANGULO RELATIVO entre duas poses sadias do mesmo sensor NAO tem esse viés
+    (o viés e' comum e cancela). Entao: pose 1 = direcao absoluta geometrica
+    (palma p/ a camera, a mais precisa), e poses 2/3 sao construidas a partir
+    dos angulos relativos medidos pelo Kinect -> a verdade passa a refletir a
+    mao REAL do usuario, sem herdar o viés absoluto do Kinect.
+    """
+    v1 = _normalizar_vetor(v1)
+    if v1 is None:
+        return None
+    mesa = _normalizar_vetor(normal_mesa)
+    if mesa is None:
+        return None
+    theta12 = float(np.radians(theta12_deg))
+    theta13 = float(np.radians(theta13_deg))
+    theta23 = float(np.radians(theta23_deg))
+    #: eixo perpendicular a v1 na direcao aproximada de -mesa (palma p/ baixo)
+    alvo2 = -mesa
+    perpendicular = alvo2 - float(np.dot(alvo2, v1)) * v1
+    eixo2 = _normalizar_vetor(perpendicular)
+    if eixo2 is None:
+        alternativa = np.array([1.0, 0.0, 0.0])
+        if abs(float(np.dot(alternativa, v1))) > 0.9:
+            alternativa = np.array([0.0, 1.0, 0.0])
+        eixo2 = _normalizar_vetor(
+            alternativa - float(np.dot(alternativa, v1)) * v1)
+        if eixo2 is None:
+            return None
+    v2 = np.cos(theta12) * v1 + np.sin(theta12) * eixo2
+    v2 = _normalizar_vetor(v2)
+    if v2 is None:
+        return None
+    seno12 = np.sin(theta12)
+    if abs(seno12) < 1e-6:
+        return None
+    #: decomposicao de v3 na base NAO ortogonal (v1, v2, n): resolve o
+    #: sistema da matriz de Gram [[1,cos12],[cos12,1]] (o erro que a versao
+    #: ingenua de dot-products cometia era ~20 graus).
+    cos12 = np.cos(theta12)
+    cos13 = np.cos(theta13)
+    cos23 = np.cos(theta23)
+    seno2 = seno12 * seno12
+    alfa = (cos13 - cos12 * cos23) / seno2
+    beta = (cos23 - cos12 * cos13) / seno2
+    gamma2 = 1.0 - alfa * alfa - beta * beta - 2.0 * alfa * beta * cos12
+    if gamma2 < 0.0:
+        gamma2 = 0.0
+    normal_plano = np.cross(v1, v2)
+    normal_plano = _normalizar_vetor(normal_plano)
+    if normal_plano is None:
+        return None
+    candidatos = []
+    for sinal in (1.0, -1.0):
+        v3 = (alfa * v1 + beta * v2
+              + sinal * float(np.sqrt(gamma2)) * normal_plano)
+        v3 = _normalizar_vetor(v3)
+        if v3 is not None:
+            candidatos.append(v3)
+    if not candidatos:
+        return None
+    #: a pose 3 e' "palma p/ cima": escolhe o candidato mais alinhado com +mesa
+    v3 = max(candidatos, key=lambda v: float(np.dot(v, mesa)))
+    return (v1, v2, v3)
+
+
 class ColetorPosesFisicas:
-    """Coleta rotacoes do IMU em poses de orientacao FISICA conhecida.
+    """Coleta rotacoes do IMU nas poses fisicas e resolve/verifica T/f.
 
     MODOS:
-      - "calibrar": ao final resolve T/f com `solve_palm_alignment` usando os
-        vetores CONHECIDOS de cada pose (a verdade fisica) e devolve o resultado;
-      - "verificar": avalia o alinhamento CARREGADO (T R f) contra esses mesmos
-        vetores conhecidos, pose a pose -> PASS/FAIL + certificado.
-
-    Nao usa landmark/depth do Kinect: so' a rotacao do IMU (que e' fluida). O
-    experimentador precisa apenas acertar as 3 poses fisicas.
+      - "calibrar": resolve T/f; usa a verdade GEOMETRICA (pose 1) + os angulos
+        RELATIVOS medidos pelo Kinect (imunes ao viés absoluto) para refletir a
+        mao real nas poses de mesa; se os angulos nao estiverem disponiveis, cai
+        para as normais do plano da mesa (item 115);
+      - "verificar": avalia o alinhamento carregado contra essas mesmas verdades.
+    O Kinect nao precisa ver a mao para COLETAR rotacoes (so' para os angulos).
     """
 
     def __init__(self, poses=POSES_FISICAS_CALIBRACAO,
@@ -1192,13 +1291,15 @@ class ColetorPosesFisicas:
         self.modo = "calibrar"
         self._ativa = False
         self._t0 = 0.0
-        self._amostras = {"right": [], "left": []}   # [(pose_idx, rotacao)]
+        self._amostras = {"right": [], "left": []}
+        self._normais = {"right": {}, "left": {}}   # lado -> {idx: [n]}
 
     def iniciar(self, agora, modo="calibrar"):
         self.modo = str(modo)
         self._ativa = True
         self._t0 = float(agora)
         self._amostras = {"right": [], "left": []}
+        self._normais = {"right": {}, "left": {}}
 
     def parar(self):
         self._ativa = False
@@ -1238,11 +1339,28 @@ class ColetorPosesFisicas:
         self._amostras[lado].append((indice, rot))
         return True
 
+    def coletar_normal_kinect(self, lado, indice, normal):
+        """Guarda a normal do plano da mao medida pelo Kinect (p/ angulos)."""
+        if not self._ativa or normal is None:
+            return False
+        vetor = _normalizar_vetor(normal)
+        if vetor is None:
+            return False
+        try:
+            indice = int(indice)
+        except (TypeError, ValueError):
+            return False
+        self._normais.setdefault(lado, {}).setdefault(indice, []).append(vetor)
+        return True
+
     def contar(self, lado, indice_pose=None):
         if indice_pose is None:
             return len(self._amostras.get(lado, ()))
         return sum(1 for pose, _rot in self._amostras.get(lado, ())
                    if pose == indice_pose)
+
+    def contar_normais(self, lado):
+        return sum(len(v) for v in self._normais.get(lado, {}).values())
 
     def _por_pose(self, lado):
         grupos = {}
@@ -1250,100 +1368,158 @@ class ColetorPosesFisicas:
             grupos.setdefault(indice, []).append(rot)
         return grupos
 
+    def _representante_normal(self, lado, indice):
+        lista = self._normais.get(lado, {}).get(indice, [])
+        if len(lista) < 3:
+            return None
+        return _mediana_vetores(lista)
+
+    def _angulos_poses(self, lado):
+        """(theta12, theta13, theta23) em graus medidos pelo Kinect, ou None."""
+        representantes = [self._representante_normal(lado, indice)
+                          for indice in range(len(self.poses))]
+        if any(rep is None for rep in representantes):
+            return None
+        n1, n2, n3 = representantes
+        return (_angulo_entre(n1, n2), _angulo_entre(n1, n3),
+                _angulo_entre(n2, n3))
+
+    def _calibrar_lado(self, lado, poses):
+        grupos = self._por_pose(lado)
+        faltam = [indice for indice in range(len(poses))
+                  if len(grupos.get(indice, [])) < 3]
+        if faltam:
+            return {"sem_amostras": True,
+                    "poses_insuficientes": [indice + 1 for indice in faltam]}
+        rotacoes = []
+        vetores = []
+        for indice in range(len(poses)):
+            vetor = np.asarray(poses[indice][1], np.float64)
+            vetor = vetor / max(1e-12, float(np.linalg.norm(vetor)))
+            for rot in grupos[indice]:
+                rotacoes.append(rot)
+                vetores.append(vetor)
+        resolvido = solve_palm_alignment(rotacoes, vetores)
+        if resolvido is None:
+            return {"sem_amostras": True, "poses_insuficientes": []}
+        t_matriz, f_corpo, residuo = resolvido
+        erros = {}
+        for indice in range(len(poses)):
+            vetor = np.asarray(poses[indice][1], np.float64)
+            vetor = vetor / max(1e-12, float(np.linalg.norm(vetor)))
+            preditos = [t_matriz @ rot @ f_corpo for rot in grupos[indice]]
+            valores = [_angulo_entre(v, vetor) for v in preditos]
+            valores = [v for v in valores if v is not None]
+            erros[indice] = float(np.median(valores)) if valores else None
+        return {"T": t_matriz, "f": f_corpo, "residuo": float(residuo),
+                "poses": erros, "amostras": len(rotacoes),
+                "poses_usadas": tuple(poses)}
+
+    def _calibrar_com_poses(self, poses):
+        self.poses = tuple(poses)
+        resultado = {"modo": "calibrar", "lados": {}, "fechado": False,
+                     "modo_verdade": "poses_fixas"}
+        for lado in ("right", "left"):
+            resultado["lados"][lado] = self._calibrar_lado(lado, self.poses)
+        resultado["fechado"] = self._fechado(resultado["lados"])
+        return resultado
+
+    def _fechado(self, lados):
+        for dados in lados.values():
+            if dados.get("sem_amostras"):
+                return False
+            erros = [erro for erro in dados.get("poses", {}).values()
+                     if erro is not None]
+            if len(erros) != len(self.poses):
+                return False
+            for indice, erro in dados["poses"].items():
+                limite = (POSES_FISICAS_LIMITE_POSE1_DEG if indice == 0
+                          else POSES_FISICAS_LIMITE_MESA_DEG)
+                if erro is None or erro > limite:
+                    return False
+        return True
+
     def calibrar(self):
         """{lado: {T, f, residuo, poses:{idx: erro}}} com as poses atuais."""
         return self._calibrar_com_poses(self.poses)
 
     def calibrar_mesa(self, normal_mesa):
-        """Calibra usando o PLANO DA MESA medido; testa os DOIS sinais.
+        """Calibra com a verdade fisica; usa angulos relativos do Kinect.
 
-        O sentido do eixo Y do camera space do Kinect nao e' confiavel entre
-        os trechos do codigo (um usa +y, outro -y), entao tentamos
-        `sinal=+1` e `sinal=-1` e ficamos com o resultado de MENOR residuo
-        (o residuo alto delata a atribuicao de "para cima" errada).
+        Retorna tambem `poses_verdade` por lado (para o V usar exatamente as
+        mesmas verdade do J) e `angulos` medidos.
         """
-        candidatos = []
-        for sinal in (1.0, -1.0):
-            poses = poses_fisicas_com_mesa(normal_mesa, sinal=sinal)
-            resultado = self._calibrar_com_poses(poses)
-            residuos = [dados.get("residuo")
-                        for dados in resultado["lados"].values()
-                        if not dados.get("sem_amostras")]
-            if not residuos:
-                continue
-            candidatos.append((float(np.mean(residuos)), sinal,
-                               poses, resultado))
-        if not candidatos:
-            vazio = self._calibrar_com_poses(
-                poses_fisicas_com_mesa(normal_mesa))
-            vazio["sinal_mesa"] = 1.0
-            return vazio
-        melhor = min(candidatos, key=lambda item: item[0])
-        _residuo, sinal, _poses, resultado = melhor
-        resultado["sinal_mesa"] = float(sinal)
-        resultado["poses_usadas"] = _poses
-        return resultado
-
-    def _calibrar_com_poses(self, poses):
-        """{lado: {T, f, residuo, poses:{idx: erro}}} ou marca sem amostras."""
-        self.poses = tuple(poses)
-        resultado = {"modo": "calibrar", "lados": {}, "fechado": False}
+        resultado = {"modo": "calibrar", "lados": {}, "fechado": False,
+                     "angulos": {}, "poses_verdade": {},
+                     "modo_verdade": "plano_da_mesa"}
         for lado in ("right", "left"):
-            grupos = self._por_pose(lado)
-            faltam = [indice for indice in range(len(self.poses))
-                      if len(grupos.get(indice, [])) < 3]
-            if faltam:
-                resultado["lados"][lado] = {
-                    "sem_amostras": True,
-                    "poses_insuficientes": [indice + 1 for indice in faltam],
-                }
-                continue
-            rotacoes = []
-            vetores = []
-            for indice in range(len(self.poses)):
-                vetor = np.asarray(self.poses[indice][1], np.float64)
-                for rot in grupos[indice]:
-                    rotacoes.append(rot)
-                    vetores.append(vetor)
-            resolvido = solve_palm_alignment(rotacoes, vetores)
-            if resolvido is None:
-                resultado["lados"][lado] = {"sem_amostras": True,
-                                            "poses_insuficientes": []}
-                continue
-            t_matriz, f_corpo, residuo = resolvido
-            erros = {}
-            for indice in range(len(self.poses)):
-                vetor = np.asarray(self.poses[indice][1], np.float64)
-                preditos = [t_matriz @ rot @ f_corpo
-                            for rot in grupos[indice]]
-                erros[indice] = float(np.median([
-                    np.degrees(np.arccos(np.clip(
-                        float(np.dot(v / np.linalg.norm(v), vetor)), -1.0, 1.0)))
-                    for v in preditos if np.linalg.norm(v) > 1e-9])) if preditos else None
-            resultado["lados"][lado] = {
-                "T": t_matriz, "f": f_corpo, "residuo": float(residuo),
-                "poses": erros, "amostras": len(rotacoes),
-            }
-        resultado["fechado"] = all(
-            (not dados.get("sem_amostras"))
-            and max(v for v in dados["poses"].values()
-                    if v is not None) <= self.limite_graus
-            for dados in resultado["lados"].values()) if resultado["lados"] else False
-        return resultado
+            angulos = self._angulos_poses(lado)
+            poses_lado = poses_fisicas_com_mesa(normal_mesa)
+            if angulos is not None:
+                verdades = verdades_por_angulos(
+                    (0.0, 0.0, -1.0), normal_mesa, *angulos)
+            else:
+                verdades = None
+            if verdades is not None:
+                poses_lado = tuple(
+                    (POSES_FISICAS_CALIBRACAO[indice][0], tuple(verdades[indice]))
+                    for indice in range(3))
+                resultado["angulos"][lado] = angulos
+            dados = self._calibrar_lado(lado, poses_lado)
+            dados["poses_usadas"] = poses_lado
+            resultado["lados"][lado] = dados
+        #: escolhe o sinal da normal da mesa que FECHA/da' menor residuo
+        melhor = None
+        for sinal in (1.0, -1.0):
+            resultado_sinal = {"modo": "calibrar", "lados": {},
+                               "angulos": resultado["angulos"],
+                               "modo_verdade": resultado["modo_verdade"]}
+            for lado in ("right", "left"):
+                angulos = resultado["angulos"].get(lado)
+                if angulos is not None:
+                    verdades = verdades_por_angulos(
+                        (0.0, 0.0, -1.0), normal_mesa, *angulos)
+                else:
+                    verdades = None
+                if verdades is not None:
+                    poses_lado = tuple(
+                        (POSES_FISICAS_CALIBRACAO[indice][0],
+                         tuple(verdades[indice])) for indice in range(3))
+                else:
+                    poses_lado = poses_fisicas_com_mesa(normal_mesa,
+                                                        sinal=sinal)
+                resultado_sinal["lados"][lado] = self._calibrar_lado(
+                    lado, poses_lado)
+            resultado_sinal["fechado"] = self._fechado(resultado_sinal["lados"])
+            residuos = [d.get("residuo") for d in resultado_sinal["lados"].values()
+                        if not d.get("sem_amostras")]
+            media = float(np.mean(residuos)) if residuos else float("inf")
+            if melhor is None or media < melhor[0]:
+                melhor = (media, sinal, resultado_sinal)
+        if melhor is None:
+            return resultado
+        _media, sinal, vencedor = melhor
+        vencedor["sinal_mesa"] = float(sinal)
+        vencedor["modo_verdade"] = ("angulos_kinect"
+                                    if vencedor["angulos"]
+                                    else "plano_da_mesa")
+        vencedor["fechado"] = self._fechado(vencedor["lados"])
+        vencedor["poses_verdade"] = {
+            lado: list(dados.get("poses_usadas") or ())
+            for lado, dados in vencedor["lados"].items()}
+        return vencedor
 
-    def verificar(self, fusions):
-        """Certificado contra as poses fisicas para o alinhamento CARREGADO."""
-        def erro_graus(previsto, verdade):
-            norma = float(np.linalg.norm(previsto))
-            if norma < 1e-9:
-                return None
-            return float(np.degrees(np.arccos(np.clip(
-                float(np.dot(previsto / norma, verdade)), -1.0, 1.0))))
-
+    def verificar(self, fusions, poses_por_lado=None):
+        """Certificado contra as verdades (por lado, se fornecidas)."""
         resultado = {"modo": "verificar", "poses": [p[0] for p in self.poses],
                      "limite_graus": self.limite_graus, "lados": {},
                      "fechado": False, "poses_ruins": []}
         for lado in ("right", "left"):
+            poses_lado = None
+            if poses_por_lado is not None:
+                poses_lado = poses_por_lado.get(lado)
+            if not poses_lado:
+                poses_lado = self.poses
             fusao = (fusions.get(lado) if hasattr(fusions, "get")
                      else fusions[lado])
             t_matriz = getattr(fusao, "imu_to_camera", None)
@@ -1358,11 +1534,11 @@ class ColetorPosesFisicas:
             f_corpo = f_corpo / max(1e-12, float(np.linalg.norm(f_corpo)))
             grupos = self._por_pose(lado)
             ok_lado = True
-            for indice in range(len(self.poses)):
-                vetor = np.asarray(self.poses[indice][1], np.float64)
+            for indice in range(len(poses_lado)):
+                vetor = _normalizar_vetor(poses_lado[indice][1])
                 valores = []
                 for rot in grupos.get(indice, ()):
-                    erro = erro_graus(t_matriz @ rot @ f_corpo, vetor)
+                    erro = _angulo_entre(t_matriz @ rot @ f_corpo, vetor)
                     if erro is not None:
                         valores.append(erro)
                 if len(valores) >= 3:
@@ -1370,7 +1546,9 @@ class ColetorPosesFisicas:
                              "media": float(np.mean(valores)),
                              "p90": float(np.percentile(valores, 90)),
                              "max": float(np.max(valores))}
-                    stats["passou"] = stats["media"] <= self.limite_graus
+                    limite = (POSES_FISICAS_LIMITE_POSE1_DEG if indice == 0
+                              else POSES_FISICAS_LIMITE_MESA_DEG)
+                    stats["passou"] = stats["media"] <= limite
                 else:
                     stats = {"n": len(valores), "media": None, "p90": None,
                              "max": None, "passou": False}
@@ -1378,7 +1556,7 @@ class ColetorPosesFisicas:
                 if not stats["passou"]:
                     ok_lado = False
                     resultado["poses_ruins"].append(
-                        (lado, indice + 1, self.poses[indice][0],
+                        (lado, indice + 1, poses_lado[indice][0],
                          stats.get("media")))
             dados["fechado"] = ok_lado
             resultado["lados"][lado] = dados

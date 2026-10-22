@@ -2037,6 +2037,12 @@ def main():
     #: Sentido da normal medida que corresponde a "para CIMA" (+1/-1);
     #: resolvido pelo J comparando o residuo das duas hipoteses.
     mesa_sinal = 1.0
+    #: Verdades por lado definidas no J (pose1 geometrica + angulos
+    #: relativos do Kinect); o V usa exatamente estas (item 116).
+    poses_verdade_por_lado = {}
+    #: Melhor calibracao da SESSAO por lado (nao deixa uma tentativa pior
+    #: sobrescrever a melhor; item 116).
+    melhor_palma_sessao = {"right": None, "left": None}
     caminho_mesa = Path("mesa_kinect.json")
     try:
         if caminho_mesa.exists():
@@ -2053,6 +2059,26 @@ def main():
                     "fracao": float(_estado_mesa.get("fracao") or 0.0),
                 }
                 mesa_sinal = float(_estado_mesa.get("sinal") or 1.0)
+                _verdades_mesa = _estado_mesa.get("poses_verdade") or {}
+                for _lado_mesa in ("right", "left"):
+                    _lista_verdades = _verdades_mesa.get(_lado_mesa)
+                    if not _lista_verdades:
+                        continue
+                    _convertidas = []
+                    for _item, (_nome_pose, _v) in zip(
+                            _lista_verdades, POSES_FISICAS_CALIBRACAO):
+                        try:
+                            _vec = np.asarray(_item[1], np.float64)
+                        except (TypeError, ValueError, IndexError):
+                            _vec = np.asarray(_item, np.float64)
+                        _vec = _vec.reshape(3)
+                        _norma = float(np.linalg.norm(_vec))
+                        if np.isfinite(_vec).all() and _norma > 1e-9:
+                            _convertidas.append(
+                                (_nome_pose, tuple(_vec / _norma)))
+                    if len(_convertidas) == len(POSES_FISICAS_CALIBRACAO):
+                        poses_verdade_por_lado[_lado_mesa] = tuple(
+                            _convertidas)
                 print(f"[nivel] plano da mesa carregado de "
                       f"{caminho_mesa.name} (tilt "
                       f"{mesa_plano_info['tilt_deg']:.1f} graus; tecle M "
@@ -3133,6 +3159,11 @@ def main():
                     falhas_plano_contagem[lado], plano_estavel)
                 if plano_estavel is not None:
                     plano_display[lado] = (plano_estavel, now)
+                if poses_fisicas.ativa and plano_estavel is not None:
+                    _fase_normal = poses_fisicas.fase_atual(now)
+                    if _fase_normal is not None:
+                        poses_fisicas.coletar_normal_kinect(
+                            lado, _fase_normal[0], plano_estavel)
                 mao["palm_normal_plano"] = normal_plano_lado
                 mao["palm_plano_estavel"] = plano_estavel
                 mao["palm_plano_rms_m"] = rms_plano_lado
@@ -3308,15 +3339,86 @@ def main():
                                 mesa_normal_camera)
                             mesa_sinal = float(
                                 resultado_poses.get("sinal_mesa") or 1.0)
+                            poses_verdade_por_lado = {
+                                _lado_v: tuple(_dados_v.get("poses_usadas"))
+                                for _lado_v, _dados_v
+                                in resultado_poses.get("lados", {}).items()
+                                if _dados_v.get("poses_usadas")}
                             print("CALIBRACAO POR POSES FISICAS "
-                                  "terminada (referencia: PLANO DA MESA "
-                                  f"medido, sinal {mesa_sinal:+.0f}):")
+                                  "terminada (verdade: pose 1 geometrica "
+                                  "+ angulos relativos do Kinect, "
+                                  f"sinal da mesa {mesa_sinal:+.0f}):")
+                            for _lado_diag in ("right", "left"):
+                                _ang = resultado_poses.get(
+                                    "angulos", {}).get(_lado_diag)
+                                if _ang:
+                                    print(f"  {_lado_diag}: angulos "
+                                          "medidos entre poses "
+                                          f"(1-2, 1-3, 2-3) = "
+                                          f"{_ang[0]:.1f}, {_ang[1]:.1f}, "
+                                          f"{_ang[2]:.1f} graus "
+                                          "(esperado ~90, ~90, ~180)")
+                                    if abs(_ang[2] - 180.0) > 12.0:
+                                        print("    AVISO: as poses de "
+                                              "mesa nao ficaram "
+                                              "opostas; usar o apoio "
+                                              "das maos ajuda")
+                                else:
+                                    print(f"  {_lado_diag}: Kinect nao "
+                                          "mediu as normais das 3 poses "
+                                          "(mao fora de quadro?) -- "
+                                          "usando o plano da mesa como "
+                                          "verdade; mantenha as maos "
+                                          "visiveis durante o J")
                         else:
                             resultado_poses = poses_fisicas.calibrar()
                             print("CALIBRACAO POR POSES FISICAS "
                                   "terminada (referencia: Kinect "
                                   "NIVELADO):")
+                        #: guarda as verdades/angulos p/ o V usar as mesmas
+                        try:
+                            _estado_salvar = {}
+                            if caminho_mesa.exists():
+                                _estado_salvar = json.loads(
+                                    caminho_mesa.read_text(encoding="utf-8"))
+                            _estado_salvar["poses_verdade"] = {
+                                _lado_json: [[_nome_json,
+                                              [float(c) for c in _vec_json]]
+                                             for _nome_json, _vec_json in
+                                             poses_verdade_por_lado
+                                             .get(_lado_json, ())]
+                                for _lado_json in ("right", "left")
+                                if poses_verdade_por_lado.get(_lado_json)
+                            }
+                            _estado_salvar["angulos"] = {
+                                _lado_json: [float(v) for v in _ang_json]
+                                for _lado_json, _ang_json in
+                                resultado_poses.get("angulos", {}).items()}
+                            _estado_salvar["sinal"] = float(mesa_sinal)
+                            _estado_salvar["quando"] = time.strftime(
+                                "%Y-%m-%d %H:%M:%S")
+                            if mesa_plano_info is not None:
+                                _estado_salvar["normal"] = [float(c) for c in
+                                                             mesa_normal_camera]
+                                _estado_salvar["tilt_deg"] = float(
+                                    mesa_plano_info.get("tilt_deg") or 0.0)
+                                _estado_salvar["inliers"] = int(
+                                    mesa_plano_info.get("inliers") or 0)
+                                _estado_salvar["fracao"] = float(
+                                    mesa_plano_info.get("fracao") or 0.0)
+                            caminho_mesa.write_text(
+                                json.dumps(_estado_salvar, indent=2),
+                                encoding="utf-8")
+                            print("  verdades das poses gravadas em "
+                                  f"{caminho_mesa.name}")
+                        except (OSError, TypeError, ValueError) as exc:
+                            print("  nao gravou as verdades em "
+                                  f"{caminho_mesa.name}: {exc}")
                         for lado in ("right", "left"):
+                            if melhor_palma_sessao.get(lado) is None:
+                                melhor_palma_sessao[lado] = getattr(
+                                    fusions[lado],
+                                    "palm_alignment_residual_deg", None)
                             dados_pose = resultado_poses["lados"].get(lado, {})
                             if dados_pose.get("sem_amostras"):
                                 faltam = dados_pose.get("poses_insuficientes")
@@ -3330,14 +3432,22 @@ def main():
                             residuo_pose = dados_pose["residuo"]
                             fusions[lado].set_palm_alignment(
                                 t_pose, f_pose, residuo_pose)
-                            gravou_pose = save_palm_alignment(
-                                fusions[lado], lado)
+                            _melhor = melhor_palma_sessao.get(lado)
+                            if _melhor is None or residuo_pose < _melhor:
+                                gravou_pose = save_palm_alignment(
+                                    fusions[lado], lado)
+                                melhor_palma_sessao[lado] = residuo_pose
+                                _texto_gravacao = (
+                                    f"gravado em "
+                                    f"{palm_alignment_path(lado).name}"
+                                    if gravou_pose else "NAO gravado")
+                            else:
+                                _texto_gravacao = (
+                                    "NAO gravado (pior que o melhor da "
+                                    f"sessao: {_melhor:.2f} graus)")
                             print(f"  {lado}: {dados_pose['amostras']} "
                                   f"amostras | residuo {residuo_pose:.2f} "
-                                  "graus | "
-                                  + (f"gravado em "
-                                     f"{palm_alignment_path(lado).name}"
-                                     if gravou_pose else "NAO gravado"))
+                                  f"graus | {_texto_gravacao}")
                             for indice_pose, (nome_pose, _vetor_pose) in enumerate(
                                     POSES_FISICAS_CALIBRACAO):
                                 erro_pose = dados_pose["poses"].get(
@@ -3352,7 +3462,9 @@ def main():
                                  "NAO FECHADO -- repita as poses com "
                                  "mais calma (parado ~2 s em cada)"))
                     else:
-                        relatorio_pose = poses_fisicas.verificar(fusions)
+                        relatorio_pose = poses_fisicas.verificar(
+                            fusions, poses_por_lado=(poses_verdade_por_lado
+                                                     or None))
                         print("VERIFICACAO POR POSES FISICAS terminada "
                               f"(limite {POSES_FISICAS_LIMITE_DEG:g} "
                               "graus/pose):")
@@ -3997,6 +4109,15 @@ def main():
                             "inliers": int(_info_mesa["inliers"]),
                             "fracao": float(_info_mesa["fracao"]),
                             "sinal": float(mesa_sinal),
+                            "poses_verdade": {
+                                _lado_json: [[_nome_json, [float(c)
+                                              for c in _vec_json]]
+                                             for _nome_json, _vec_json in
+                                             poses_verdade_por_lado
+                                             .get(_lado_json, ())]
+                                for _lado_json in ("right", "left")
+                                if poses_verdade_por_lado.get(_lado_json)
+                            },
                             "quando": time.strftime("%Y-%m-%d %H:%M:%S"),
                         }, indent=2), encoding="utf-8")
                         print(f"  gravado em {caminho_mesa.name}")

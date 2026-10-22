@@ -694,6 +694,83 @@ check("tool resolve o sinal da mesa e usa no J/V",
       "calibrar_mesa" in fonte_tool
       and "mesa_sinal" in fonte_tool)
 
+# ============================================================================
+# 14) ANGULOS RELATIVOS DO KINECT: corrige a execucao da mao sem herdar
+#     o vies absoluto do Kinect (item 116)
+# ============================================================================
+print("14) verdades por angulos relativos (execucao da mao)")
+_m = np.array([0.03, 0.62, -0.78])
+_m = _m / np.linalg.norm(_m)
+_v1 = np.array([0.0, 0.0, -1.0])
+_menos_m = -_m
+_e2 = _menos_m - float(np.dot(_menos_m, _v1)) * _v1
+_e2 = _e2 / np.linalg.norm(_e2)
+#: verdade com erro de execucao da mao (palma nao fica exatamente
+#: paralela a mesa: pose 2 e 3 inclinadas ~11 graus e NAO opostas)
+_v2 = _menos_m + 0.20 * _e2
+_v2 = _v2 / np.linalg.norm(_v2)
+_v3 = _m - 0.15 * _e2
+_v3 = _v3 / np.linalg.norm(_v3)
+_verdades_reais = (_v1, _v2, _v3)
+#: vies ABSOLUTO do Kinect (rotacao desconhecida B): as normais medidas
+#: sao B v_i; os ANGULOS entre elas nao mudam
+_bias = gt.rotation_matrix(8.0, -5.0, 12.0)
+_normais_kinect = [gt.rotation_matrix(0.0, 0.0, 0.0)  # placeholder
+                   for _ in range(3)]
+_normais_kinect = [_bias @ v for v in _verdades_reais]
+_angulos_medidos = (
+    float(np.degrees(np.arccos(np.clip(float(np.dot(
+        _normais_kinect[0] / np.linalg.norm(_normais_kinect[0]),
+        _normais_kinect[1] / np.linalg.norm(_normais_kinect[1]))),
+        -1.0, 1.0)))),
+    float(np.degrees(np.arccos(np.clip(float(np.dot(
+        _normais_kinect[0] / np.linalg.norm(_normais_kinect[0]),
+        _normais_kinect[2] / np.linalg.norm(_normais_kinect[2]))),
+        -1.0, 1.0)))),
+    float(np.degrees(np.arccos(np.clip(float(np.dot(
+        _normais_kinect[1] / np.linalg.norm(_normais_kinect[1]),
+        _normais_kinect[2] / np.linalg.norm(_normais_kinect[2]))),
+        -1.0, 1.0)))),
+)
+_reconstruidas = gt.verdades_por_angulos(
+    _v1, _m, *_angulos_medidos)
+check("angulos relativos: reconstroi as verdades reais",
+      _reconstruidas is not None
+      and all(np.degrees(np.arccos(np.clip(
+          float(np.dot(a / np.linalg.norm(a), b)), -1.0, 1.0))) < 2.0
+          for a, b in zip(_reconstruidas, _verdades_reais)),
+      None if _reconstruidas is None else
+      [np.round(np.degrees(np.arccos(np.clip(float(np.dot(
+          a / np.linalg.norm(a), b)), -1.0, 1.0))), 2)
+       for a, b in zip(_reconstruidas, _verdades_reais)])
+#: calibra com amostras sinteticas cujas rotacoes seguem as verdades
+#: reais e normais do Kinect com vies: o fit deve FECHAR
+_coletor_ang = gt.ColetorPosesFisicas(seg_pose=1.0, settle=0.2)
+_coletor_ang.iniciar(0.0, "calibrar")
+for _indice, _vetor in enumerate(_verdades_reais):
+    _alvo = _T_verdade.T @ _vetor
+    _rot = _rot_entre(_f_verdade, _alvo)
+    for _dt in (0.3, 0.5, 0.7, 0.9):
+        for _lado in ("right", "left"):
+            _coletor_ang.coletar(_lado, _indice * 1.0 + _dt, _rot)
+            _coletor_ang.coletar_normal_kinect(
+                _lado, _indice, _normais_kinect[_indice])
+_resultado_ang = _coletor_ang.calibrar_mesa(_m)
+_residuos_ang = [_resultado_ang["lados"][_l].get("residuo")
+                 for _l in ("right", "left")]
+check("angulos relativos: calibracao FECHA sem herdar vies do Kinect",
+      _resultado_ang["fechado"] is True
+      and all(r is not None and r < 2.0 for r in _residuos_ang),
+      _residuos_ang)
+check("angulos relativos: verdades gravadas p/ o V usam a mao real",
+      bool(_resultado_ang.get("poses_verdade"))
+      and all(len(_resultado_ang["poses_verdade"].get(_l, ())) == 3
+              for _l in ("right", "left")))
+check("tool coleta normais do Kinect e usa no J/V",
+      "coletar_normal_kinect" in fonte_tool
+      and "poses_verdade_por_lado" in fonte_tool
+      and "melhor_palma_sessao" in fonte_tool)
+
 if FALHAS:
     print()
     print(f"PALMA_PLANO_FALHOU: {len(FALHAS)} verificacao(oes): "

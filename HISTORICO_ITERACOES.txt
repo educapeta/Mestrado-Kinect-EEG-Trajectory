@@ -7337,3 +7337,63 @@ PROXIMO PASSO: rodar J (3 poses fisicas, duas maos juntas, ~11 s) e depois V;
 esperado: o V finalmente fecha porque as normais 2/3 agora sao as da MESA
 medida, nao uma suposicao de Kinect nivelado.
 
+
+================================================================================
+ITEM 116 (22/10/2026) - "ERRO DA PALMA NA MESA PRA CIMA E PRA BAIXO FOI O MESMO":
+    verdade por ANGULOS RELATIVOS do Kinect (livre de vies absoluto) + melhor
+    calibracao da sessao
+================================================================================
+RELATO DO USUARIO: "a mesa esta' calibrada certa, tentei algumas vezes calibrar
+conforme o trial mas o erro da palma na mesa pra cima e pra baixo foi mais ou
+menos a mesma e nao deu pra fechar a calibracao".
+DIAGNOSTICO MEDIDO
+  - Plano da mesa por ROI (probe no Kinect real): todo/ esquerda/ direita/
+    baixo-centro/ fundo dão normais equivalentes (tilt 51.0-52.5 graus; normais
+    dentro de ~1.5 grau) -> a MEDIDA DA MESA ESTA' BOA; nao era vies de 10-20
+    graus na normal medida.
+  - Nas rodadas de J do usuario: a pose 1 (palma p/ Kinect) SEMPRE deu erro
+    pequeno (0.5 a 5.5 graus), enquanto as poses 2 e 3 (mesa) deram 8-42 graus e
+    com MAGNITUDES PARECIDAS entre cima e baixo. Isso e' a assinatura de
+    INCONSISTENCIA entre as duas poses: se as rotacoes medidas pelo IMU entre
+    "palma p/ baixo" e "palma p/ cima" nao sao ~180 graus (a mao nao fica
+    exatamente plana/oposta com a luva), nenhuma T/f consegue acertar as duas;
+    o residuo se divide igualmente entre elas. O erro e' de EXECUCAO DA MAO, nao
+    da mesa nem necessariamente do IMU.
+CORRECAO (verdade hibrida)
+  1) `verdades_por_angulos(v1, normal_mesa, theta12, theta13, theta23)`: pose 1
+     continua a direcao GEOMETRICA absoluta (0,0,-1) (a mais precisa); as poses
+     2/3 sao reconstruidas a partir dos ANGULOS RELATIVOS medidos pelo Kinect.
+     O vies ABSOLUTO do Kinect (calibracao/geometria) e' comum as poses e
+     CANCELA nos angulos relativos; entao a verdade passa a refletir a mao REAL
+     do usuario em cada pose, sem herdar o vies do Kinect. (Decomposicao na base
+     nao ortogonal v1,v2,n via matriz de Gram; a versao ingenua errava ~20 graus
+     e foi corrigida no teste.)
+  2) `ColetorPosesFisicas.coletar_normal_kinect`: guarda a normal do plano da
+     mao medida pelo Kinect em cada pose (o tool alimenta durante a captura).
+     `calibrar_mesa` usa os angulos quando disponiveis; senao cai para as
+     normais do plano da mesa (item 115).
+  3) J grava `poses_verdade` (por lado) e `angulos` em mesa_kinect.json; o V usa
+     EXATAMENTE as mesmas verdades do J (`verificar(poses_por_lado=...)`).
+  4) Diagnosticos no console: angulos medidos (1-2, 1-3, 2-3) vs esperado
+     (~90, ~90, ~180); se |2-3 - 180| > 12 graus avisa que as poses de mesa nao
+     ficaram opostas e sugere apoiar as maos. Se o Kinect nao mediu as normais
+     (mao fora de quadro), avisa que caiu para o plano da mesa.
+  5) MELHOR DA SESSAO: um J pior nao sobrescreve mais a melhor calibracao (por
+     lado, comparando com o residuo carregado e com os melhores da sessao); no
+     usuario as tentativas 30.24 -> 13.45 -> 9.43 -> 12.02 -> 22.96 -> 14.18
+     mostram que ele ACERTOU 9.43/6.17 mas a ultima gravacao foi pior; agora
+     fica a melhor.
+  6) Limites do certificado por pose documentados: pose 1 <= 10 graus (medida
+     1-3 na bancada); poses de mesa <= 16 graus (erro de execucao da mao/luva).
+TESTES: grupo 14 do test_palma_plano -- com um vies ABSOLUTO desconhecido do
+Kinect (rotacao arbitraria aplicada as normais), as verdades reconstruidas
+ficam < 2 graus das reais e a calibracao FECHA com residuo < 2 graus; verdades
+por lado gravadas p/ o V; guards do tool (coletar_normal_kinect,
+poses_verdade_por_lado, melhor_palma_sessao). SUITE COMPLETA 59/59.
+SMOKE: tool abre sem crash e carrega mesa_kinect.json (tilt 51.2).
+PROXIMO PASSO: rodar J 1-2 vezes e V. Cuidados nas poses de mesa: palma p/
+baixo bem plana com punho reto; palma p/ cima SEM esmagar o dorso na mesa (a
+luva/caixa inclina a mao) -- manter a mao paralela logo acima da mesa usando a
+mesa como referencia. O console agora mostra os angulos: se 2-3 ficar perto de
+180, o certificado fecha.
+
