@@ -126,6 +126,13 @@ from camera_uvc import (define_modo, le_fourcc, parse_controle_por_camera,  # no
 # o T EM MEMORIA (o JSON salvo continua valendo para qualquer boot).
 from imu import AncoradorYawBoot  # noqa: E402
 
+# Ritual de CALIBRACAO DOS IMUs no inicio da sessao (item 101): aviso por
+# participante + reset do ESP32 pela serial (luvas paradas) + conferencia do
+# bias parado pelo UDP. O bias do giroscopio e' calibrado no BOOT e depende de
+# a luva estar parada (medido 21/10/2026: -12,5 dps = 434 graus/min quando o
+# boot pegou a luva em movimento; reboot parado = -0,20 graus/min).
+import imu_reset  # noqa: E402
+
 #: Landmark do MediaPipe Hands usado como POSICAO DA MAO (9 = centro da palma,
 #: conforme a metodologia; 0 = pulso). Mesmo valor do paradigma
 #: (`eeg_motor_paradigm.HAND_TRACK_LANDMARK`), mas definido aqui: a biblioteca
@@ -1211,6 +1218,22 @@ def parse_cli():
               "com o comportamento antigo (seta certa na MESA e ~100 graus fora "
               "com a palma de frente)."),
     )
+    parser.add_argument(
+        "--participante", default="",
+        help=("identificacao do participante mostrada no AVISO de CALIBRACAO "
+              "dos IMUs no inicio da sessao (item 101)."),
+    )
+    parser.add_argument(
+        "--sem-calibra-imu", action="store_true",
+        help=("pula o ritual de CALIBRACAO dos IMUs do inicio da sessao (reset "
+              "pela serial + conferencia do bias parado). Use so' para comparar "
+              "ou quando as luvas ja' foram reiniciadas paradas."),
+    )
+    parser.add_argument(
+        "--porta-imu-serial", default="",
+        help=("porta serial do ESP32 das luvas para o reset de calibracao "
+              "(padrao: detecta o CP210x). Ex.: COM4."),
+    )
     return parser.parse_args()
 
 
@@ -1751,6 +1774,27 @@ def main():
         raise SystemExit(
             f"--imu-portas invalido ({exc}); use '4210,4211' (direita,esquerda) "
             "ou '1:4210,2:4211'.")
+    # --- CALIBRACAO DOS IMUs NO INICIO DA SESSAO (item 101) -----------------
+    # O bias do giroscopio e' calibrado NO BOOT: as luvas tem de estar PARADAS.
+    # Medido em 21/10/2026: boot com a luva em movimento deixou -12,5 dps no gy
+    # da direita = 434 graus/min de deriva de yaw; reiniciando parado caiu para
+    # -0,20 graus/min. O ritual avisa o participante, reinicia o ESP32 pela
+    # serial e CONFERE o bias parado pelo UDP -- antes dos receptores abrirem as
+    # portas. Falha aqui nao derruba a sessao (so' avisa).
+    if not getattr(args, "sem_calibra_imu", False):
+        try:
+            args.imu_calibracao = imu_reset.calibra_imu(
+                participante=getattr(args, "participante", ""),
+                portas=tuple(portas.values()),
+                porta_serial=(getattr(args, "porta_imu_serial", "") or None),
+                confirmar=True)
+        except Exception as exc:                    # noqa: BLE001 - nao derrubar
+            print(f"AVISO: calibracao dos IMUs falhou ({type(exc).__name__}: "
+                  f"{exc}); siga e confira o bias manualmente")
+            args.imu_calibracao = None
+    else:
+        print("Calibracao dos IMUs PULADA (--sem-calibra-imu): confira o bias "
+              "parado manualmente (tools\\deriva_estatica_imu.py).")
     receivers = {
         "right": ImuReceiver(portas.get(1, 4210)),
         "left": ImuReceiver(portas.get(2, 4211)),

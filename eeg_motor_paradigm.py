@@ -134,7 +134,14 @@ from PySide6.QtWidgets import (QApplication, QLabel, QMainWindow, QPushButton,
 from gpype.backend.core.io_node import IONode
 
 from gpype.common.constants import Constants
-from imu import ImuBank, ImuReceiver
+from imu import ImuBank, ImuReceiver, parse_portas_imu
+
+# Ritual de CALIBRACAO DOS IMUs no inicio de cada sessao (item 101): aviso por
+# participante + reset do ESP32 pela serial (luvas paradas) + conferencia do
+# bias parado pelo UDP. O bias do giroscopio e' calibrado NO BOOT: medido em
+# 21/10/2026 que boot com a luva em movimento deu -12,5 dps = 434 graus/min de
+# deriva de yaw; reiniciando parado caiu para -0,20 graus/min.
+import imu_reset
 
 import hotkeys
 
@@ -4978,6 +4985,7 @@ def _build_session_meta(args, trials, source, csv_name, events_name,
         },
         "pacotes": _package_versions(),
         "calibracoes_sha1": calibracoes,
+        "imu_calibracao": getattr(args, "imu_calibracao", None),
         "arquivos": {"eeg_csv": str(csv_name), "movimento_csv": str(motion_name),
                      "eventos_json": str(events_name),
                      "priming_dir": (str(priming_dir) if priming_dir
@@ -5275,6 +5283,14 @@ def parse_args():
                               "virgula: '4210' = um IMU (padrao); "
                               "'4210,4211' = um por mao (direita, esquerda). "
                               "Aceita o formato explicito '1:4210,2:4211'"))
+    parser.add_argument("--sem-calibra-imu", action="store_true",
+                        help=("pula o ritual de CALIBRACAO dos IMUs no inicio "
+                              "da sessao (aviso por participante + reset do "
+                              "ESP32 pela serial + conferencia do bias parado). "
+                              "Por padrao ele roda em sessoes com g.Nautilus."))
+    parser.add_argument("--porta-imu-serial", default="",
+                        help=("porta serial do ESP32 das luvas para o reset de "
+                              "calibracao (padrao: detecta o CP210x). Ex.: COM4"))
     parser.add_argument("--impedancia", action="store_true",
                         help="Relatorio de impedancias antes da sessao")
     parser.add_argument("--impedancia-tentativas", type=int, default=3,
@@ -5704,6 +5720,30 @@ def main():
     print(f"Condicoes   : {detalhe}")
     print(f"Duracao estimada ~{estimated / 60:.1f} min "
           f"(+ preparacao e pausas; cada pausa so' termina com ESPACO)")
+
+    # --- CALIBRACAO DOS IMUs NO INICIO DE CADA SESSAO (item 101) ------------
+    # Aviso por PARTICIPANTE/SESSAO + reset do ESP32 pela serial (as luvas tem
+    # de estar PARADAS) + conferencia do bias parado pelo UDP. Historia: um boot
+    # com a luva em movimento deixou -12,5 dps de bias na direita = 434
+    # graus/min de deriva de yaw; reiniciando parado caiu para -0,20 graus/min.
+    # So' roda em aquisicao REAL (gnautilus): generator/simulacao nao tem luvas.
+    # Falha aqui nao derruba a sessao (avisa e segue para o operador decidir).
+    if getattr(args, "source", "") == "gnautilus" and not getattr(
+            args, "sem_calibra_imu", False):
+        try:
+            portas_imu = tuple(porta for _lado, porta
+                               in parse_portas_imu(args.imu_portas))
+            args.imu_calibracao = imu_reset.calibra_imu(
+                participante=args.participante, sessao=args.sessao,
+                portas=portas_imu,
+                porta_serial=(args.porta_imu_serial or None),
+                confirmar=True)
+        except Exception as exc:                    # noqa: BLE001 - nao derrubar
+            print(f"AVISO: calibracao dos IMUs falhou ({type(exc).__name__}: "
+                  f"{exc}); confira o bias manualmente antes de comecar")
+            args.imu_calibracao = None
+    else:
+        args.imu_calibracao = None
 
     marker_queue = queue.Queue()
     state = SharedState()

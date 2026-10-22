@@ -6539,3 +6539,69 @@ PENDENCIAS (seguem do item 98)
   - corrigir o sinal do PALM_* no writer do paradigma (item 79 pendencia 3);
   - sessao de validacao com Tee-Object _sessao.log; depois o trial real.
 
+
+================================================================================
+ITEM 101 (22/10/2026) - CALIBRACAO DOS IMUs AUTOMATICA NO INICIO DE CADA
+    SESSAO (tool + paradigma), COM AVISO POR PARTICIPANTE
+================================================================================
+PEDIDO: associar o reset pela serial as rotinas do groundtruth tool e do eeg
+paradigm, com uma "sessao de calibracao" avisada no inicio de cada aquisicao
+por participante.
+
+IMPLEMENTADO
+  - imu_reset.py (novo, raiz): ritual `calibra_imu(participante, sessao, ...)`:
+      1) aviso com PARTICIPANTE/SESSAO e confirmacao (ENTER; EOF nao trava);
+      2) reset do ESP32 pela serial (pulso RTS -> EN; porta CP210x detectada
+         automaticamente, ou --porta-imu-serial COMx);
+      3) le o boot e as linhas "[imu] bias MPU 0x68/0x69" (prova da calibracao);
+      4) mede o gyro PARADO por UDP (~3 s/direita+esquerda) e avalia o bias:
+         <=0,2 dps OK; <=0,5 aceitavel; acima disso REPROVA e manda repetir;
+      5) devolve dict serializavel (executado/ok/porta/biases_firmware/
+         bias_udp/mensagens) -- gravado no JSON da sessao (`imu_calibracao`).
+    Falha de serial/UDP NAO derruba a sessao: avisa e segue (o operador decide).
+  - tools/kinect_groundtruth_tool.py: roda o ritual no INICIO do main, ANTES de
+    abrir os receptores UDP (senao a medicao de bias nao teria as portas).
+    Flags novas: --participante, --sem-calibra-imu, --porta-imu-serial.
+  - eeg_motor_paradigm.py: roda o ritual no main, antes do ImuBank.start() e
+    antes de _build_session_meta (que agora grava `imu_calibracao`), somente em
+    aquisicao real (--source gnautilus; generator/simulacao nao tem luvas).
+    Flags novas: --sem-calibra-imu, --porta-imu-serial.
+
+BLINDAGEM APRENDIDA NO TESTE E2E
+  - O ritual mede o bias UDP SEM SO_REUSEADDR de proposito: se outro programa
+    ja' estiver lendo os IMUs (ex.: o tool aberto), ele FALHA CLARO
+    ("porta em uso... feche-o e repita") em vez de roubar os pacotes. Foi o que
+    aconteceu no E2E de hoje: o tool do usuario estava aberto (PID 24716,
+    iniciado 14:31:57, ja' com esta integracao -- mtime do arquivo 14:30:59) e
+    segurava 4210/4211; a leitura deu "ALTO"/"sem amostras" por causa disso, nao
+    por bias real. Roll/pitch de novo: o boot pela serial funcionou e as linhas
+    de bias foram lidas (0x68 (1.0277, 3.7209, -0.8339) / 0x69 (0.9682, 0.1678,
+    -0.5902)).
+
+TESTES
+  - test_imu_reset.py (novo, ~30 verificacoes): parse dos biases | deteccao
+    CP210x | avaliacao OK/aceitavel/ALTO | reset com serial FALSA (pulso, boot,
+    descarte das linhas de dados) | medida UDP com socket FALSO (media/std e
+    porta ocupada) | ritual completo com hardware simulado (dois caminhos) |
+    resultado serializavel em JSON | integracao nos DOIS programas (import,
+    chamada, flags, campo no meta). PASS.
+  - AST/import OK nos quatro arquivos. Suite completa NAO foi re-rodada agora
+    porque o tool do usuario estava aberto segurando as portas UDP: rodar com a
+    bancada livre (55+1 testes, era 56/56 no item 98).
+
+COMO FICA O INICIO DE CADA SESSAO (nada manual)
+  - Groundtruth tool: ao abrir, aparece o banner "CALIBRACAO DOS IMUs (inicio da
+    sessao)" com o participante; ENTER -> reinicia as luvas paradas, mostra o
+    bias do firmware e o bias medido (OK/ATENCAO) e segue para a captura.
+  - Paradigma: idem no inicio da sessao com g.Nautilus; o resultado fica no
+    eventos.json (`imu_calibracao`), util para auditar cada participante.
+  - Para pular (comparar/bench): --sem-calibra-imu.
+
+PENDENCIAS
+  - Firmware: calibracao de boot que detecta movimento + re-zero em runtime
+    (opcional, item 100) -- com o ritual atual ja' nao bloqueia nada.
+  - Rodar a suite completa com a bancada livre; validar visualmente o banner
+    (console) nos dois programas; se quiser aviso TAMBEM na tela do paradigma,
+    adicionar na tela de preparacao (nao feito para nao mexer no layout sem
+    bancada).
+
