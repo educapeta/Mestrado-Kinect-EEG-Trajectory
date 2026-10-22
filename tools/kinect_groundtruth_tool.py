@@ -1979,6 +1979,9 @@ def main():
     # objetiva de que o vetor derivado do IMU coincide com a direcao anatomica.
     verificacao_palma = VerificacaoPosesPalma()
     verif_fase_vista = None
+    #: RMS do plano do dorso durante a captura J (controle de qualidade: luz
+    #: estourada/landmarks ruins inflam o RMS e descartam amostras).
+    plano_rms_captura = {"right": [], "left": []}
     # Diagnostico da palma por MOVIMENTO PROGRAMADO (tecla D): grava
     # palm_diag_<data>_<hora>.csv e, no fim, o resumo por (fase, lado). E' o
     # log que faltava para separar "calibracao sistematicamente errada" de
@@ -2987,6 +2990,8 @@ def main():
                 if captura_palma_plano.ativa and normal_plano_lado is not None:
                     captura_palma_plano.coletar(lado, now, sample_lado,
                                                 normal_plano_lado)
+                    if rms_plano_lado is not None:
+                        plano_rms_captura[lado].append(float(rms_plano_lado))
                 if verificacao_palma.ativa and normal_plano_lado is not None:
                     rotacao_verif = (None if sample_lado is None
                                      else rotation_matrix(
@@ -3065,6 +3070,13 @@ def main():
                           f"{residuo:.2f} graus ({veredito}) | "
                           + (f"gravado em {palm_alignment_path(lado).name}"
                              if gravou else "NAO gravado"))
+                    amostras_rms = plano_rms_captura.get(lado) or []
+                    if amostras_rms:
+                        print(f"    {lado}: qualidade do plano na captura: RMS "
+                              f"mediana "
+                              f"{float(np.median(amostras_rms)) * 1000:.1f} mm "
+                              f"({len(amostras_rms)} quadros) -- RMS alto = luz "
+                              "estourada/landmarks ruins, refaca com menos luz")
                     if residuo > PALM_ALIGNMENT_MAX_RESIDUAL_DEG:
                         print(f"    {lado}: residuo acima de "
                               f"{PALM_ALIGNMENT_MAX_RESIDUAL_DEG:g} graus -- "
@@ -3105,6 +3117,13 @@ def main():
                           f"alinhamento ANTERIOR {erro_antes:.1f} graus | "
                           + (f"gravado em {palm_alignment_path(lado).name}"
                              if gravou else "NAO gravado"))
+                    amostras_rms = plano_rms_captura.get(lado) or []
+                    if amostras_rms:
+                        print(f"    {lado}: qualidade do plano na captura: RMS "
+                              f"mediana "
+                              f"{float(np.median(amostras_rms)) * 1000:.1f} mm "
+                              f"({len(amostras_rms)} quadros) -- RMS alto = luz "
+                              "estourada/landmarks ruins, refaca com menos luz")
             # --- VERIFICACAO GUIADA DA PALMA (tecla V, item 103) --------------
             if verificacao_palma.ativa:
                 fase_verif = verificacao_palma.fase_atual(now)
@@ -3583,6 +3602,7 @@ def main():
                     captura_palma_plano.parar()
                     print("Captura do alinhamento por PLANO DO DORSO cancelada.")
                 else:
+                    plano_rms_captura = {"right": [], "left": []}
                     captura_palma_plano.iniciar(now)
                     print(
                         "CALIBRACAO DA PALMA POR PLANO DO DORSO (14 s): gire a "

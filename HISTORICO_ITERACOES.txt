@@ -6741,3 +6741,56 @@ PROCEDIMENTO PARA FECHAR (no bench, ~1 min)
 PENDENCIAS: rodar a suite completa com a bancada livre; registrar aqui o
 resultado do certificado V (FECHADO/NAO FECHADO + poses) da proxima sessao.
 
+
+================================================================================
+ITEM 104 (22/10/2026) - LUZ EXTRA ESTOUROU A TRUST: medidor/recomendador de
+    exposicao das webcams + aviso do RGB do Kinect (por que J/V piorou)
+================================================================================
+SINTOMA: o usuario colocou mais luz na bancada e a calibracao da palma (J/V)
+piorou; suspeitou de saturacao na camera Trust. MEDIDO: a Trust (indice 1)
+estava travada em exposicao -4 com **9,0% dos pixels ESTOURADOS** (media 150 de
+255) -- e' exatamente a saturacao que ele viu; SIGMA (indice 0) em -4 estava OK
+(media 119, 0,2% estourado); o RGB do Kinect esta' no limite (media 137, p99
+250, 2,5% estourado) -- e o Kinect NAO tem flag de exposicao.
+
+POR QUE ISSO AFETA A PALMA: a normal do plano do dorso (e o MediaPipe) dependem
+do RGB: mao estourada perde landmarks -> normal ruidosa -> o gate de qualidade
+(RMS) descarta amostras -> J refita mal e V reprova mesmo com o IMU perfeito.
+
+FERRAMENTA (nova): tools/ajusta_exposicao_cameras.py
+  - varre N valores de `--exposicao` por webcam (padrao -13..-2), captura 6
+    quadros por valor e mede media/p99/%estourado/%escuro;
+  - escolhe a melhor (SEM estouro, brilho medio perto do alvo 115; se todas
+    estouram, a de menor estouro) e imprime a LINHA DE COMANDO pronta:
+    `--exposicao "0:-5,1:-5"` (o tool e o paradigma aceitam a mesma flag);
+  - `--kinect` mede o RGB do Kinect (expo automatica, nao controlavel) e avisa
+    se estourou (recomendacao fisica: menos luz/difusor/afastar a fonte);
+  - `--salvar-preview` grava PNG para conferir depois.
+  - usa os MESMOS helpers do tool (camera_uvc.define_modo/trava_exposicao) e a
+    mesma deteccao por NOME (SIGMA/Trust) -- nao depende de indice fixo.
+
+MEDICOES DE HOJE (com a luz nova ligada):
+  SIGMA (0): -4 atual OK (119 / 0,2%); melhores: -5 (112,8 / 0,1%) ou -3
+    (124,5 / 0,8% OK).
+  TRUST (1): -4 ESTOURADO (150 / 9,0%); melhores: **-5** (101,9 / 0,6%) ou -6
+    (75,4 / 0,2%); -3/-2 estouram 53-64%.
+  KINECT RGB: p99 250 e 2,5% estourado -> reduzir a luz fisica melhora o
+    MediaPipe (nao existe flag para o Kinect v2).
+  Observacao secundaria: Trust entrega ~16,5 fps em 720p (SIGMA ~29) -- nao e' o
+  gargalo agora, mas se precisar usar --fps-cam.
+
+EXTRA NO TOOL (J): ao final da captura J ele imprime a **RMS MEDIANA do plano**
+dos quadros aceitos -- e' o indicador de captura limpa (RMS alto = luz
+estourada/landmarks ruins; refazer com menos luz). O gate de qualidade continua
+descartando RMS > 3 cm.
+
+TESTES: test_exposicao_cameras.py (novo): metricas de quadro (preto/branco/
+misto), escolha da melhor exposicao sem estouro e perto do alvo, fallback pela
+menor saturacao, respeito ao --alvo-media, e integracao da ferramenta (flags
+--exposicoes/--kinect e linha impressa) PASS; test_palma_plano segue PASS.
+
+PROXIMO PASSO (bench): rodar o tool com `--exposicao "0:-5,1:-5"`; se o script
+disser que o Kinect segue estourado, reduzir a luz/difundir; refazer J (girar a
+mao devagar) e V; conferir a RMS do plano no console do J (deve ficar baixa,
+~2-5 mm) e o certificado V.
+
