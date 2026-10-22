@@ -836,6 +836,12 @@ check("por posicao: sem posicao da mao -> faltam_posicoes",
 check("tool coleta posicao e calibra por ela no J/V",
       "calibrar_por_posicoes" in fonte_tool
       and "coletar_posicao_palma" in fonte_tool)
+check("por posicao: espalhamento min/max medidos",
+      all(_resultado_pos["lados"][_l].get("espalhamento_min_deg")
+          is not None
+          and _resultado_pos["lados"][_l].get("espalhamento_max_deg")
+          is not None
+          for _l in ("right", "left")))
 
 # ============================================================================
 # 16) MODO TAKES: 2 s parado = take, sem tempo fixo (item 120)
@@ -922,6 +928,27 @@ check("takes: verificacao PASSA com o alinhamento certo",
 check("tool usa o modo takes no J/V",
       "iniciar_takes" in fonte_tool
       and "processar_takes" in fonte_tool)
+
+# take parecido com o anterior e' RECUSADO (espalhamento minimo)
+_coletor_rej = gt.ColetorPosesFisicas(poses=_poses_take)
+_coletor_rej.iniciar_takes(0.0, "calibrar")
+_agora_rej = _alimenta_take(_coletor_rej, 0.0, _rot_take[0],
+                            -0.7 * _direcoes_take[0])
+check("takes: primeiro take antes da checagem",
+      _coletor_rej.take_indice() == 1, _coletor_rej.take_indice())
+_direcao_perto = np.array([0.0, 0.09, -0.995])
+_direcao_perto = _direcao_perto / np.linalg.norm(_direcao_perto)
+_rot_perto = _rot_entre(_f_verdade, _T_verdade.T @ _direcao_perto)
+_agora_rej = _alimenta_take(_coletor_rej, _agora_rej, _rot_perto,
+                            -0.7 * _direcao_perto)
+check("takes: pose quase igual e RECUSADA (nao avanca o take)",
+      _coletor_rej.take_indice() == 1, _coletor_rej.take_indice())
+_agora_rej = _alimenta_take(_coletor_rej, _agora_rej, _rot_take[1],
+                            -0.7 * _direcoes_take[1])
+check("takes: apos afastar a mao, o take e aceito",
+      _coletor_rej.take_indice() == 2, _coletor_rej.take_indice())
+check("tool trata o take recusado e avisa o usuario",
+      "rejeitado" in fonte_tool and "RECUSADO" in fonte_tool)
 
 # ============================================================================
 # 17) PROJECAO camera->pixel BLINDADA (item 121): mao no limite do FOV

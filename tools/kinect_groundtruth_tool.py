@@ -3349,6 +3349,14 @@ def main():
             if poses_fisicas.ativa and poses_fisicas.modo_takes:
                 _evento_take = poses_fisicas.processar_takes(now)
                 if _evento_take is not None:
+                    if _evento_take.get("rejeitado"):
+                        print(f"  TAKE {_evento_take['rejeitado']} RECUSADO: "
+                              "pose muito parecida com a anterior "
+                              f"({_evento_take['angulo']:.1f} graus < "
+                              f"{_evento_take['minimo']:g}). Desloque a "
+                              "mao ~30-40 cm mais para o lado/baixo "
+                              "(ate' perto da borda do quadro) e "
+                              "segure PARADO de novo.", flush=True)
                     if _evento_take.get("take"):
                         print(f"  TAKE {_evento_take['take']}/"
                               f"{_evento_take['total']} gravado! Pode ir "
@@ -3514,18 +3522,30 @@ def main():
                             dados_pose = resultado_poses["lados"].get(lado, {})
                             _espalhamento = dados_pose.get(
                                 "espalhamento_min_deg")
+                            _espalhamento_max = dados_pose.get(
+                                "espalhamento_max_deg")
                             if _espalhamento is not None:
-                                print(f"  {lado}: espalhamento minimo "
-                                      "entre as poses "
-                                      f"{_espalhamento:.1f} graus "
-                                      "(minimo "
-                                      f"{POSES_FISICAS_SPREAD_MIN_DEG:g})"
-                                      + ("" if _espalhamento >=
-                                         POSES_FISICAS_SPREAD_MIN_DEG
-                                         else
-                                         " -- POSES MUITO PARECIDAS: "
-                                         "leve a mao mais para os "
-                                         "lados/baixo e refaca"))
+                                _texto_espalhamento = (
+                                    f"  {lado}: espalhamento "
+                                    f"min {_espalhamento:.1f} / "
+                                    f"max {_espalhamento_max:.1f} "
+                                    "graus "
+                                    f"(minimo {POSES_FISICAS_SPREAD_MIN_DEG:g}, "
+                                    f"maximo >= "
+                                    f"{POSES_FISICAS_SPREAD_MAX_MIN_DEG:g})")
+                                if _espalhamento < POSES_FISICAS_SPREAD_MIN_DEG:
+                                    _texto_espalhamento += (
+                                        " -- POSES MUITO PARECIDAS: "
+                                        "leve a mao mais para os "
+                                        "lados/baixo e refaca")
+                                elif (_espalhamento_max is not None
+                                      and _espalhamento_max
+                                      < POSES_FISICAS_SPREAD_MAX_MIN_DEG):
+                                    _texto_espalhamento += (
+                                        " -- LECQUE ESTREITO: va mais "
+                                        "para a esquerda/direita/baixo "
+                                        "e refaca")
+                                print(_texto_espalhamento)
                             if dados_pose.get("sem_amostras"):
                                 faltam = dados_pose.get("poses_insuficientes")
                                 print(f"  {lado}: amostras insuficientes "
@@ -4318,9 +4338,10 @@ def main():
                         f"{len(poses_fisicas.poses)} posicoes, segure "
                         "PARADO em cada "
                         "uma, com a PALMA MIRANDO A LENTE e a mao PERTO do "
-                        "sensor (~50 cm), SEM TEMPO FIXO: 2 s PARADO = TAKE. "
-                        "Posicoes: 1) CENTRO; 2) BEM A ESQUERDA; 3) BEM A DIREITA; "
-                        "4) BEM PARA BAIXO. A verdade e a DIRECAO mao->lente medida "
+                        "sensor (~40-50 cm), SEM TEMPO FIXO: 2 s PARADO = "
+                        "TAKE. Desloque a mao ~30-40 cm: 1) CENTRO; 2) BEM "
+                        "A ESQUERDA; 3) BEM A DIREITA; 4) BEM PARA BAIXO. "
+                        "A verdade e a DIRECAO mao->lente medida "
                         "pelo Kinect (mesmas verdades do J). No fim sai PASS/FAIL e "
                         "o CERTIFICADO; V de novo cancela.")
             elif key == ord("j"):
@@ -4343,16 +4364,17 @@ def main():
                         "CALIBRACAO POR TAKES -- "
                         f"{len(poses_fisicas.poses)} posicoes. A verdade e' FISICA, "
                         "nao vem de planura: e a DIRECAO da sua mao ate a "
-                        "LENTE, medida pelo Kinect. SAO 4 POSICOES BEM ESPALHADAS "
-                        "(se ficarem parecidas a calibracao fica mal condicionada). "
-                        "NAO TEM TEMPO FIXO: leve o tempo que quiser para ir a cada "
-                        "posicao, sempre com a PALMA MIRANDO A LENTE e a mao "
-                        "PERTO do sensor (~50 cm). Quando a mao ficar PARADA por "
-                        "2 s, o TAKE e gravado automaticamente (a tela mostra o "
-                        "take e o status R/L); depois va para a proxima: 1) CENTRO; "
-                        "2) BEM A ESQUERDA; 3) BEM A DIREITA; 4) BEM PARA BAIXO. "
-                        "Mantenha as DUAS maos visiveis. J de novo cancela; no fim "
-                        "refaz T/f e grava com backup.")
+                        "LENTE, medida pelo Kinect. SAO 4 POSICOES BEM "
+                        "ESPALHADAS: nao basta inclinar a palma, DESLOQUE a "
+                        "mao ~30-40 cm para os lados/baixo ate' perto da "
+                        "borda do quadro (se uma pose ficar parecida com a "
+                        "anterior o TAKE e' RECUSADO na hora). NAO TEM TEMPO "
+                        "FIXO: leve o tempo que quiser; sempre com a PALMA "
+                        "MIRANDO A LENTE e a mao PERTO do sensor (~40-50 cm). "
+                        "Quando a mao ficar PARADA por 2 s o TAKE e' gravado "
+                        "automaticamente; depois: 1) CENTRO; 2) BEM A "
+                        "ESQUERDA; 3) BEM A DIREITA; 4) BEM PARA BAIXO. "
+                        "Mantenha as DUAS maos visiveis. J de novo cancela.")
             elif key == ord("p"):
                 hand_calib_active = False
                 hand_calib_samples_aux = []

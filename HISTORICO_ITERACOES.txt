@@ -7642,3 +7642,57 @@ OBS.: o take ja' gravado antes do crash nao e' perdido em runs futuros porque o
 desenho nao derruba mais o loop; se a projecao falhar a seta some naquele frame
 e volta no proximo.
 
+
+================================================================================
+ITEM 122 (22/10/2026) - REVISAO FINAL: RECUSA DE TAKE COM POSE PARECIDA e
+    criterio de espalhamento minimo/maximo (fecha a ultima brecha do protocolo)
+================================================================================
+MOTIVO (dados da ultima sessao do usuario)
+  - O run de 17:53 gravou 4 poses/verdades, mas duas ficaram QUASE IGUAIS:
+    espalhamento minimo 1.2 (right) e 1.6 (left) graus (a pose "bem a esquerda"
+    ficou a 1-2 graus da pose central). O gate anterior exigia min>=18 e por
+    isso nao gravou o alinhamento (ficou o antigo mal condicionado 3.65/3.71),
+    mas o mesa_kinect.json guardou as verdades ruins -- uma proxima sessao
+    poderia confundir.
+  - Simulacao com o alinhamento real como verdade (solve_palm_alignment +
+    3000 rotacoes aleatorias):
+      poses quase iguais (1-13 graus)  -> erro mediano 12 / 39 graus (p90 61)
+      min 15 / max 30-60 graus         -> erro mediano 1-7 graus (p90 2-11)
+    Ou seja: min 15 e' suficiente SE o leque chegar a >=30 graus.
+IMPLEMENTADO
+  1) `POSES_FISICAS_SPREAD_MIN_DEG = 15.0` e novo
+     `POSES_FISICAS_SPREAD_MAX_MIN_DEG = 30.0`; `calibrar_por_posicoes` grava
+     espalhamento min E max; `_fechado` exige min >=15 e max >=30.
+  2) `POSES_FISICAS_TAKE_SEPARACAO_MIN_DEG = 15.0`: durante o modo takes, se a
+     direcao da pose nova ficar a menos de 15 graus de QUALQUER pose ja' gravada,
+     o TAKE E' RECUSADO na hora (nao incrementa, limpa buffer, exige movimento
+     de novo) e o tool imprime "TAKE x RECUSADO: pose muito parecida ... desloque
+     a mao ~30-40 cm mais para o lado/baixo". Fim do J que "fecha" com poses
+     quase iguais.
+  3) Tool: resumo do J mostra "espalhamento min X / max Y (minimo 15, maximo
+     >=30)" com avisos especificos (poses parecidas ou leque estreito); a tela
+     continua com take/status; instrucoes do J/V agora dizem explicitamente para
+     DESLOCAR a mao ~30-40 cm ate' perto da borda do quadro (nao basta inclinar
+     a palma) e que pose parecida e' recusada.
+TESTES (test_palma_plano)
+  - grupo 16 novo: take com direcao a 5 graus do anterior e' RECUSADO (take nao
+    avanca), depois de afastar (>15 graus) o take e' aceito; tool trata
+    "rejeitado"/"RECUSADO";
+  - grupo 15: espalhamento min/max medidos;
+  - grupos 1-17 continuam PASS; SUITE COMPLETA 59/59.
+REVISAO/FAXINA FINAL
+  - compileall dos .py do projeto: 132 arquivos, 0 falhas.
+  - commitados arquivos de codigo que faltavam no repo: tools/casamento_eeg_groundtruth.py
+    (referenciado por test_casamento_eeg.py) e arm_model.json (modelo de
+    cinematica do braco usado por ARM_MODEL_PATH).
+  - mesa_kinect.json atualizado com o estado da ultima medicao (marcado para ser
+    substituido no proximo J; as verdades atuais tem espalhamento minimo 1.2-1.6
+    e NAO devem ser usadas para calibrar novamente sem refazer o J).
+  - README: secao "Calibracao da palma por TAKES (22/10/2026)" com o protocolo,
+    thresholds e como interpretar (ignorar erro ao vivo contra o Kinect).
+ESTADO PARA A PROXIMA SESSAO
+  - Alinhamento salvo ainda e' o antigo (residuo 3.65 right / 3.71 left, 3 poses
+    quase iguais) -> rodar J com as 4 poses espalhadas + modo takes; o J agora
+    recusa poses parecidas e so' grava com min>=15/max>=30.
+  - Depois: V (mesmas poses) e conferencia visual do vetor vermelho.
+

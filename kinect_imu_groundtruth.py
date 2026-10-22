@@ -1101,7 +1101,15 @@ POSES_FISICAS_CALIBRACAO = (
 #: medido no alinhamento salvo do usuario (poses a 1-13 graus): erro mediano de
 #: 12 (R) e 39 (L) graus em direcoes arbitrarias. Com ~30-60 graus o erro cai
 #: para ~2 graus. Poses muito parecidas NAO fecham o certificado.
-POSES_FISICAS_SPREAD_MIN_DEG = 18.0
+POSES_FISICAS_SPREAD_MIN_DEG = 15.0
+#: Espalhamento MAXIMO minimo (graus): as poses precisam cobrir um leque
+#: real de direcoes. Simulacao com min 15/max 30-60: erro mediano de
+#: rastreamento ~1-7 graus; com tudo quase igual (1-13 graus) era 12-39.
+POSES_FISICAS_SPREAD_MAX_MIN_DEG = 30.0
+#: Separacao minima (graus) exigida JA' NO TAKE: se a pose nova ficar
+#: parecida com uma anterior, o take e' RECUSADO na hora e o usuario move
+#: mais a mao, em vez de descobrir so' no fim que a calibracao era ruim.
+POSES_FISICAS_TAKE_SEPARACAO_MIN_DEG = 15.0
 #: MODO TAKES (item 120): sem tempo fixo por pose. A mao fica parada e o
 #: take e' gravado sozinho; o usuario leva o tempo que quiser para ir a
 #: cada posicao (como na calibracao com tabuleiro).
@@ -1472,6 +1480,8 @@ class ColetorPosesFisicas:
             dados["posicoes"] = [list(map(float, p)) for p in posicoes]
             dados["espalhamento_min_deg"] = (
                 float(min(espalhamento)) if espalhamento else None)
+            dados["espalhamento_max_deg"] = (
+                float(max(espalhamento)) if espalhamento else None)
             resultado["lados"][lado] = dados
         resultado["fechado"] = self._fechado(resultado["lados"])
         resultado["poses_verdade"] = {
@@ -1584,6 +1594,50 @@ class ColetorPosesFisicas:
         if not all(info.get("estavel") for info in infos.values()):
             return None
         indice = self.take_indice()
+        #: Rejeicao ANTECIPADA por pose parecida (item 122): a direcao do
+        #: take atual e' comparada com as direcoes ja' gravadas; se ficar
+        #: perto demais, o take e' recusado e o usuario move mais a mao.
+        if self.modo == "calibrar" and indice > 0:
+            novas_direcoes = {}
+            for lado in ("right", "left"):
+                janela = [(t, r, p) for (t, r, p)
+                          in self._take_buffer.get(lado, ())
+                          if float(agora) - t <= POSES_FISICAS_TAKE_SEC]
+                posicoes = [p for _t, _r, p in janela if p is not None]
+                if not posicoes:
+                    novas_direcoes[lado] = None
+                    continue
+                mediana = np.median(np.asarray(posicoes, np.float64),
+                                    axis=0)
+                novas_direcoes[lado] = _normalizar_vetor(-mediana)
+            pior_angulo = None
+            for lado in ("right", "left"):
+                nova = novas_direcoes.get(lado)
+                if nova is None:
+                    continue
+                for anterior in range(indice):
+                    posicoes_antigas = self._posicoes.get(
+                        lado, {}).get(anterior, [])
+                    if not posicoes_antigas:
+                        continue
+                    direcao_antiga = _normalizar_vetor(
+                        -np.median(np.asarray(posicoes_antigas,
+                                             np.float64), axis=0))
+                    if direcao_antiga is None:
+                        continue
+                    angulo = _angulo_entre(nova, direcao_antiga)
+                    if angulo is None:
+                        continue
+                    if pior_angulo is None or angulo < pior_angulo:
+                        pior_angulo = angulo
+            if (pior_angulo is not None
+                    and pior_angulo < POSES_FISICAS_TAKE_SEPARACAO_MIN_DEG):
+                self._take_buffer = {"right": [], "left": []}
+                self._take_movimento_ok = {"right": False,
+                                           "left": False}
+                return {"rejeitado": indice + 1,
+                        "angulo": float(pior_angulo),
+                        "minimo": POSES_FISICAS_TAKE_SEPARACAO_MIN_DEG}
         for lado in ("right", "left"):
             janela = [(t, r, p) for (t, r, p)
                       in self._take_buffer.get(lado, ())
@@ -1685,6 +1739,10 @@ class ColetorPosesFisicas:
             espalhamento = dados.get("espalhamento_min_deg")
             if (espalhamento is not None
                     and espalhamento < POSES_FISICAS_SPREAD_MIN_DEG):
+                return False
+            espalhamento_max = dados.get("espalhamento_max_deg")
+            if (espalhamento_max is not None
+                    and espalhamento_max < POSES_FISICAS_SPREAD_MAX_MIN_DEG):
                 return False
         return True
 

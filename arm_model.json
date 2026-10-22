@@ -1,0 +1,13 @@
+{
+  "version": 1,
+  "l1_m": 0.22704307755331032,
+  "l2_m": 0.23160206665200506,
+  "bend_ref": [
+    0.3464555111599526,
+    0.2574693595693545,
+    0.9020410787042031
+  ],
+  "side": "both",
+  "samples": 408,
+  "nota": "Elos rigidos do braco (m) no camera space do Kinect, usados pela cinematica inversa de 2 elos. bend_ref = direcao unitaria de dobramento do cotovelo no repouso."
+}

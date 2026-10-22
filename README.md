@@ -627,3 +627,38 @@ python _render_cue.py       # 9 telas do cue em PNG (arranjo LOCAL de inspeção
 | `test_firmware_luvas.py` | contrato das luvas com o **firmware** (`firmware/esp32_luvas`): env do PlatformIO × fórmula da porta no `main.cpp` × `imu.IMU_PORTAS_PADRAO` (direita **4210** / esquerda **4211**), pacote de **10 campos sem ID de lado** (o lado vem da porta), `UDP_USAR_UNICAST 1` para o IP do ICS, `credenciais.h` real apontando para o hotspot atual e **fora do git** e nota `unicast`/README em sincronia (teste negativo: trocar o `GLOVE_SIDE` da esquerda derruba a suíte) |
 | `test_imu_serial_bridge.py` | a **ponte serial→UDP** (`tools/imu_serial_bridge.py`, transporte serial do ESP32 dual-IMU): regex de 10 campos float (rejeita lixo sem quebrar), payload **idêntico ao `ImuReceiver`** real (mesmo bytes que o Wi-Fi manda), roteamento `IMU_PORTAS_PADRAO` 1→4210 / 2→4211, descarte de linha ruim sem derrubar o laço, janela de latência e `--escutar N` (modo só-imprime, sem abrir socket) — 27 asserções, sem porta física |
 | `test_preview_kinect.py` | o **preview do sensor** (`tools/preview_kinect.py`): contrato do frame do pykinect2 (buffer `h*w*4` BGRA→BGR **nos pixels**, mesmo caminho do `coleta_poses`), overlay de status, loop com FakeKinect **entregando** (conta frames e respeita `--duracao-s`) e **mudo** (`n_frames=0` em vez de espera infinita + aviso do1º frame), teto do `--sem-janela` (sem GUI não há ESC), `main()` devolvendo **2** quando `sc.abre_kinect` recusa e **1** quando 0 frames, `close()` em todo caminho — 7 casos |
+
+---
+
+## Calibração da palma por TAKES (22/10/2026, itens 114-122)
+
+As teclas `J` (calibrar) e `V` (verificar) calibram o vetor da palma do IMU
+sem depender da normal estimada em tempo real do Kinect:
+
+- 4 POSES ESPALHADAS, sempre com a PALMA MIRANDO A LENTE do Kinect e a mão
+  PERTO do sensor (~40-50 cm): 1) centro do quadro; 2) bem à esquerda; 3) bem
+  à direita; 4) bem para baixo. Desloque a mão ~30-40 cm (não basta inclinar a
+  palma), mantendo as duas mãos visíveis.
+- A verdade de cada pose é GEOMÉTRICA: direção do centro da palma até a lente
+  (origem do camera space), medida pela posição do depth (-normalize(P), erro
+  ~0.6 grau por cm a 1 m).
+- MODO TAKES: não há tempo fixo. Quando a mão fica PARADA 2 s (rotação estável
+  <4 graus, posição <5 cm), o take é gravado automaticamente; depois é preciso
+  MOVER a mão (>8 graus ou >10 cm) antes do próximo take. A tela mostra o take,
+  a instrução da pose e o status por lado (MOVA / parado X/2 s / gravando).
+- REJEIÇÃO NA HORA: se a pose nova ficar a menos de 15 graus de uma anterior,
+  o take é recusado ("TAKE x RECUSADO") e o usuário afasta mais a mão. O J só
+  grava se o espalhamento final for >=15 graus (mínimo) e >=30 graus (máximo);
+  poses quase iguais tornam a calibração mal condicionada e o vetor vermelho
+  não acompanha a mão fora daquele cone.
+- O J grava as verdades e o espalhamento em `mesa_kinect.json`; o V usa
+  exatamente as mesmas verdades. O melhor resultado da sessão é mantido (uma
+  tentativa pior não sobrescreve a melhor).
+- Validação: o `V` compara o alinhamento carregado com as mesmas direções e
+  fecha o CERTIFICADO quando todas as poses ficam dentro de 10 graus (pose 1)
+  e 16 graus (demais).
+
+Observação: os números ao vivo "erro palma/erro plano" comparam com a normal
+instantânea do Kinect (ruidosa/viesada) e NÃO devem ser usados para julgar a
+calibração; o critério é o certificado do J/V e a conferência visual do vetor
+vermelho ao girar a mão.
