@@ -1102,6 +1102,14 @@ POSES_FISICAS_CALIBRACAO = (
 #: 12 (R) e 39 (L) graus em direcoes arbitrarias. Com ~30-60 graus o erro cai
 #: para ~2 graus. Poses muito parecidas NAO fecham o certificado.
 POSES_FISICAS_SPREAD_MIN_DEG = 18.0
+#: MODO TAKES (item 120): sem tempo fixo por pose. A mao fica parada e o
+#: take e' gravado sozinho; o usuario leva o tempo que quiser para ir a
+#: cada posicao (como na calibracao com tabuleiro).
+POSES_FISICAS_TAKE_SEC = 2.0
+POSES_FISICAS_TAKE_MAX_DESVIO_DEG = 4.0
+POSES_FISICAS_TAKE_MOVIMENTO_MIN_DEG = 8.0
+POSES_FISICAS_TAKE_POS_MAX_M = 0.05
+POSES_FISICAS_TAKE_MOVIMENTO_POS_M = 0.10
 #: Duracao de cada pose fisica (s) e tempo para chegar na pose.
 POSES_FISICAS_POSE_SEC = 3.0
 POSES_FISICAS_SETTLE_SEC = 0.8
@@ -1215,6 +1223,15 @@ def _angulo_entre(a, b):
                                              -1.0, 1.0))))
 
 
+def _angulo_rotacoes(r1, r2):
+    """Angulo (graus) entre duas rotacoes (3,3)."""
+    a = np.asarray(r1, np.float64).reshape(3, 3)
+    b = np.asarray(r2, np.float64).reshape(3, 3)
+    traco = float(np.trace(a @ b.T))
+    cosseno = float(np.clip((traco - 1.0) / 2.0, -1.0, 1.0))
+    return float(np.degrees(np.arccos(cosseno)))
+
+
 def verdades_por_angulos(v1, normal_mesa, theta12_deg, theta13_deg,
                          theta23_deg):
     """Constroi as 3 direcoes de verdade a partir dos ANGULOS relativos.
@@ -1314,10 +1331,18 @@ class ColetorPosesFisicas:
         #: Posicao 3D do centro da palma por pose (verdade = direcao p/ a
         #: lente, item 117): lado -> {idx: [posicao (3,)]}.
         self._posicoes = {"right": {}, "left": {}}
+        #: MODO TAKES (item 120).
+        self._modo_takes = False
+        self._take_indice = 0
+        self._take_buffer = {"right": [], "left": []}
+        self._take_movimento_ok = {"right": True, "left": True}
+        self._take_ref_rot = {"right": None, "left": None}
+        self._take_ref_pos = {"right": None, "left": None}
 
     def iniciar(self, agora, modo="calibrar"):
         self.modo = str(modo)
         self._ativa = True
+        self._modo_takes = False
         self._t0 = float(agora)
         self._amostras = {"right": [], "left": []}
         self._normais = {"right": {}, "left": {}}
@@ -1453,6 +1478,134 @@ class ColetorPosesFisicas:
             lado: list(dados.get("poses_usadas") or ())
             for lado, dados in resultado["lados"].items()}
         return resultado
+
+    def iniciar_takes(self, agora, modo="calibrar"):
+        """Modo TAKES (item 120): 2 s parado = take; usuario no ritmo dele."""
+        self.modo = str(modo)
+        self._ativa = True
+        self._modo_takes = True
+        self._t0 = float(agora)
+        self._take_indice = 0
+        self._amostras = {"right": [], "left": []}
+        self._normais = {"right": {}, "left": {}}
+        self._posicoes = {"right": {}, "left": {}}
+        self._take_buffer = {"right": [], "left": []}
+        self._take_movimento_ok = {"right": True, "left": True}
+        self._take_ref_rot = {"right": None, "left": None}
+        self._take_ref_pos = {"right": None, "left": None}
+
+    @property
+    def modo_takes(self):
+        return bool(getattr(self, "_modo_takes", False))
+
+    def take_indice(self):
+        return int(getattr(self, "_take_indice", 0))
+
+    def takes_completos(self):
+        return self.take_indice() >= len(self.poses)
+
+    def estado_lado(self, lado, agora):
+        info = {"movimento_ok": bool(self._take_movimento_ok.get(lado)),
+                "janela_s": 0.0, "desvio_deg": None,
+                "estavel": False, "posicao_ok": False,
+                "take": self.take_indice()}
+        if not self._ativa or not self.modo_takes:
+            return info
+        janela = [(t, r, p) for (t, r, p)
+                  in self._take_buffer.get(lado, ())
+                  if float(agora) - t <= POSES_FISICAS_TAKE_SEC]
+        if not janela:
+            return info
+        info["janela_s"] = max(0.0, float(agora) - janela[0][0])
+        info["posicao_ok"] = any(p is not None for _t, _r, p in janela)
+        if not info["movimento_ok"]:
+            return info
+        rotacoes = [r for _t, r, _p in janela]
+        referencia = rotacoes[len(rotacoes) // 2]
+        info["desvio_deg"] = max(
+            _angulo_rotacoes(referencia, r) for r in rotacoes)
+        estavel = (info["janela_s"] >= POSES_FISICAS_TAKE_SEC * 0.85
+                   and len(janela) >= 8
+                   and info["desvio_deg"]
+                   <= POSES_FISICAS_TAKE_MAX_DESVIO_DEG)
+        if estavel and self.modo == "calibrar":
+            posicoes = [p for _t, _r, p in janela]
+            if any(p is None for p in posicoes):
+                estavel = False
+            else:
+                nuvem = np.asarray(posicoes, np.float64)
+                mediana = np.median(nuvem, axis=0)
+                espalhamento = float(np.max(
+                    np.linalg.norm(nuvem - mediana, axis=1)))
+                estavel = espalhamento <= POSES_FISICAS_TAKE_POS_MAX_M
+        info["estavel"] = bool(estavel)
+        return info
+
+    def atualizar_lado(self, lado, agora, rotacao, posicao=None):
+        if not self._ativa or not self.modo_takes or rotacao is None:
+            return
+        rot = np.asarray(rotacao, np.float64).reshape(3, 3)
+        if not np.isfinite(rot).all():
+            return
+        posicao_vetor = None
+        if posicao is not None:
+            candidato = np.asarray(posicao, np.float64).reshape(3)
+            if np.isfinite(candidato).all():
+                posicao_vetor = candidato
+        self._take_buffer.setdefault(lado, []).append(
+            (float(agora), rot, posicao_vetor))
+        limite = float(agora) - POSES_FISICAS_TAKE_SEC * 1.6
+        self._take_buffer[lado] = [item for item in self._take_buffer[lado]
+                                   if item[0] >= limite]
+        if not self._take_movimento_ok.get(lado):
+            referencia = self._take_ref_rot.get(lado)
+            if (referencia is not None
+                    and _angulo_rotacoes(rot, referencia)
+                    >= POSES_FISICAS_TAKE_MOVIMENTO_MIN_DEG):
+                self._take_movimento_ok[lado] = True
+            referencia_pos = self._take_ref_pos.get(lado)
+            if (not self._take_movimento_ok.get(lado)
+                    and referencia_pos is not None
+                    and posicao_vetor is not None
+                    and float(np.linalg.norm(posicao_vetor
+                                             - referencia_pos))
+                    >= POSES_FISICAS_TAKE_MOVIMENTO_POS_M):
+                self._take_movimento_ok[lado] = True
+
+    def processar_takes(self, agora):
+        if not self._ativa or not self.modo_takes:
+            return None
+        if self.takes_completos():
+            return {"pronto": True}
+        if not all(self._take_movimento_ok.values()):
+            return None
+        infos = {lado: self.estado_lado(lado, agora)
+                 for lado in ("right", "left")}
+        if not all(info.get("estavel") for info in infos.values()):
+            return None
+        indice = self.take_indice()
+        for lado in ("right", "left"):
+            janela = [(t, r, p) for (t, r, p)
+                      in self._take_buffer.get(lado, ())
+                      if float(agora) - t <= POSES_FISICAS_TAKE_SEC]
+            posicoes = []
+            for _t, rot, posicao in janela:
+                self._amostras[lado].append((indice, rot))
+                if posicao is not None:
+                    self._posicoes[lado].setdefault(
+                        indice, []).append(posicao)
+                    posicoes.append(posicao)
+            rotacoes = [rot for _t, rot, _p in janela]
+            if rotacoes:
+                self._take_ref_rot[lado] = rotacoes[len(rotacoes) // 2]
+            if posicoes:
+                self._take_ref_pos[lado] = np.median(
+                    np.asarray(posicoes, np.float64), axis=0)
+        self._take_indice = indice + 1
+        self._take_buffer = {"right": [], "left": []}
+        self._take_movimento_ok = {"right": False, "left": False}
+        return {"take": indice + 1, "total": len(self.poses),
+                "pronto": self.takes_completos()}
 
     def _por_pose(self, lado):
         grupos = {}

@@ -837,6 +837,92 @@ check("tool coleta posicao e calibra por ela no J/V",
       "calibrar_por_posicoes" in fonte_tool
       and "coletar_posicao_palma" in fonte_tool)
 
+# ============================================================================
+# 16) MODO TAKES: 2 s parado = take, sem tempo fixo (item 120)
+# ============================================================================
+print("16) modo takes: 2 s parado grava, usuario no ritmo dele")
+_poses_take = tuple(gt.POSES_FISICAS_CALIBRACAO[:3])
+_direcoes_take = [np.array([0.0, 0.0, -1.0]),
+                  np.array([0.5, 0.0, -0.87]),
+                  np.array([0.0, 0.5, -0.87])]
+_direcoes_take = [v / np.linalg.norm(v) for v in _direcoes_take]
+_rot_take = [_rot_entre(_f_verdade, _T_verdade.T @ v)
+             for v in _direcoes_take]
+
+
+def _alimenta_take(coletor, agora, rot, pos, passos=45, lado_receber=None):
+    for _passo in range(passos):
+        agora += 0.05
+        for _lado in ("right", "left"):
+            coletor.atualizar_lado(_lado, agora, rot, pos)
+        coletor.processar_takes(agora)
+    return agora
+
+
+_coletor_take = gt.ColetorPosesFisicas(poses=_poses_take)
+_coletor_take.iniciar_takes(0.0, "calibrar")
+_agora_take = 0.0
+_eventos_take = []
+for _indice, _rot in enumerate(_rot_take):
+    _pos = (-0.7 * _direcoes_take[_indice]
+            + np.array([0.002, 0.001, 0.003]))
+    _agora_take = _alimenta_take(_coletor_take, _agora_take, _rot, _pos)
+    _evento = _coletor_take.processar_takes(_agora_take)
+    _eventos_take.append(_evento)
+check("takes: 3 takes gravados com 2 s parado cada",
+      _coletor_take.takes_completos()
+      and _coletor_take.take_indice() == len(_poses_take),
+      (_coletor_take.take_indice(), len(_poses_take)))
+_resultado_takes = _coletor_take.calibrar_por_posicoes()
+check("takes: calibracao por posicoes FECHA",
+      _resultado_takes["fechado"] is True
+      and all(d.get("residuo", 99) < 2.0
+              for d in _resultado_takes["lados"].values()),
+      {_l: _resultado_takes["lados"][_l].get("residuo")
+       for _l in ("right", "left")})
+
+# depois de um take, e preciso MOVER a mao antes do proximo
+_coletor_mov = gt.ColetorPosesFisicas(poses=_poses_take)
+_coletor_mov.iniciar_takes(0.0, "calibrar")
+_agora_mov = _alimenta_take(_coletor_mov, 0.0, _rot_take[0],
+                            -0.7 * _direcoes_take[0])
+check("takes: primeiro take sai sem exigir movimento",
+      _coletor_mov.take_indice() >= 1, _coletor_mov.take_indice())
+_indice_antes = _coletor_mov.take_indice()
+_agora_mov = _alimenta_take(_coletor_mov, _agora_mov, _rot_take[0],
+                            -0.7 * _direcoes_take[0])
+check("takes: ficar parado no mesmo lugar NAO grava outro take",
+      _coletor_mov.take_indice() == _indice_antes,
+      _coletor_mov.take_indice())
+_agora_mov = _alimenta_take(_coletor_mov, _agora_mov, _rot_take[1],
+                            -0.7 * _direcoes_take[1])
+check("takes: depois de MOVER, o proximo take e gravado",
+      _coletor_mov.take_indice() == _indice_antes + 1,
+      _coletor_mov.take_indice())
+
+# modo VERIFICAR: takes funcionam sem posicao (so rotacao do IMU)
+_coletor_ver = gt.ColetorPosesFisicas(poses=_poses_take)
+_coletor_ver.iniciar_takes(0.0, "verificar")
+_agora_ver = 0.0
+for _rot in _rot_take:
+    _agora_ver = _alimenta_take(_coletor_ver, _agora_ver, _rot, None)
+check("takes: modo verificar grava so com a rotacao do IMU",
+      _coletor_ver.takes_completos())
+_fus = {"right": gt.PositionFusion(), "left": gt.PositionFusion()}
+for _lado in ("right", "left"):
+    _fus[_lado].set_palm_alignment(_T_verdade, _f_verdade, 0.0)
+_poses_ver_take = tuple(
+    (_poses_take[i][0], tuple(float(c) for c in _direcoes_take[i]))
+    for i in range(len(_poses_take)))
+_rel_takes = _coletor_ver.verificar(
+    _fus, poses_por_lado={"right": _poses_ver_take,
+                          "left": _poses_ver_take})
+check("takes: verificacao PASSA com o alinhamento certo",
+      _rel_takes["fechado"] is True, _rel_takes["poses_ruins"])
+check("tool usa o modo takes no J/V",
+      "iniciar_takes" in fonte_tool
+      and "processar_takes" in fonte_tool)
+
 if FALHAS:
     print()
     print(f"PALMA_PLANO_FALHOU: {len(FALHAS)} verificacao(oes): "

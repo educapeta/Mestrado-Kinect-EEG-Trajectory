@@ -1831,9 +1831,11 @@ def main():
           "foco no video o OpenCV nao recebe a tecla (a tecla O parece nao "
           "funcionar e o console fica mudo).")
     print("  M = MEDIR NIVEL DA MESA (plano do Kinect, compensa inclinacao)")
-    print("  J = CALIBRAR por 4 POSES ESPALHADAS (mao a ~50 cm da lente, "
-          "palma mirando a lente: centro/esquerda/direita/baixo) | "
-          "V = VERIFICAR | G = log do vetor")
+    print("  J = CALIBRAR por 4 POSES (TAKES: 2 s PARADO "
+              "grava sozinho, sem tempo fixo; mao a ~50 cm "
+              "da lente mirando a lente: centro/esquerda/"
+              "direita/baixo) | V = VERIFICAR | "
+              "G = log do vetor")
     for receiver in receivers.values():
         receiver.start()
     # --- webcams auxiliares: a ATIVA (--aux-index) + as OUTRAS (--aux-cameras) ---
@@ -3064,7 +3066,16 @@ def main():
                 mao = resultados_por_lado[lado]
                 sample_lado = receivers[lado].get_latest()
                 amostras_por_lado[lado] = sample_lado
-                if poses_fisicas.ativa:
+                if poses_fisicas.ativa and poses_fisicas.modo_takes:
+                    if poses_fisicas.modo == "verificar":
+                        rotacao_take = (None if sample_lado is None
+                                        else rotation_matrix(
+                                            sample_lado.roll_deg,
+                                            sample_lado.pitch_deg,
+                                            sample_lado.yaw_deg))
+                        poses_fisicas.atualizar_lado(
+                            lado, now, rotacao_take, None)
+                elif poses_fisicas.ativa:
                     rotacao_pose = (None if sample_lado is None
                                     else rotation_matrix(
                                         sample_lado.roll_deg,
@@ -3084,7 +3095,21 @@ def main():
                 fusion = fusions[lado]
                 camera_position_lado = mao["position"]
                 landmarks_lado = mao["landmarks"]
-                if poses_fisicas.ativa:
+                if poses_fisicas.ativa and poses_fisicas.modo_takes:
+                    if poses_fisicas.modo == "calibrar":
+                        try:
+                            _posicao_take = tracker._landmark_camera_point(
+                                landmarks_lado[9], lado)
+                        except (AttributeError, IndexError, TypeError):
+                            _posicao_take = None
+                        _rotacao_take = (None if sample_lado is None
+                                         else rotation_matrix(
+                                             sample_lado.roll_deg,
+                                             sample_lado.pitch_deg,
+                                             sample_lado.yaw_deg))
+                        poses_fisicas.atualizar_lado(
+                            lado, now, _rotacao_take, _posicao_take)
+                elif poses_fisicas.ativa:
                     _fase_posicao = poses_fisicas.fase_atual(now)
                     if _fase_posicao is not None:
                         try:
@@ -3301,6 +3326,18 @@ def main():
                     mao["fused"] = fusion.position.copy()
                 else:
                     mao["fused"] = fusion.update(sample_lado, camera_position_lado)
+            # --- MODO TAKES (item 120): 2 s parado = take ---------------
+            if poses_fisicas.ativa and poses_fisicas.modo_takes:
+                _evento_take = poses_fisicas.processar_takes(now)
+                if _evento_take is not None:
+                    if _evento_take.get("take"):
+                        print(f"  TAKE {_evento_take['take']}/"
+                              f"{_evento_take['total']} gravado! Pode ir "
+                              "para a proxima posicao no seu tempo.",
+                              flush=True)
+                    if _evento_take.get("pronto"):
+                        print("  todos os takes gravados; "
+                              "finalizando...", flush=True)
             # --- fim da captura do alinhamento da palma (tecla O) -------------
             if captura_palma.ativa and captura_palma.restante_s <= 0.0:
                 captura_palma.parar()
@@ -3339,8 +3376,11 @@ def main():
                               "trocadas (--imu-portas)")
             # --- POSES FISICAS (tecla J calibrar / V verificar, item 114) ---
             if poses_fisicas.ativa:
-                fase_pose = poses_fisicas.fase_atual(now)
-                if fase_pose is None:
+                if poses_fisicas.modo_takes:
+                    _terminou_poses = poses_fisicas.takes_completos()
+                else:
+                    _terminou_poses = poses_fisicas.fase_atual(now) is None
+                if _terminou_poses:
                     modo_pose = poses_fisicas.modo
                     poses_fisicas.parar()
                     poses_fisicas_fase_vista = None
@@ -3903,28 +3943,62 @@ def main():
                                 cv2.FONT_HERSHEY_SIMPLEX, 0.65,
                                 (255, 255, 0), 2)
             if display is not None and poses_fisicas.ativa:
-                fase_pose_display = poses_fisicas.fase_atual(now)
-                if fase_pose_display is not None:
-                    modo_display = ("CALIBRAR" if poses_fisicas.modo
-                                   == "calibrar" else "VERIFICAR")
+                if poses_fisicas.modo_takes:
+                    _modo_txt = ("CALIBRAR" if poses_fisicas.modo
+                                  == "calibrar" else "VERIFICAR")
+                    _indice_take = min(poses_fisicas.take_indice(),
+                                      len(poses_fisicas.poses) - 1)
+                    _nome_take = poses_fisicas.poses[_indice_take][0]
                     cv2.putText(
                         display,
-                        f"{modo_display} POSES FISICAS "
-                        f"{fase_pose_display[0] + 1}/"
-                        f"{len(poses_fisicas.poses)} -- SEGURE PARADO "
-                        f"({fase_pose_display[2]:.1f} s)",
-                        (12, 160), cv2.FONT_HERSHEY_SIMPLEX, 0.7,
+                        f"{_modo_txt} TAKES {_indice_take}/"
+                        f"{len(poses_fisicas.poses)} -- "
+                        "2 s PARADO = TAKE (sem tempo fixo)",
+                        (12, 160), cv2.FONT_HERSHEY_SIMPLEX, 0.62,
                         (0, 255, 255), 2)
-                    cv2.putText(display, fase_pose_display[1][:78],
-                                (12, 195), cv2.FONT_HERSHEY_SIMPLEX, 0.6,
+                    cv2.putText(display, _nome_take[:76], (12, 190),
+                                cv2.FONT_HERSHEY_SIMPLEX, 0.55,
                                 (255, 255, 0), 2)
-                    cv2.putText(
-                        display,
-                        f"amostras R "
-                        f"{poses_fisicas.contar('right')} | L "
-                        f"{poses_fisicas.contar('left')}",
-                        (12, 228), cv2.FONT_HERSHEY_SIMPLEX, 0.6,
-                        (255, 255, 0), 2)
+                    for _ordem, _lado_txt in enumerate(("right", "left")):
+                        _estado_txt = poses_fisicas.estado_lado(
+                                        _lado_txt, now)
+                        if not _estado_txt["movimento_ok"]:
+                            _msg_estado = "MOVA / va para a proxima posicao"
+                        elif _estado_txt["estavel"]:
+                            _msg_estado = "PARADO OK -- gravando take"
+                        else:
+                            _msg_estado = (
+                                f"parado {_estado_txt['janela_s']:.1f}/"
+                                f"{POSES_FISICAS_TAKE_SEC:.0f} s")
+                        cv2.putText(
+                            display,
+                            f"{_lado_txt.upper()}: {_msg_estado}",
+                            (12, 218 + _ordem * 26),
+                            cv2.FONT_HERSHEY_SIMPLEX, 0.55,
+                            (255, 255, 0), 2)
+                else:
+                    fase_pose_display = poses_fisicas.fase_atual(now)
+                    if fase_pose_display is not None:
+                        modo_display = ("CALIBRAR" if poses_fisicas.modo
+                                       == "calibrar" else "VERIFICAR")
+                        cv2.putText(
+                            display,
+                            f"{modo_display} POSES FISICAS "
+                            f"{fase_pose_display[0] + 1}/"
+                            f"{len(poses_fisicas.poses)} -- SEGURE PARADO "
+                            f"({fase_pose_display[2]:.1f} s)",
+                            (12, 160), cv2.FONT_HERSHEY_SIMPLEX, 0.7,
+                            (0, 255, 255), 2)
+                        cv2.putText(display, fase_pose_display[1][:78],
+                                    (12, 195), cv2.FONT_HERSHEY_SIMPLEX, 0.6,
+                                    (255, 255, 0), 2)
+                        cv2.putText(
+                            display,
+                            f"amostras R "
+                            f"{poses_fisicas.contar('right')} | L "
+                            f"{poses_fisicas.contar('left')}",
+                            (12, 228), cv2.FONT_HERSHEY_SIMPLEX, 0.6,
+                            (255, 255, 0), 2)
             depth_status = "depth: sem frame"
             stats = tracker.depth_stats()
             if stats is not None:
@@ -4218,18 +4292,18 @@ def main():
                     captura_palma_plano.parar()
                     verificacao_palma.parar()
                     poses_fisicas = ColetorPosesFisicas()
-                    poses_fisicas.iniciar(now, modo="verificar")
+                    poses_fisicas.iniciar_takes(now, modo="verificar")
                     poses_fisicas_fase_vista = None
                     print(
                         "VERIFICACAO POR POSES FISICAS (item 114) -- "
                         f"{len(poses_fisicas.poses)} poses x "
                         f"{POSES_FISICAS_POSE_SEC:g} s, segure PARADO em cada "
                         "uma, com a PALMA MIRANDO A LENTE e a mao PERTO do "
-                        "sensor (~50 cm): 1) CENTRO do quadro; 2) BEM A "
-                        "ESQUERDA; 3) BEM A DIREITA; 4) BEM PARA BAIXO. A "
-                        "verdade e a DIRECAO mao->lente medida pelo Kinect "
-                        "(mesmas verdades do J). No fim sai PASS/FAIL e o "
-                        "CERTIFICADO; V de novo cancela.")
+                        "sensor (~50 cm), SEM TEMPO FIXO: 2 s PARADO = TAKE. "
+                        "Posicoes: 1) CENTRO; 2) BEM A ESQUERDA; 3) BEM A DIREITA; "
+                        "4) BEM PARA BAIXO. A verdade e a DIRECAO mao->lente medida "
+                        "pelo Kinect (mesmas verdades do J). No fim sai PASS/FAIL e "
+                        "o CERTIFICADO; V de novo cancela.")
             elif key == ord("j"):
                 # CALIBRACAO POR POSES FISICAS (item 114): 3 orientacoes com a
                 # normal da palma CONHECIDA (sem depender do Kinect). No fim
@@ -4241,7 +4315,7 @@ def main():
                     captura_palma_plano.parar()
                     verificacao_palma.parar()
                     poses_fisicas = ColetorPosesFisicas()
-                    poses_fisicas.iniciar(now, modo="calibrar")
+                    poses_fisicas.iniciar_takes(now, modo="calibrar")
                     print("  referencia das normais: "
                           + ("PLANO DA MESA medido"
                              if mesa_normal_camera is not None
@@ -4253,15 +4327,16 @@ def main():
                         f"{len(poses_fisicas.poses)} poses x "
                         f"{POSES_FISICAS_POSE_SEC:g} s. A verdade e' FISICA, "
                         "nao vem de planura: e a DIRECAO da sua mao ate a "
-                        "LENTE, medida pelo Kinect. Sao 4 posicoes BEM "
-                        "ESPALHADAS (se ficarem parecidas a calibracao fica "
-                        "mal condicionada e a seta erra quando a mao gira). "
-                        "Sempre com a PALMA MIRANDO A LENTE e a mao PERTO do "
-                        "sensor (~50 cm): 1) CENTRO do quadro; 2) BEM A "
-                        "ESQUERDA (ainda no quadro); 3) BEM A DIREITA; 4) BEM "
-                        "PARA BAIXO (mesma coluna). Segure PARADO ~2 s em cada "
-                        "e mantenha as DUAS maos visiveis. J de novo cancela; "
-                        "no fim refaz T/f e grava com backup.")
+                        "LENTE, medida pelo Kinect. SAO 4 POSICOES BEM ESPALHADAS "
+                        "(se ficarem parecidas a calibracao fica mal condicionada). "
+                        "NAO TEM TEMPO FIXO: leve o tempo que quiser para ir a cada "
+                        "posicao, sempre com a PALMA MIRANDO A LENTE e a mao "
+                        "PERTO do sensor (~50 cm). Quando a mao ficar PARADA por "
+                        "2 s, o TAKE e gravado automaticamente (a tela mostra o "
+                        "take e o status R/L); depois va para a proxima: 1) CENTRO; "
+                        "2) BEM A ESQUERDA; 3) BEM A DIREITA; 4) BEM PARA BAIXO. "
+                        "Mantenha as DUAS maos visiveis. J de novo cancela; no fim "
+                        "refaz T/f e grava com backup.")
             elif key == ord("p"):
                 hand_calib_active = False
                 hand_calib_samples_aux = []

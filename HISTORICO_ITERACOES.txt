@@ -7550,3 +7550,45 @@ visiveis); o J imprime o espalhamento e so' grava se >= 18 graus. Depois V e
 conferir visualmente o vetor vermelho ao girar a mao. A calibracao antiga
 (3.65/3.71) estava mal condicionada -- sera substituida pela nova.
 
+
+================================================================================
+ITEM 120 (22/10/2026) - PROTOCOLO DE CALIBRACAO POR TAKES (pedido do usuario):
+    nada de tempo fixo; 2 s com a mao PARADA = take, e o usuario vai no ritmo
+    dele para cada canto da camera
+================================================================================
+PEDIDO: "vamos melhorar o protocolo durante a calibracao: em vez de tempo fixo,
+fazer como na calibracao com os tabuleiros: 2 segundos com a mao parada e' um
+take, dai eu consigo ter tempo para ir para cada canto da camera com a palma da
+mao apontada mesmo para o kinect".
+IMPLEMENTADO (modo TAKES no J e no V)
+  1) Constantes: POSES_FISICAS_TAKE_SEC=2.0 (janela parada), TAKE_MAX_DESVIO_DEG
+     =4 (rotacao na janela), TAKE_MOVIMENTO_MIN_DEG=8 e
+     TAKE_MOVIMENTO_POS_M=0.10 (para liberar o proximo take e' preciso MOVER a
+     mao), TAKE_POS_MAX_M=0.05 (espalhamento das posicoes dentro do take).
+  2) `ColetorPosesFisicas.iniciar_takes/atualizar_lado/processar_takes/
+     estado_lado/take_indice/takes_completos`: alimenta um buffer por lado;
+     quando a rotacao fica estavel (<4 graus de desvio) por >=2 s e a posicao
+     tambem esta' parada (<5 cm), grava o TAKE (mediana da janela de rotacoes e
+     posicoes vira a amostra da pose), incrementa o take e exige MOVIMENTO
+     (>=8 graus de rotacao ou >=10 cm de posicao) antes de comecar a contar o
+     proximo take. Primeiro take nao exige movimento.
+  3) Tool: J e V agora chamam `iniciar_takes`; por frame o J coleta rotacao+
+     posicao da palma (marcador 9) e o V so' a rotacao; `processar_takes` roda
+     1x por frame, imprime "TAKE x/4 gravado! Pode ir para a proxima posicao no
+     seu tempo." e depois "todos os takes gravados; finalizando...". O overlay
+     mostra "CALIBRAR TAKES i/4 -- 2 s PARADO = TAKE (sem tempo fixo)", a
+     instrucao da pose atual e o status por lado ("MOVA / va para a proxima
+     posicao", "parado 1.2/2 s", "PARADO OK -- gravando take"). O finalize por
+     tempo fixo continua existindo para o modo antigo (testes/legado).
+  4) O gate de espalhamento (item 119) e o melhor-da-sessao (item 118) continuam
+     valendo no final do J; o V usa as mesmas 4 verdades gravadas.
+TESTES: grupo 16 do test_palma_plano -- 3 takes de 2 s gravados, calibracao por
+posicoes FECHA, ficar parado no mesmo lugar NAO grava outro take, mover libera o
+proximo take, modo VERIFICAR grava so' com a rotacao do IMU e PASSA com o
+alinhamento certo, guards do tool; SUITE COMPLETA 59/59; smoke do tool sem
+crash (dica do console atualizada).
+PROXIMO PASSO: rodar J no modo takes (tela guia: centro -> esquerda -> direita ->
+baixo, palma mirando a lente, mao a ~50 cm; quando parar 2 s o take sai sozinho)
+e depois V; conferir o espalhamento impresso (>=18 graus) e o vetor vermelho
+acompanhando a mao.
+
