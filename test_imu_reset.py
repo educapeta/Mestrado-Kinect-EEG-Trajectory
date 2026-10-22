@@ -112,6 +112,11 @@ check("bias alto = reprova e manda repetir",
 ok, mensagens = imu_reset.avaliar_bias({4210: {"erro": "sem amostras"}})
 check("falha de medida nao reprova (so' avisa)",
       ok is True and any("nao medi" in m for m in mensagens), mensagens)
+ok, mensagens = imu_reset.avaliar_bias({
+    4210: {"media": (0.05, 0.02, 0.0), "std": (2.5, 0.2, 0.2),
+           "amostras": 150}})
+check("desvio alto = MEDIDA INVALIDA (luva se mexeu)",
+      ok is False and any("INVALIDA" in m for m in mensagens), mensagens)
 
 
 # ============================================================================
@@ -271,7 +276,8 @@ def criar_socket_falso():
 resultado = imu_reset.calibra_imu(
     participante="P01", sessao="S1", portas=(4210, 4211),
     porta_serial="COM4", segundos_boot=0.3, segundos_udp=0.2,
-    confirmar=False, avisar=lambda m: capturado.write(str(m) + "\n"),
+    settle_s=0.0, confirmar=False,
+    avisar=lambda m: capturado.write(str(m) + "\n"),
     serial_factory=lambda *a, **k: SerialFalsa(*a, **k),
     socket_factory=lambda *a, **k: criar_socket_falso())
 check("executado", resultado["executado"] is True, resultado)
@@ -300,7 +306,7 @@ check("resultado serializavel em JSON",
 # sem porta serial: ritual avisa e nao derruba (executado=False)
 resultado = imu_reset.calibra_imu(
     participante="P02", portas=(4210, 4211), porta_serial=None,
-    segundos_boot=0.1, segundos_udp=0.1, confirmar=False,
+    segundos_boot=0.1, segundos_udp=0.1, settle_s=0.0, confirmar=False,
     avisar=lambda _m: None, listar_portas=lambda: [],
     serial_factory=lambda *a, **k: SerialFalsa(*a, **k),
     socket_factory=lambda *a, **k: SocketFalso(*a, **k))
@@ -334,6 +340,41 @@ check("paradigma grava imu_calibracao no meta",
       '"imu_calibracao"' in fonte_par)
 check("modulo imu_reset esta' na raiz",
       os.path.exists(os.path.join(raiz, "imu_reset.py")))
+
+print("8) tentativas automaticas quando a medida sai alta/invalida")
+chamadas = {"n": 0}
+medidor_original = imu_reset.medir_bias_udp
+
+
+def medidor_falso(portas, segundos, socket_factory=None):
+    chamadas["n"] += 1
+    if chamadas["n"] == 1:
+        return {4210: {"media": (-6.0, 0.1, 0.0),
+                       "std": (0.1, 0.1, 0.1), "amostras": 150},
+                4211: {"media": (0.9, 0.4, -1.2),
+                       "std": (0.1, 0.1, 0.1), "amostras": 150}}
+    return {4210: {"media": (0.01, -0.01, 0.0),
+                   "std": (0.08, 0.08, 0.08), "amostras": 150},
+            4211: {"media": (-0.02, 0.0, 0.01),
+                   "std": (0.1, 0.1, 0.1), "amostras": 150}}
+
+
+imu_reset.medir_bias_udp = medidor_falso
+try:
+    resultado_retry = imu_reset.calibra_imu(
+        participante="P07", portas=(4210, 4211), porta_serial="COM4",
+        segundos_boot=0.2, segundos_udp=0.05, settle_s=0.0, tentativas=2,
+        confirmar=False, avisar=lambda _m: None,
+        serial_factory=lambda *a, **k: SerialFalsa(*a, **k))
+finally:
+    imu_reset.medir_bias_udp = medidor_original
+check("retry: medida alta na 1a tentativa e' repetida automaticamente",
+      chamadas["n"] == 2, chamadas)
+check("retry: terminou OK na 2a tentativa",
+      resultado_retry["ok"] is True
+      and resultado_retry.get("tentativas_usadas") == 2,
+      (resultado_retry.get("ok"),
+       resultado_retry.get("tentativas_usadas")))
 
 if FALHAS:
     print()

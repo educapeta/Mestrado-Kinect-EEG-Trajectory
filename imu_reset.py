@@ -188,8 +188,14 @@ def medir_bias_udp(portas=(4210, 4211), segundos=3.0, socket_factory=None):
     return estatisticas
 
 
-def avaliar_bias(bias_udp, max_dps=BIAS_MAX_DPS, aviso_dps=BIAS_AVISO_DPS):
-    """(ok, mensagens) a partir do resultado de `medir_bias_udp`."""
+def avaliar_bias(bias_udp, max_dps=BIAS_MAX_DPS, aviso_dps=BIAS_AVISO_DPS,
+                 max_std_dps=1.5):
+    """(ok, mensagens) a partir do resultado de `medir_bias_udp`.
+
+    Medida com desvio alto (`max_std_dps`) e' INVALIDA: significa que a
+    luva estava se MEXENDO durante a janela -- nao e' bias de verdade e
+    precisa repetir (o ritual faz isso automaticamente).
+    """
     mensagens = []
     ok = True
     for porta_udp, dados in sorted(bias_udp.items()):
@@ -197,6 +203,14 @@ def avaliar_bias(bias_udp, max_dps=BIAS_MAX_DPS, aviso_dps=BIAS_AVISO_DPS):
             mensagens.append(f"porta {porta_udp}: nao medi ({dados['erro']})")
             continue
         media = dados["media"]
+        desvio = dados.get("std") or (0.0, 0.0, 0.0)
+        if desvio and max(float(v) for v in desvio) > max_std_dps:
+            ok = False
+            mensagens.append(
+                f"porta {porta_udp}: MEDIDA INVALIDA -- a luva se MEXEU "
+                f"durante a janela (desvio {max(float(v) for v in desvio):.2f} "
+                "dps); repita com as luvas paradas")
+            continue
         maior = max(abs(v) for v in media)
         texto = (f"porta {porta_udp}: bias medio "
                  f"({media[0]:+.2f}, {media[1]:+.2f}, {media[2]:+.2f}) dps")
@@ -214,8 +228,16 @@ def avaliar_bias(bias_udp, max_dps=BIAS_MAX_DPS, aviso_dps=BIAS_AVISO_DPS):
 
 def calibra_imu(participante="", sessao="", portas=(4210, 4211),
                 porta_serial=None, segundos_boot=10.0, segundos_udp=3.0,
-                confirmar=False, avisar=print, serial_factory=None,
-                socket_factory=None, listar_portas=None):
+                settle_s=2.0, tentativas=2, confirmar=False, avisar=print,
+                serial_factory=None, socket_factory=None,
+                listar_portas=None):
+    """Ritual COMPLETO de calibracao dos IMUs no inicio da aquisicao.
+
+    `settle_s`: espera depois do boot antes de medir o bias (o filtro/WiFi
+    terminam de assentar). `tentativas`: se a medida sair INVALIDA/ALTA
+    (luva mexeu), reinicia e mede de novo AUTOMATICAMENTE -- antes o
+    operador tinha de relancar o programa inteiro.
+    """
     """Ritual COMPLETO de calibracao dos IMUs no inicio da aquisicao.
 
     Devolve dict serializavel (vai para o JSON da sessao):
@@ -244,6 +266,8 @@ def calibra_imu(participante="", sessao="", portas=(4210, 4211),
     reinicio = reiniciar_luvas(porta=porta_serial, segundos=segundos_boot,
                                serial_factory=serial_factory,
                                listar_portas=listar_portas)
+    if resultado.get("porta") is None:
+        resultado["porta"] = reinicio.get("porta")
     resultado["porta"] = reinicio.get("porta")
     resultado["biases_firmware"] = reinicio.get("biases") or {}
     if reinicio.get("executado"):
@@ -263,19 +287,45 @@ def calibra_imu(participante="", sessao="", portas=(4210, 4211),
         avisar("  Faca na mao: aperte EN/RST (ou desligue/religue o USB) com as")
         avisar("  luvas paradas e nao mexa por ~3 s.")
 
-    bias_udp = medir_bias_udp(portas=portas, segundos=segundos_udp,
-                              socket_factory=socket_factory)
-    resultado["bias_udp"] = bias_udp
-    if bias_udp:
-        ok, mensagens = avaliar_bias(bias_udp)
+    tentativas = 1 if not reinicio.get("executado") else max(1, int(tentativas))
+    bias_udp = {}
+    mensagens_medida = []
+    for tentativa in range(1, tentativas + 1):
+        if tentativa > 1:
+            avisar("  MEDIDA ALTA/INVALIDA: repetindo o reinicio "
+                   f"automaticamente (tentativa {tentativa}/{tentativas}); "
+                   "deixe as luvas PARADAS...")
+            reinicio = reiniciar_luvas(porta=porta_serial,
+                                       segundos=segundos_boot,
+                                       serial_factory=serial_factory,
+                                       listar_portas=listar_portas)
+            resultado["biases_firmware"] = (reinicio.get("biases")
+                                            or resultado["biases_firmware"])
+        if settle_s and settle_s > 0.0:
+            avisar(f"  aguardando {settle_s:g} s para o filtro assentar...")
+            time.sleep(float(settle_s))
+        bias_udp = medir_bias_udp(portas=portas, segundos=segundos_udp,
+                                  socket_factory=socket_factory)
+        resultado["bias_udp"] = bias_udp
+        if not bias_udp:
+            resultado["mensagens"].append("sem medida de bias pelo UDP")
+            break
+        ok, mensagens_medida = avaliar_bias(bias_udp)
         resultado["ok"] = ok
-        resultado["mensagens"].extend(mensagens)
-        for mensagem in mensagens:
-            avisar("  " + mensagem)
-    else:
-        resultado["mensagens"].append("sem medida de bias pelo UDP")
+        resultado["mensagens"] = [m for m in resultado["mensagens"]
+                                  if not m.startswith("porta ")]
+        resultado["mensagens"].extend(mensagens_medida)
+        if ok:
+            break
+    resultado["tentativas_usadas"] = tentativa
+    for mensagem in mensagens_medida:
+        avisar("  " + mensagem)
     avisar("  RESULTADO: " + ("OK -- IMUs calibrados para esta sessao"
                               if resultado["ok"] else
-                              "ATENCAO -- repita o reinicio (luvas paradas) "
-                              "ou confira o console"))
+                              "ATENCAO -- bias ainda alto/invalido; rode "
+                              "tools\\reinicia_luvas_serial.py com as "
+                              "luvas paradas ou confira o console"
+                              + (f" (tentativas: {resultado.get('tentativas_usadas')})"
+                                 if resultado.get("tentativas_usadas", 1) > 1
+                                 else "")))
     return resultado

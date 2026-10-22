@@ -341,6 +341,8 @@ check("tool usa a media estavel e a sincronia color-depth",
       "media_estavel_normais" in fonte_tool
       and "sync_color_depth_ms" in fonte_tool
       and "palm_plano_estavel" in fonte_tool)
+check("tool NAO usa `or` com a normal numpy (causava ValueError no display)",
+      'or mao.get("palm_plano_estavel")' not in fonte_tool)
 
 if FALHAS:
     print()

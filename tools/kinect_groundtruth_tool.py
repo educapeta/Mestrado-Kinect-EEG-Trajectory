@@ -3374,8 +3374,9 @@ def main():
                         tracker.draw_palm_vector(
                             display, mao["landmarks"], mao["palm_direction"]
                         )
-                    normal_plano = (mao.get("palm_plano_estavel")
-                                    or mao.get("palm_normal_plano"))
+                    normal_plano = mao.get("palm_plano_estavel")
+                    if normal_plano is None:
+                        normal_plano = mao.get("palm_normal_plano")
                     if normal_plano is not None:
                         rotulo = "plano dorso"
                         if mao["palm_direction"] is not None:

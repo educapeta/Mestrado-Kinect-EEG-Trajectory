@@ -6871,3 +6871,38 @@ NOTA OPERACIONAL: o JSON carregado pelo tool e' o refit da ULTIMA captura J/O;
 ele vale para o boot/sessao em que foi feito (T absorve o yaw do boot). O
 certificado V e' o que confirma na sessao corrente.
 
+
+================================================================================
+ITEM 107 (22/10/2026) - CRASH DO DISPLAY CORRIGIDO (numpy `or`) + ritual de
+    calibracao dos IMUs com RETRY AUTOMATICO e invalidacao por movimento
+================================================================================
+ERRO RELATADO PELA BANCADA ao abrir o tool:
+  ValueError: The truth value of an array with more than one element is ambiguous
+  em `normal_plano = (mao.get("palm_plano_estavel") or mao.get("palm_normal_plano"))`.
+CAUSA (bug meu, item 105): `or` avalia a VERDADE do valor; quando a normal
+estavel passou a existir (numpy array de 3 elementos) o Python nao sabe se e'
+True/False e estoura. O crash acontecia exatamente no bloco que desenha a seta
+VERDE do plano do dorso. CORRECAO: checagem explicita de None; teste novo no
+test_palma_plano garante que o padrao `or mao.get("palm_plano_estavel")` nao
+volta.
+
+BIAS ALTO NO RITUAL: na mesma abertura o ritual reportou
+  porta 4210: bias medio (+0,13, -6,02, +0,50) dps -> ALTO
+  porta 4211: (+0,91, +0,42, -1,19) dps -> ALTO
+com os biases do FIRMWARE normais (0x68 2,07/3,09/-0,28; 0x69 1,04/0,19/-0,59)
+-- padrao de medida feita com a luva se MEXENDO (os valores do firmware sao de
+boot, a medida UDP e' depois). O ritual era so' aviso; agora:
+  - espera `settle_s` (2 s) depois do boot antes de medir;
+  - `avaliar_bias` invalida medida com DESVIO alto (`max_std_dps` 1,5 dps) como
+    "MEDIDA INVALIDA -- a luva se MEXEU", em vez de chamar de bias;
+  - se a medida sair invalida/alta, REINICIA E MEDE DE NOVO automaticamente
+    (`tentativas=2`), avisando no console; o resultado diz quantas tentativas
+    usou. Assim nao precisa relancar o programa inteiro.
+TESTES: test_imu_reset ganhou caso de desvio alto (INVALIDA) e caso de retry
+automatico (1a medida alta -> repete -> OK, tentativas_usadas=2) PASS; demais
+regressoes verdes.
+OBSERVACAO DO LOG: `sync color-depth 30 ms` (~1 frame do Kinect) apareceu -- e'
+aceitavel; se oscilar >50 ms na proxima sessao, e' a fonte restante do cambaleio
+e ai adicionamos rejeicao do par. O "erro plano R -- / L --" no primeiro status
+e' so' a janela da media estavel aquecendo.
+
