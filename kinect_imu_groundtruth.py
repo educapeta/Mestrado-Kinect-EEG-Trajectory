@@ -772,13 +772,14 @@ PONTOS_DORSO_PALMA = {"wrist": 0, "index": 5, "middle": 9, "ring": 13,
                       "pinky": 17}
 
 
-def palm_normal_from_plane(pontos, lado=None, eps=1e-9, rms_max_m=0.030):
+def palm_normal_from_plane(pontos, lado=None, normal_anterior=None,
+                           eps=1e-9, rms_max_m=0.030, dist_max_m=0.12):
     """(normal, rms_m) do PLANO MEDIO do dorso da mao, ou (None, None).
 
     Por que existe (item 102): a normal da palma era o produto vetorial de 3
     pontos (punho, MCP do indicador, MCP do minimo). Com o ruido de
-    profundidade do Kinect, UM ponto errado gira a normal inteira -- e o
-    vetor da palma sai "apontando para lugares ruins" mesmo com T/f bons. Aqui
+    profundidade do Kinect, UM ponto errado gira a normal inteira -- e o vetor
+    da palma sai "apontando para lugares ruins" mesmo com T/f bons. Aqui
     ajusta-se um PLANO MEDIO por minimos quadrados (SVD) nos nos do DORSO
     (punho + 4 MCPs) e a normal e' o vetor singular minimo, bem mais estavel.
 
@@ -786,14 +787,26 @@ def palm_normal_from_plane(pontos, lado=None, eps=1e-9, rms_max_m=0.030):
     camera space (valores None/invalidos sao ignorados). Precisa de >=4 pontos
     validos e dos tres do sinal anatomico (wrist, index, pinky).
 
-    Orientacao: o sinal segue a MESMA convencao de `palm_normal_from_points`
-    (anatomica, item 79) -- o plano e' orientado no hemisferio do produto
-    vetorial `(index-wrist) x (pinky-wrist)` e depois: lado 'right' = +1,
-    'left' = -1; lado None = forcado para nz < 0 (compatibilidade antiga).
+    SINAL ANATOMICO ROBUSTO (item 105): a referencia antiga
+    `(index-punho) x (pinky-punho)` DEGENERA quando a mao fica plana (medido no
+    CSV canonico: 37/296 quadros da direita com magnitude ~0 -> sinal virava
+    moeda e a normal aparecia INVERTIDA, erro de 170-180 graus, era o que
+    reprovava o certificado V). A referencia nova e' o produto vetorial de dois
+    vetores GRANDES e quase ortogonais do dorso:
+        transversal = index - pinky     (~12 cm, entre os MCPs)
+        longitudinal = middle - punho   (~9 cm, do punho ao MCP medio)
+    Se eles nao forem confiaveis (quase paralelos/curtos), cai para a referencia
+    antiga; e se nem ela servir, usa `normal_anterior` para manter a
+    CONTINUIDADE (o sinal nao pode pular entre quadros consecutivos com a mao
+    parada). Sem nenhuma das tres -> (None, None): melhor nao medir.
 
-    `rms_m`: RMS (m) da distancia dos pontos ao plano -- e' o controle de
-    qualidade da medida (mao perto da borda/ocludida/ruidosa estoura o
-    `rms_max_m` e a amostra e' descartada: melhor nao medir do que medir errado).
+    GATES DE QUALIDADE:
+      - `rms_max_m`: RMS (m) dos pontos ao plano (borda/oclusao/ruido estoura);
+      - `dist_max_m`: distancia maxima de um ponto ao centro (a mao tem ~7 cm
+        de raio; ponto a 30 cm e' profundidade de FUNDO mapeada errado, nao mao).
+
+    Orientacao final: 'right' = referencia como calculada; 'left' = espelhada
+    (mesma convencao anatomica dos itens 79/102); lado None = forcado nz < 0.
     """
     validos = []
     for nome in ("wrist", "index", "middle", "ring", "pinky"):
@@ -811,6 +824,8 @@ def palm_normal_from_plane(pontos, lado=None, eps=1e-9, rms_max_m=0.030):
     matriz = np.array([valor for _nome, valor in validos], dtype=np.float64)
     centro = matriz.mean(axis=0)
     centrado = matriz - centro
+    if float(np.max(np.linalg.norm(centrado, axis=1))) > float(dist_max_m):
+        return None, None                         # ponto de fundo, nao da mao
     try:
         _u, _s, vt = np.linalg.svd(centrado, full_matrices=False)
     except np.linalg.LinAlgError:
@@ -820,25 +835,90 @@ def palm_normal_from_plane(pontos, lado=None, eps=1e-9, rms_max_m=0.030):
     if norma < eps:
         return None, None
     normal = normal / norma
-    por_nome = {nome: valor for nome, valor in validos}
-    referencia = np.cross(por_nome["index"] - por_nome["wrist"],
-                          por_nome["pinky"] - por_nome["wrist"])
-    norma_ref = float(np.linalg.norm(referencia))
-    if norma_ref < eps:
-        return None, None
-    if float(np.dot(normal, referencia / norma_ref)) < 0.0:
-        normal = -normal
-    if lado == "right":
-        pass
-    elif lado == "left":
-        normal = -normal
-    elif normal[2] > 0.0:
-        normal = -normal            # legado sem `lado` (nz < 0)
     distancias = centrado @ normal
     rms = float(np.sqrt(np.mean(distancias ** 2)))
     if rms_max_m is not None and rms > float(rms_max_m):
         return None, None
+
+    por_nome = {nome: valor for nome, valor in validos}
+    referencia = None
+    # 1) referencia NOVA: transversal x longitudinal (robusta com a mao plana)
+    transversal = por_nome["index"] - por_nome["pinky"]
+    longitudinal = por_nome["middle"] - por_nome["wrist"]
+    norma_t = float(np.linalg.norm(transversal))
+    norma_l = float(np.linalg.norm(longitudinal))
+    if norma_t > 0.030 and norma_l > 0.030:
+        cruzado = np.cross(transversal, longitudinal)
+        norma_c = float(np.linalg.norm(cruzado))
+        seno = norma_c / (norma_t * norma_l)
+        if seno > 0.45:                           # vetores nao quase paralelos
+            referencia = cruzado / norma_c
+    # 2) continuidade temporal: sinal do quadro anterior
+    if referencia is None and normal_anterior is not None:
+        anterior = np.asarray(normal_anterior, np.float64).reshape(3)
+        norma_a = float(np.linalg.norm(anterior))
+        if np.isfinite(anterior).all() and norma_a > eps:
+            anterior = anterior / norma_a
+            if float(np.dot(normal, anterior)) < 0.0:
+                normal = -normal
+    # 3) fallback: referencia ANTIGA (3 pontos), so' se ainda nao decidiu
+    if referencia is None:
+        antiga = np.cross(por_nome["index"] - por_nome["wrist"],
+                          por_nome["pinky"] - por_nome["wrist"])
+        norma_antiga = float(np.linalg.norm(antiga))
+        if normal_anterior is not None:
+            pass                                  # continuidade ja' decidiu
+        elif norma_antiga > 0.003:
+            antiga = antiga / norma_antiga
+            if float(np.dot(normal, antiga)) < 0.0:
+                normal = -normal
+        else:
+            return None, None                     # sem sinal confiavel
+    if referencia is not None:
+        if float(np.dot(normal, referencia)) < 0.0:
+            normal = -normal
+    if lado == "left":
+        normal = -normal
+    elif lado is None and normal[2] > 0.0:
+        normal = -normal                          # legado sem `lado` (nz < 0)
     return normal, rms
+
+def media_estavel_normais(historico, limite_spread_deg=8.0):
+    """(normal_media, spread) das normais recentes, ou (None, None).
+
+    O vetor do plano do dorso CAMBALEIA quando a profundidade do Kinect
+    tem ruido/oclusao (item 105): a normal instantanea oscila alguns graus
+    com a mao parada. Aqui a historico (lista de versores) e' alinhada em
+    sinal (a referencia anatomica pode inverter pontualmente) e a media e'
+    devolvida junto com o SPREAD maximo (graus). O chamador decide: spread
+    baixo (<= limite) = pose parada e confiavel; alto = ainda em movimento,
+    nao usar como verdade de calibracao.
+    """
+    vetores = []
+    for valor in historico:
+        if valor is None:
+            continue
+        vetor = np.asarray(valor, np.float64).reshape(3)
+        norma = float(np.linalg.norm(vetor))
+        if not np.isfinite(vetor).all() or norma < 1e-9:
+            continue
+        vetores.append(vetor / norma)
+    if len(vetores) < 2:
+        return None, None
+    referencia = vetores[-1]
+    alinhados = [v if float(np.dot(v, referencia)) >= 0.0 else -v
+                 for v in vetores]
+    media = np.mean(alinhados, axis=0)
+    norma = float(np.linalg.norm(media))
+    if norma < 1e-9:
+        return None, None
+    media = media / norma
+    spread = 0.0
+    for vetor in alinhados:
+        cosseno = float(np.dot(vetor, media))
+        spread = max(spread, float(np.degrees(np.arccos(
+            np.clip(cosseno, -1.0, 1.0)))))
+    return media, spread
 
 
 #: Poses da VERIFICACAO GUIADA da palma (tecla V do groundtruth tool, item 103).
@@ -2784,6 +2864,8 @@ class KinectHandTracker:
         if self.kinect.has_new_color_frame():
             data = self.kinect.get_last_color_frame()
             self.last_color = data.reshape((self.color_height, self.color_width, 4))
+            self._last_color_capture_time = getattr(
+                self.kinect, "_last_color_frame_time", 0)
         # Novos frames de depth sao detectados pelo timestamp real de captura
         # (o has_new_depth_frame do pykinect2 nao e confiavel: o acesso nunca
         # e registrado e o buffer pre-alocado com zeros mascara falhas).
@@ -2796,6 +2878,16 @@ class KinectHandTracker:
                     print("Primeiro frame de profundidade recebido")
                 self._last_depth_capture_time = capture_time
                 self.depth_frame_index += 1
+        # SINCRONIA color x depth (item 105): os dois streams NAO sao
+        # amarrados; quando o par vem de instantes diferentes o ponto 3D do
+        # landmark cai no lugar errado e a normal cambaleia. Exponho o delta
+        # em ms para o tool recusar o par (None = desconhecido/absurdo).
+        tempo_color = float(getattr(self, "_last_color_capture_time", 0) or 0)
+        tempo_depth = float(getattr(self, "_last_depth_capture_time", 0) or 0)
+        if tempo_color and tempo_depth and abs(tempo_color - tempo_depth) < 5.0:
+            self.sync_color_depth_ms = abs(tempo_color - tempo_depth) * 1000.0
+        else:
+            self.sync_color_depth_ms = None
         if self.kinect.has_new_body_frame():
             self.last_bodies = self.kinect.get_last_body_frame()
         return self.last_color, self.last_depth
@@ -2892,8 +2984,15 @@ class KinectHandTracker:
         valid = patch[(patch >= DEPTH_MIN_MM) & (patch <= DEPTH_MAX_MM)]
         if valid.size < 3:
             return None
-        value = float(np.median(valid))
-        return value if math.isfinite(value) else None
+        mediana = float(np.median(valid))
+        # CLUSTER em volta da mediana: na borda dos dedos o patch 11x11
+        # mistura mao (0,5-1,5 m) com FUNDO (2-4 m) e a mediana pulava entre
+        # os dois -> ponto 3D saltava -> normal cambaleava (item 105).
+        # Mantem so' o aglomerado de profundidade em volta da mediana.
+        cluster = valid[np.abs(valid - mediana) <= 30.0]
+        if cluster.size >= 3:
+            return float(np.median(cluster))
+        return mediana if math.isfinite(mediana) else None
 
     def depth_at_projected(self, alignment, auxiliary_landmark, guess_depth_m):
         """Profundidade da cena onde a palma auxiliar projeta.
@@ -3092,7 +3191,8 @@ class KinectHandTracker:
         middle_mcp = self._landmark_camera_point(landmarks[9])
         return palm_frame(wrist, index_mcp, pinky_mcp, middle_mcp, lado=lado)
 
-    def palm_plane_camera(self, landmarks, lado=None):
+    def palm_plane_camera(self, landmarks, lado=None, normal_anterior=None,
+                          rms_max_m=0.030):
         """(normal, rms_m) do PLANO MEDIO do dorso pelo depth do Kinect.
 
         Usa 5 lookups de profundidade (punho + MCPs indicador/medio/anelar/
@@ -3112,7 +3212,9 @@ class KinectHandTracker:
             ponto = np.asarray(ponto, np.float64).reshape(3)
             if np.isfinite(ponto).all():
                 pontos[nome] = ponto
-        return palm_normal_from_plane(pontos, lado=lado)
+        return palm_normal_from_plane(pontos, lado=lado,
+                                       normal_anterior=normal_anterior,
+                                       rms_max_m=rms_max_m)
 
     @staticmethod
     def _tronco_base_y(joints):

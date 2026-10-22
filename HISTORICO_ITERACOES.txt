@@ -6794,3 +6794,51 @@ disser que o Kinect segue estourado, reduzir a luz/difundir; refazer J (girar a
 mao devagar) e V; conferir a RMS do plano no console do J (deve ficar baixa,
 ~2-5 mm) e o certificado V.
 
+
+================================================================================
+ITEM 105 (22/10/2026) - VETOR DE REFERENCIA DO KINECT PARAVA DE CAMBALEAR:
+    sinal anatomico robusto + continuidade + profundidade por cluster +
+    sincronia color-depth + verdade so' com a mao PARADA (J/V)
+================================================================================
+SINTOMA (do log real do V, 22/10): com a mao parada o "erro do plano" oscilava
+3-14 graus e apareciam picos de 133-180; o certificado reprovava o right em
+TODAS as poses (pose 1 media 71 graus, pose 3 max 173) e o left ficava perto do
+limite. O usuario observou: "o vetor referencia do Kinect esta cambaleando um
+monte, perdendo frames e se confundindo; Kinect talvez seja o culpado".
+CAUSAS ENCONTRADAS E CORRIGIDAS
+  1) SINAL ANATOMICO DEGENERADO: a referencia era (index-punho)x(pinky-punho);
+     com a mao plana ela fica ~0 e o sinal virava moeda. Medido no CSV
+     canonico: 37/296 quadros da DIREITA degenerados (<>a mao plana e a
+     direita tem mais frames assim). Correcao: referencia transversal x
+     longitudinal (index-pinky) x (middle-punho), vetores grandes/quase
+     ortogonais; fallback para a antiga; e, se ambas degenerarem, CONTINUIDADE
+     com a normal do quadro anterior (`normal_anterior`). A continuidade tambem
+     alinha os sinais antes da media.
+  2) PROFUNDIDADE NA BORDA DOS DEDOS: o patch 11x11 do depth pegava mao +
+     FUNDO (mediana pulava entre 0,5-1,5 m e 2-4 m). Correcao: `_median_depth`
+     filtra o CLUSTER em volta da mediana (+-30 mm) -- leitura estavel.
+  3) PONTO 3D DE FUNDO: `palm_normal_from_plane` agora descarta pontos a mais de
+     12 cm do centro (mao tem ~7 cm de raio; 30 cm = profundidade de fundo
+     mapeada errado). Nunca mais uma normal com ponto do fundo.
+  4) CAMBALEIO TEMPORAL: `media_estavel_normais(historico, limite_spread_deg)`
+     alinha sinais e devolve media + SPREAD; o tool usa a media (historico de 7
+     normais) para video/status e SO' coleta amostras de J/V quando spread
+     <= 8 graus (pose realmente parada). O certificado deixa de medir ruido do
+     Kinect: mede o alinhamento.
+  5) SINCRONIA COLOR x DEPTH: os streams nao sao amarrados; quando o par vem de
+     instantes diferentes o ponto 3D cai no lugar errado. `frames()` agora
+     expoe `sync_color_depth_ms` (usa _last_color_frame_time/_last_depth_
+     frame_time do pykinect2) e o log de desempenho mostra
+     "sync color-depth X ms" -- se oscilar muito, e' essa a fonte do cambaleio.
+  6) PROTOCOLO J MUDADO: 14 s -> **20 s** e instrucao nova: girar devagar e
+     PARAR ~1 s em cada uma das ~6 orientacoes. Mao parada = verdade limpa (o
+     J tambem usa a media estavel e o gate de spread).
+TESTES: test_palma_plano.py grupo 6 novo (media de normais, inversao pontual de
+sinal, spread grande em movimento, anatomia degenerada com/sem normal
+anterior mantem o sinal, ponto de fundo descartado, tool usando media
+estavel+sync) PASS; regressoes palm/plano/reancora/imu_reset/exposicao verdes.
+NOVO NO LOG: [desempenho] ... | sync color-depth X ms.
+PROXIMO PASSO: reiniciar o tool (codigo novo), J com pausas (~20 s) -> V; se o
+right continuar ruim SO' nele, conferir fixacao fisica do IMU direito na luva
+(sensor solto muda o f com o movimento e nenhuma calibracao estatica conserta).
+

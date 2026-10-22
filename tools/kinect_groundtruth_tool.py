@@ -149,6 +149,11 @@ PALM_ALIGNMENT_FILES = {"right": "imu_palm_alignment_right.json",
 #: Duracao da captura do alinhamento (tecla O): tempo para girar a mao devagar
 #: por varios angulos com a palma virada para a camera.
 PALM_ALIGNMENT_CAPTURE_SECONDS = 14.0
+#: Duracao da captura da tecla J (plano do dorso). Mais longa que a O de
+#: proposito: o protocolo e' girar devagar e PARAR ~1 s em cada uma das ~6
+#: orientacoes -- com a mao parada o ruido do Kinect nao se mistura com o
+#: movimento e a verdade do plano fica limpa (item 105).
+PALM_PLANO_CAPTURE_SECONDS = 20.0
 #: Erro (px) do diagnostico do tabuleiro (tecla T) a partir do qual a calibracao
 #: gravada e' considerada de OUTRA montagem. Por que existe: o RMS do arquivo
 #: so' mede a coerencia INTERNA dele -- um stereo feito em outra maquina/sala e'
@@ -1973,7 +1978,8 @@ def main():
     # Captura de alinhamento pela VERDADE do PLANO MEDIO do dorso (item 102,
     # tecla J): mesma mecanica da O, mas cada amostra usa a normal do plano
     # punho+4 MCPs (mais estavel que o produto vetorial de 3 pontos).
-    captura_palma_plano = CapturaAlinhamentoPalma()
+    captura_palma_plano = CapturaAlinhamentoPalma(
+        PALM_PLANO_CAPTURE_SECONDS)
     # VERIFICACAO GUIADA DA PALMA (item 103, tecla V): 6 poses com a verdade do
     # plano do dorso -> certificado FECHADO/NAO FECHADO pose a pose. E' a prova
     # objetiva de que o vetor derivado do IMU coincide com a direcao anatomica.
@@ -1982,6 +1988,15 @@ def main():
     #: RMS do plano do dorso durante a captura J (controle de qualidade: luz
     #: estourada/landmarks ruins inflam o RMS e descartam amostras).
     plano_rms_captura = {"right": [], "left": []}
+    #: Ultima normal do PLANO valida por lado: mantem a CONTINUIDADE do
+    #: sinal anatomico quando a referencia transversal x longitudinal
+    #: degenera (o sinal segue o quadro anterior em vez de virar moeda --
+    #: item 105).
+    ultimo_plano_camera = {"right": None, "left": None}
+    #: Historico curto das normais do plano: o vetor instantaneo cambaleia
+    #: com o ruido do depth; a media com spread baixo e' a verdade estavel
+    #: usada na calibracao/video (item 105).
+    hist_plano_camera = {"right": [], "left": []}
     # Diagnostico da palma por MOVIMENTO PROGRAMADO (tecla D): grava
     # palm_diag_<data>_<hora>.csv e, no fim, o resumo por (fase, lado). E' o
     # log que faltava para separar "calibracao sistematicamente errada" de
@@ -2971,35 +2986,50 @@ def main():
                 # normal do plano (punho + 4 MCPs) e' o que o usuario pediu
                 # ("plano medio entre os nos do dorso") e serve para comparar
                 # ao vivo com o vetor do IMU e para refazer T/f.
-                plano_lado = (None if landmarks_lado is None
-                              else tracker.palm_plane_camera(landmarks_lado,
-                                                             lado))
+                plano_lado = (
+                    None if landmarks_lado is None
+                    else tracker.palm_plane_camera(
+                        landmarks_lado, lado,
+                        normal_anterior=ultimo_plano_camera[lado],
+                        rms_max_m=0.015))
                 if plano_lado is None:
                     normal_plano_lado, rms_plano_lado = None, None
                 else:
                     normal_plano_lado, rms_plano_lado = plano_lado
+                plano_estavel = None
+                if normal_plano_lado is not None:
+                    ultimo_plano_camera[lado] = normal_plano_lado
+                    hist_plano_camera[lado].append(normal_plano_lado)
+                    if len(hist_plano_camera[lado]) > 7:
+                        hist_plano_camera[lado] = hist_plano_camera[lado][-7:]
+                    media_plano, spread_plano = media_estavel_normais(
+                        hist_plano_camera[lado])
+                    if (media_plano is not None
+                            and spread_plano <= 8.0):
+                        plano_estavel = media_plano
                 mao["palm_normal_plano"] = normal_plano_lado
+                mao["palm_plano_estavel"] = plano_estavel
                 mao["palm_plano_rms_m"] = rms_plano_lado
                 mao["palm_erro_plano_deg"] = (
                     None
-                    if (normal_plano_lado is None
+                    if (plano_estavel is None
                         or mao["palm_direction"] is None)
-                    else angle_between(normal_plano_lado,
+                    else angle_between(plano_estavel,
                                        mao["palm_direction"])
                 )
-                if captura_palma_plano.ativa and normal_plano_lado is not None:
+                if captura_palma_plano.ativa and plano_estavel is not None:
                     captura_palma_plano.coletar(lado, now, sample_lado,
-                                                normal_plano_lado)
+                                                plano_estavel)
                     if rms_plano_lado is not None:
                         plano_rms_captura[lado].append(float(rms_plano_lado))
-                if verificacao_palma.ativa and normal_plano_lado is not None:
+                if verificacao_palma.ativa and plano_estavel is not None:
                     rotacao_verif = (None if sample_lado is None
                                      else rotation_matrix(
                                          sample_lado.roll_deg,
                                          sample_lado.pitch_deg,
                                          sample_lado.yaw_deg))
                     verificacao_palma.coletar(lado, now, rotacao_verif,
-                                              normal_plano_lado)
+                                              plano_estavel)
                 # Diagnostico da palma (tecla D): a linha do CSV do diagnostico
                 # e' gravada AQUI, logo depois do erro ao vivo -- as tres coisas
                 # tem de ser do MESMO frame e da MESMA amostra de IMU, senao a
@@ -3320,11 +3350,15 @@ def main():
                          if falta_o else ""),
                       flush=True)
                 loop_ms = desempenho["loop_ms"] or float("nan")
+                sinc_ms = getattr(tracker, "sync_color_depth_ms", None)
+                sinc_txt = ("--" if sinc_ms is None
+                            else "%.0f ms" % sinc_ms)
                 print("[desempenho] loop %.1f fps (%.0f ms) | "
                       "Kinect+MediaPipe %.0f ms | auxiliares+MediaPipe %.0f ms"
+                      " | sync color-depth %s"
                       % ((1000.0 / loop_ms) if loop_ms else float("nan"),
                          loop_ms, desempenho["kinect_ms"] or float("nan"),
-                         desempenho["aux_ms"] or float("nan")),
+                         desempenho["aux_ms"] or float("nan"), sinc_txt),
                       flush=True)
                 status_log_em = now
                 status_log_t0 = now
@@ -3340,7 +3374,8 @@ def main():
                         tracker.draw_palm_vector(
                             display, mao["landmarks"], mao["palm_direction"]
                         )
-                    normal_plano = mao.get("palm_normal_plano")
+                    normal_plano = (mao.get("palm_plano_estavel")
+                                    or mao.get("palm_normal_plano"))
                     if normal_plano is not None:
                         rotulo = "plano dorso"
                         if mao["palm_direction"] is not None:
@@ -3605,14 +3640,16 @@ def main():
                     plano_rms_captura = {"right": [], "left": []}
                     captura_palma_plano.iniciar(now)
                     print(
-                        "CALIBRACAO DA PALMA POR PLANO DO DORSO (14 s): gire a "
-                        "mao DEVAGAR em varias direcoes (palma para o Kinect, "
-                        "para cima, para baixo, laterais) com a mao INTEIRA no "
-                        "quadro; as duas maos podem ser capturadas juntas. A "
-                        "verdade e' o PLANO MEDIO do dorso (punho + 4 MCPs), "
-                        "mais estavel que os 3 pontos antigos. No fim ele "
-                        "compara com o alinhamento ATUAL, refaz T/f e grava com "
-                        "backup (.json.bak). J de novo cancela."
+                        "CALIBRACAO DA PALMA POR PLANO DO DORSO "
+                        f"({PALM_PLANO_CAPTURE_SECONDS:g} s): gire a mao "
+                        "DEVAGAR e PARE ~1 s em cada orientacao (palma para o "
+                        "Kinect, para cima, para baixo, para a esquerda, para a "
+                        "direita, gira o punho), com a mao INTEIRA no quadro. "
+                        "Parar em cada pose e' o que limpa a verdade do "
+                        "Kinect (sem ruido de movimento); as duas maos podem "
+                        "ser capturadas juntas. No fim compara com o "
+                        "alinhamento ATUAL, refaz T/f e grava com backup "
+                        "(.json.bak). J de novo cancela."
                     )
             elif key == ord("p"):
                 hand_calib_active = False

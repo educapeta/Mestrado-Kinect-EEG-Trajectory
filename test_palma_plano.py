@@ -297,6 +297,51 @@ check("tool usa VerificacaoPosesPalma", "VerificacaoPosesPalma" in fonte_tool)
 check("tool imprime o CERTIFICADO", "CERTIFICADO" in fonte_tool)
 
 
+# ============================================================================
+# 6) ESTABILIDADE DA VERDADE DO KINECT (item 105): media de normais + sinal
+# ============================================================================
+print("6) estabilidade do vetor de referencia (media + continuidade de sinal)")
+normais = [np.array([0.0, 0.0, 1.0]), np.array([0.02, 0.0, 1.0]),
+           np.array([-0.01, 0.01, 1.0])]
+media, spread = gt.media_estavel_normais(normais)
+check("media de normais quase iguais ~ +z e spread pequeno",
+      media is not None and float(np.dot(media, [0.0, 0.0, 1.0])) > 0.999
+      and spread < 2.0, (media, spread))
+normais_flip = [np.array([0.0, 0.0, 1.0]), np.array([0.0, 0.0, -1.0]),
+                np.array([0.01, 0.0, 1.0])]
+media, spread = gt.media_estavel_normais(normais_flip)
+check("inversao pontual de sinal e' alinhada antes da media",
+      media is not None and float(np.dot(media, [0.0, 0.0, 1.0])) > 0.999,
+      media)
+_media, spread = gt.media_estavel_normais(
+    [np.array([1.0, 0.0, 0.0]), np.array([0.0, 1.0, 0.0])])
+check("historico conflitante (em movimento) tem spread grande",
+      spread is not None and spread > 8.0, spread)
+check("historico curto -> (None, None)",
+      gt.media_estavel_normais([np.array([0.0, 0.0, 1.0])]) == (None, None))
+
+quase_colinear = {"wrist": np.array([0.0, 0.0, 0.0]),
+                  "index": np.array([0.08, 0.001, 0.0]),
+                  "pinky": np.array([-0.04, -0.001, 0.0]),
+                  "middle": np.array([0.02, 0.0012, 0.0]),
+                  "ring": np.array([-0.01, 0.0008, 0.0])}
+n_sem, _r = gt.palm_normal_from_plane(quase_colinear, "right")
+check("anatomia degenerada SEM referencia anterior -> (None, None)",
+      eh_none((n_sem, _r)))
+n_com, _r = gt.palm_normal_from_plane(
+    quase_colinear, "right", normal_anterior=np.array([0.0, 0.0, 1.0]))
+check("anatomia degenerada COM normal anterior mantem o sinal",
+      n_com is not None and float(np.dot(n_com, [0.0, 0.0, 1.0])) > 0.99,
+      n_com)
+longe = mao_sintetica()
+longe["wrist"] = np.array([0.30, 0.0, 0.0])
+check("ponto de FUNDO (30 cm do centro) e' descartado", eh_none(
+    gt.palm_normal_from_plane(longe)))
+check("tool usa a media estavel e a sincronia color-depth",
+      "media_estavel_normais" in fonte_tool
+      and "sync_color_depth_ms" in fonte_tool
+      and "palm_plano_estavel" in fonte_tool)
+
 if FALHAS:
     print()
     print(f"PALMA_PLANO_FALHOU: {len(FALHAS)} verificacao(oes): "
