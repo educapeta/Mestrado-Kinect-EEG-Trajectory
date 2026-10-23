@@ -7833,3 +7833,43 @@ acelerometro. Conferir no console as linhas "[imu] accel offsets MPU 0x68/0x69"
 (valores pequenos, tipicamente <0.1 g; se der aviso, reposicionar as luvas e
 resetar de novo).
 
+
+
+================================================================================
+ITEM 125 (22/10/2026) - CREDITOS: os itens 123/124 usaram como referencia o
+    trabalho publico do ThatProject (Eric / @0015) sobre MPU6050 + Mahony;
+    creditos e links registrados aqui por transparencia
+================================================================================
+MOTIVO DO REGISTRO (pedido do usuario): "gostaria que anotasse nas iteracoes
+para dar credito a esse cara que desenvolveu estes codigos, pois estamos usando
+o trabalho dele para refletir sobre como melhorar nossos resultados".
+QUEM E O QUE FOI USADO
+  - Autor/projeto: Eric -- ThatProject (GitHub: https://github.com/0015/ThatProject).
+  - Video citado pelo usuario: "MPU-6050 with Mahony algorithm" --
+    https://www.youtube.com/watch?v=UgROd5juFtM
+  - Codigos consultados (somente como REFERENCIA DE ESTUDO/COMPARACAO):
+    * MPU6050_Calibration_ESP32.ino:
+      https://github.com/0015/ThatProject/blob/master/Esp32_MPU6050_MahonyARHS/MPU6050_Calibration_ESP32/MPU6050_Calibration_ESP32.ino
+    * MahonyAHRS_ESP32.ino:
+      https://github.com/0015/ThatProject/blob/master/Esp32_MPU6050_MahonyARHS/MahonyAHRS_ESP32/MahonyAHRS_ESP32.ino
+  - O que aprendemos/usamos dele (item 124): a PRACTICA de calibrar os offsets
+    do acelerometro e do giroscopio e subtrai-los antes do filtro; a ideia de
+    usar faixa de giroscopio alta o bastante para nao saturar em giros rapidos
+    (ele usa +-2000 graus/s); e a configuracao do MPU6050 (clock PLL, DLPF).
+    O NOSSO firmware continua sendo implementacao propria: o AttitudeMahony ja'
+    era nosso (item 83) e a calibracao de acelerometro no boot foi generalizada
+    (detecta o eixo dominante em vez de assumir Z para cima). Nao houve copia
+    textual de codigo; as constantes de offset que aparecem no projeto dele
+    (-208, 417, 93) sao do chip DELE e nao foram usadas aqui.
+  - O codigo do ThatProject, por sua vez, credita as fontes originais (e nos
+    tambem registramos): "Source: https://blog.naver.com/ysahn2k/221410891895"
+    (adaptacao para ESP32) e as referencias: MadgwickAHRS (x-io.co.uk), Jeff
+    Rowberg's MPU6050/i2cdevlib, Kris Winer's MPU6050 e Davide Gironi's AVR
+    MPU6050.
+  - Documentacao interna que tambem recebeu o credito:
+    docs/REVISAO_FIRMWARE_MPU6050_KALMAN.md (secao 5.1 "Creditos e
+    referencias").
+OBSERVACAO: se algum dia o codigo for reutilizado de forma literal, conferir a
+licenca do repositorio/origem antes. Neste trabalho ele foi usado apenas como
+referencia publica para diagnostico e para a pratica de calibracao.
+

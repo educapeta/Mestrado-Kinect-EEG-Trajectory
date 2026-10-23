@@ -189,6 +189,28 @@ O que **não** foi adotado:
   comunicação. O Mahony com KP=2 roda a ~100 Hz.
 - `twoKi=0` do ThatProject é igual ao nosso; um Ki pequeno é opcional.
 
+### 5.1 Créditos e referências
+
+Este estudo comparativo (e a prática de calibração adotada no item 124) tem
+como referência o trabalho público de **Eric – ThatProject**:
+
+- Vídeo "MPU-6050 with Mahony algorithm": https://www.youtube.com/watch?v=UgROd5juFtM
+- Repositório: https://github.com/0015/ThatProject (projeto `Esp32_MPU6050_MahonyARHS`)
+- `MPU6050_Calibration_ESP32.ino`: https://github.com/0015/ThatProject/blob/master/Esp32_MPU6050_MahonyARHS/MPU6050_Calibration_ESP32/MPU6050_Calibration_ESP32.ino
+- `MahonyAHRS_ESP32.ino`: https://github.com/0015/ThatProject/blob/master/Esp32_MPU6050_MahonyARHS/MahonyAHRS_ESP32/MahonyAHRS_ESP32.ino
+
+O código dele, por sua vez, credita a origem/original: "Source:
+https://blog.naver.com/ysahn2k/221410891895" (adaptação para ESP32) e as
+referências MadgwickAHRS (x-io.co.uk), Jeff Rowberg (i2cdevlib), Kris Winer e
+Davide Gironi (AVR MPU6050).
+
+Como foi usado aqui: **referência pública de estudo e comparação**, não cópia
+literal de código. O `AttitudeMahony` já era nosso (item 83) e a calibração de
+acelerômetro foi generalizada (detecta o eixo dominante em vez de assumir Z
+para cima); as constantes de offset do exemplo dele (-208, 417, 93) são do
+hardware dele e não foram reutilizadas. Se algum trecho for reutilizado
+literalmente no futuro, conferir a licença do repositório/origem antes.
+
 Conclusão: **a diferença não é o algoritmo** (o Mahony é o mesmo e o nosso foi
 validado por simulação) e sim **a calibração dos offsets do acelerômetro e a
 faixa do giroscópio**. O item 124 fecha essas duas lacunas.
