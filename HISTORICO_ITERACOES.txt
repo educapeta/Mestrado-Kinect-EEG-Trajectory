@@ -7873,3 +7873,62 @@ OBSERVACAO: se algum dia o codigo for reutilizado de forma literal, conferir a
 licenca do repositorio/origem antes. Neste trabalho ele foi usado apenas como
 referencia publica para diagnostico e para a pratica de calibracao.
 
+
+
+================================================================================
+ITEM 126 (22/10/2026) - ANCORAGEM DE YAW: falha de corrida podia sobrescrever o
+    T do J; cancelamento ao iniciar o J + diagnostico "valor x desenho"
+================================================================================
+PERGUNTA DO USUARIO: "me incomoda essas ancoragens com o Kinect; parece que ele
+e' menos confiavel que as calibracoes iniciais (J). Sera' que ele esta
+interferindo na sincronizacao com a projecao do Kinect em cor / no desenho do
+video? Como se o problema fosse so' na etapa de desenho e nao nos valores?"
+DIAGNOSTICO
+  1) PROJECAO/DESENHO NAO E' O PROBLEMA: as duas setas (vermelha e verde) e o
+     esqueleto usam a MESMA funcao do SDK (MapCameraPointToColorSpace) para
+     mapear camera->cor; o esqueleto sobrepoe corretamente o corpo no video, e
+     o erro vermelho x verde e' medido em 3D no log (`erro_plano`/`erro_palma`)
+     antes de desenhar. O desenho e' fiel ao vetor T*R*f que a fusao calcula:
+     se a seta aponta errado, o vetor 3D tambem esta' errado. Sincronizacao
+     cor-profundidade (`sync_color_depth_ms`, 3-6 ms) e' outra coisa, nao
+     depende da ancoragem.
+  2) MAS A ANCORAGEM E' O ELO FRACO, SIM: o `AncoradorYawBoot` (item 97) usa a
+     normal do plano da palma medida pelo Kinect (mais ruidosa) para estimar o
+     delta de yaw do boot. Nos logs do usuario ele resolveu com erros residuais
+     de 8,6 / 16,6 / 33,2 / 50,3 / 87,5 / 109,3 graus -- as vezes o palpite e'
+     ruim. O J, por outro lado, resolve T/f com a verdade GEOMETRICA (posicao
+     mao->lente), que e' bem mais confiavel (residuo ~3,7 graus).
+  3) BUG DE CORRIDA ENCONTRADO: se o ancorador ainda nao tivesse resolvido
+     quando o usuario apertasse J, ele poderia resolver DEPOIS do J e chamar
+     `set_palm_alignment` por cima do T novo -- um delta de yaw errado (baseado
+     no plano do Kinect) sobrescreveria a calibracao geometrica recem-feita.
+     Isso explicaria "o vetor estava certo no J e depois passou a apontar
+     errado" sem culpa do desenho.
+CORRECAO (implementada)
+  - `imu.AncoradorYawBoot.cancelar()`: marca `falhou`, avisa e NUNCA mais chama
+    `set_palm_alignment` (a ancoragem nao sobrescreve mais o T).
+  - `tools/kinect_groundtruth_tool.py`: ao iniciar um J (tecla J), todas as
+    ancoragens de yaw pendentes sao CANCELADAS antes da captura; o T/f do boot
+    atual passa a ser o resolvido pelo J.
+  - Teste novo em `test_reancora_yaw.py` (secao 4b): ancora pendente -> J
+    resolve T novo -> ancoragem cancelada nao altera T (np.allclose), mais a
+    checagem de que o tool chama `.cancelar()` no J.
+  - Suite: 59/59 OK.
+EVIDENCIA DOS LOGS (valor x desenho): analisando `palma_vetor_log_20261022_*`
+  com plano estavel, o eixo de rotacao do erro vermelho->verde tem dispersao
+  mediana 51-69 graus (p90 105-111) e o eixo medio faz 76-86 graus com a
+  vertical fisica da mesa; ou seja, o erro NAO e' uma rotacao fixa (de yaw /
+  ancoragem / projecao) -- ele muda com a orientacao da mao, assinatura de
+  erro de CALIBRACAO do acelerometro/escala (a calibracao de accel do item 124
+  ataca isso). Se fosse so' desenho ou so' um delta de yaw, o eixo seria
+  constante e alinhado com a vertical.
+RECOMENDACAO DE PROTOCOLO
+  - Ao iniciar cada sessao (depois de cada boot do ESP32), rodar o J (takes)
+    com as luvas paradas/deitadas no boot; o J resolve o T/f do boot ATUAL e a
+    ancoragem deixa de ser necessaria. Para eliminar a variavel de vez, rodar
+    com `--sem-ancora-yaw` (flag ja existente) e comparar.
+  - A ancoragem automatica so' deve ser usada em sessao rapida SEM refazer J.
+  - Proximo passo de verificacao independente: "teste de mira" (palma mirando a
+    lente; verdade = -normalize(posicao da mao)); mede o erro do vetor 3D em
+    varias posicoes/orientacoes sem depender do plano do Kinect.
+

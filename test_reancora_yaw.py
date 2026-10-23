@@ -235,6 +235,36 @@ finally:
     imu.time = original_time
 
 # ============================================================================
+# 4b) cancelar(): ancoragem PENDENTE nao pode sobrescrever o T do J (item 126)
+# ============================================================================
+print("4b) cancelar() impede ancoragem atrasada de sobrescrever o T do J")
+fusao3 = imu.PositionFusion()
+fusao3.set_palm_alignment(T_fit, f_fit, residuo_fit)
+avisos3 = []
+ancora3 = imu.AncoradorYawBoot(fusao3, lado="right", amostras_min=8,
+                               timeout_s=5.0, avisar=avisos3.append)
+# junta so' 2 amostras (ainda nao ancora)
+for r, v in list(zip(rot_boot, normais))[:2]:
+    ancora3.amostra(r, v)
+check("cancelar: ainda nao ancorou", ancora3.pronto is False)
+ancora3.cancelar()
+check("cancelar: marca falhou e avisa",
+      ancora3.falhou is True and any("CANCELADA" in a for a in avisos3),
+      avisos3)
+check("cancelar: nao ancora mais",
+      ancora3.amostra(rot_boot[0], normais[0]) is None)
+# o J resolve o T novo; a ancoragem cancelada nao pode mexer nele depois
+T_novo = imu.rotation_matrix(0.0, 0.0, 10.0) @ T_fit
+fusao3.set_palm_alignment(T_novo, f_fit, residuo_fit)
+for r, v in list(zip(rot_boot, normais))[:8]:
+    ancora3.amostra(r, v)
+check("cancelar: T do J depois da ancoragem cancelada NAO e' alterado",
+      np.allclose(fusao3.imu_to_camera, T_novo, atol=1e-9))
+check("tool cancela as ancoragens pendentes quando o J comeca",
+      ".cancelar()" in open("tools/kinect_groundtruth_tool.py",
+                            encoding="utf-8").read())
+
+# ============================================================================
 # 5) integracao no tool (import, hook antes da seta, flag e delta na mao)
 # ============================================================================
 print("5) integracao no tool esta' ligada")

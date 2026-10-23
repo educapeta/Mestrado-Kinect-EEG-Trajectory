@@ -391,6 +391,23 @@ class AncoradorYawBoot:
         """True depois de ancorar (ou de desistir: ver `falhou`)."""
         return self.delta_deg is not None
 
+    def cancelar(self):
+        """Desiste de ancorar e NUNCA mais mexe no `T` desta fusao.
+
+        Usado quando uma calibracao do J vai acontecer: o J resolve o `T`
+        completo (posicao mao->lente) para o boot ATUAL e a ancoragem antiga,
+        baseada na normal do plano do Kinect (mais ruidosa), nao pode
+        sobrescrever esse resultado depois. Sem isto, se o ancorador ainda
+        estivesse juntando amostras quando o J comecasse, ele poderia aplicar
+        um delta de yaw errado DEPOIS do J e o vetor vermelho passaria a
+        apontar para o lugar errado.
+        """
+        self.falhou = True
+        self.avisar(
+            f"IMU {self.lado}: ancoragem do yaw do boot CANCELADA "
+            "(o alinhamento atual sera' resolvido pelo J; esta ancoragem "
+            "nao mexe mais no T)")
+
     def amostra(self, rotacao, normal_camera):
         """Recebe UMA amostra; devolve (delta, erro, n) no frame que ancorou."""
         if self.pronto or self.falhou:

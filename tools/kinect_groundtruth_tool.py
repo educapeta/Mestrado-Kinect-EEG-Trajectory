@@ -4359,6 +4359,12 @@ def main():
                 else:
                     captura_palma_plano.parar()
                     verificacao_palma.parar()
+                    # O J resolve T/f para o boot ATUAL com a verdade geometrica
+                    # (mao->lente). Uma ancoragem de yaw pendente nao pode
+                    # sobrepor esse T depois (item 126): cancela agora.
+                    for _lado_ancora, _ancora in ancoras_yaw.items():
+                        if not _ancora.pronto:
+                            _ancora.cancelar()
                     poses_fisicas = ColetorPosesFisicas()
                     poses_fisicas.iniciar_takes(now, modo="calibrar")
                     print("  modo TAKES: 2 s com a mao PARADA grava o "
