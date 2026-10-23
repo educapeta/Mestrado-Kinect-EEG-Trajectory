@@ -7767,3 +7767,69 @@ gravadas (`pio run -e esp32_duas_imus -t upload`) e o comportamento de atitude
 nao mudou (as mudancas sao so' de robustez da calibracao de bias e do codigo
 legado nao usado).
 
+
+
+================================================================================
+ITEM 124 (22/10/2026) - "O PROJETO DO THATPROJECT TEM ORIENTACAO MUITO MELHOR":
+    comparacao do Mahony dele com o nosso e adocao das duas praticas que
+    faltavam -- calibracao dos offsets do ACELEROMETRO e faixa de giroscopio
+    maior (a nossa saturava em ±250 °/s)
+================================================================================
+CONTEXTO: o usuario mostrou o projeto 0015/ThatProject (Esp32_MPU6050_MahonyARHS)
++ o video: o cara tem controle bom de orientacao 3D com o MESMO MPU6050,
+enquanto a nossa realidade de vetor de IMU e' inferior. Pedido: olhar o codigo
+dele e o resultado.
+DESCOBERTAS (comparando os fontes e os nossos dados)
+  1) O ALGORITMO E' O MESMO: o ThatProject usa Mahony com quaternion (twoKp=1,
+     twoKi=0), exatamente a familia do nosso AttitudeMahony (KP=2, sem
+     integral). Nao e' o filtro que faz a diferenca.
+  2) A DIFERENCA E' A CALIBRACAO: o codigo dele carrega OFFSETS DO
+     ACELEROMETRO medidos (MPU6050_AXOFFSET=-208, AYOFFSET=417, AZOFFSET=93) e
+     subtrai ANTES de normalizar; o nosso firmware usa raw/16384 SEM nenhum
+     offset -- e os dados reais da bancada mostram |a|=1,065-1,068 g em
+     repouso (deveria ser 1,000) e componentes ~(-0,05,-0,03,+1,07) g. Isso
+     desloca roll/pitch em 1,5-7 graus de forma dependente da orientacao (nao
+     e' offset constante que o T/f da palma consiga absorver).
+  3) A FAIXA DO GIROSCOPIO: ele usa ±2000 °/s; o nosso ±250 °/s. Nos dados de
+     bancada (palm_diag de 22/10) o giroscopio chegou a 230,6 (gx), 247,0 (gy)
+     °/s -- perto de/at 250 = SATURACAO em movimento rapido, rotacao perdida e
+     angulo errado de vez em quando.
+  4) Bias do giroscopio: ele calibra com 2000 amostras (20 s) e subtrai; o
+     nosso faz 500 amostras (~2 s) no boot (mais o ritual de reset/verificacao
+     do item 101). Nao e' a diferenca principal, mas o bias fica mais limpo.
+ADOTADO NO FIRMWARE (esp32_duas_imus; compilado com PlatformIO SUCCESS)
+  - `calibrateImuAt`: um passe de 1000 amostras (2 ms) por MPU que calibrs
+    o bias do giroscopio E os OFFSETS DE ZERO-G DO ACELEROMETRO. Metodo
+    generalizado do ThatProject: com a luva PARADA e DEITADA (uma face do
+    modulo IMU paralela a mesa) o eixo que aponta para cima mede +-1 g e os
+    outros ~0; o firmware detecta o eixo dominante por software, calcula
+    offset = media - signo*1g no eixo dominante e offset = media nos demais.
+    Se a luva nao estiver deitada (vetor fora de eixo), avisa e aplica so' o
+    bias do giroscopio. Offsets aplicados no loop antes do /16384.
+  - Giroscopio em ±1000 °/s (FS_SEL=2, 32.8 LSB/dps) via macro `GYRO_FS_SEL`
+    (da' para ±500/±2000 sem mudar a logica); elimina a saturacao observada.
+  - DLPF ~42 Hz e ODR ~100 Hz (`0x1A=0x03`, `0x19=0x09`) para reduzir aliasing
+    de vibracao no loop de ~100 Hz; clock PLL do giroscopio Z como no projeto
+    dele.
+  - Serial/UDP mantidos (mesma linha de 10 campos, mesma linha "[imu] bias MPU
+    0x68: (...)" parseada pelo imu_reset); novas linhas informam os offsets de
+    accel e avisam se a luva nao estava deitada.
+  - Ferramenta: ritual de calibracao agora avisa "PARADAS e DEITADAS" (uma
+    face do modulo paralela a mesa) e o tempo de espera do boot subiu de 10
+    para 15 s (a calibracao do accel + Wi-Fi pode passar dos 10 s antigos).
+NAO ADOTADO (e por que): acelerometro ±8 g (nosso ±2 g tem mais resolucao e o
+gate |a|~1 g do Mahony filtra aceleracao linear; troca e' uma macro se
+aparecer saturacao >2 g); loop de 4 ms (nosso I2C esta a 50 kHz por causa do
+flat de 2 m -- decisao de bancada documentada; 400 kHz como no video e' risco);
+Ki integral (o do video e' 0 tambem).
+DOC/README: docs/REVISAO_FIRMWARE_MPU6050_KALMAN.md ganhou a secao 5
+"Comparacao com o projeto ThatProject" (tabela item a item e o que foi
+adotado); firmware/esp32_duas_imus/README.md atualizado (Mahony no lugar de
+"Kalman", offsets do accel, FS/DLPF, ritual deitada).
+PENDENCIA PARA A PROXIMA SESSAO: GRAVAR o firmware no ESP32
+(`pio run -e esp32_duas_imus -t upload`, com o modo manual de boot documentado
+no README) e deixar as luvas PARADAS e DEITADAS no reset para o boot calibrar o
+acelerometro. Conferir no console as linhas "[imu] accel offsets MPU 0x68/0x69"
+(valores pequenos, tipicamente <0.1 g; se der aviso, reposicionar as luvas e
+resetar de novo).
+

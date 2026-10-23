@@ -1820,18 +1820,23 @@ def main():
             f"--imu-portas invalido ({exc}); use '4210,4211' (direita,esquerda) "
             "ou '1:4210,2:4211'.")
     # --- CALIBRACAO DOS IMUs NO INICIO DA SESSAO (item 101) -----------------
-    # O bias do giroscopio e' calibrado NO BOOT: as luvas tem de estar PARADAS.
-    # Medido em 21/10/2026: boot com a luva em movimento deixou -12,5 dps no gy
-    # da direita = 434 graus/min de deriva de yaw; reiniciando parado caiu para
-    # -0,20 graus/min. O ritual avisa o participante, reinicia o ESP32 pela
-    # serial e CONFERE o bias parado pelo UDP -- antes dos receptores abrirem as
-    # portas. Falha aqui nao derruba a sessao (so' avisa).
+    # O bias do giroscopio E OS OFFSETS DO ACELEROMETRO sao calibrados NO BOOT
+    # (itens 101/124): as luvas tem de estar PARADAS e DEITADAS na mesa (uma
+    # face do modulo IMU paralela a mesa) para o acelerometro medir um eixo
+    # com +-1 g e os outros com ~0. Medido em 21/10/2026: boot com a luva em
+    # movimento deixou -12,5 dps no gy da direita = 434 graus/min de deriva de
+    # yaw; reiniciando parado caiu para -0,20 graus/min. O ritual avisa o
+    # participante, reinicia o ESP32 pela serial e CONFERE o bias parado pelo
+    # UDP -- antes dos receptores abrirem as portas. Falha aqui nao derruba a
+    # sessao (so' avisa). O boot agora calibra 2 s por MPU + Wi-Fi; 15 s de
+    # espera dao margem (antes 10 s podia cortar no meio da calibracao).
     if not getattr(args, "sem_calibra_imu", False):
         try:
             args.imu_calibracao = imu_reset.calibra_imu(
                 participante=getattr(args, "participante", ""),
                 portas=tuple(portas.values()),
                 porta_serial=(getattr(args, "porta_imu_serial", "") or None),
+                segundos_boot=15.0,
                 confirmar=True)
         except Exception as exc:                    # noqa: BLE001 - nao derrubar
             print(f"AVISO: calibracao dos IMUs falhou ({type(exc).__name__}: "

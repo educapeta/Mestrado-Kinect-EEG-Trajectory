@@ -43,9 +43,12 @@ t_us,roll,pitch,yaw,ax,ay,az,gx,gy,gz
 ```
 
 - `t_us`: `micros()` logo após a leitura do sensor;
-- `roll`/`pitch`: graus, fusão acelerômetro+giroscópio (Kalman, um filtro por
-  MPU); `yaw`: só giroscópio, **acumula drift**;
-- `ax,ay,az` em g; `gx,gy,gz` em °/s com bias removido;
+- `roll`/`pitch`: graus, filtro de **Mahony com quaternion** (6 eixos: o
+  giroscópio integra a rotação e o acelerômetro corrige a inclinação);
+  `yaw`: integrado pelo giroscópio (sem magnetômetro não tem referência
+  absoluta -- **acumula drift** e é arbitrário a cada boot);
+- `ax,ay,az` em g **com os offsets de zero-g do acelerômetro removidos**;
+  `gx,gy,gz` em °/s **com o bias do giroscópio removido** (item 124);
 - **UDP**: 10 campos, `\n` no fim; cada MPU gera um pacote próprio — quem
   separa é a **porta UDP** (o receptor 4210 só vê o MPU 0x68), sem tag de
   lado (`imu.py` não mudou);
@@ -53,11 +56,21 @@ t_us,roll,pitch,yaw,ax,ay,az,gx,gy,gz
   campos>` (direita) ou `2,<10 campos>` (esquerda). É o contrato do
   `tools/imu_serial_bridge.py` (o bridge descarta qualquer linha sem o
   prefixo);
-- no boot os pinos I2C são **sondeados** (22/23, 21/22, 22/21) e o giroscópio
-  de **cada** MPU é calibrado (500 amostras, sensor parado); a serial (115200)
+- no boot os pinos I2C são **sondeados** (22/23, 21/22, 22/21) e **cada**
+  MPU é calibrado com **1000 amostras**: bias do giroscópio + offsets de
+  zero-g do acelerômetro (método do ThatProject generalizado: a luva deve
+  estar PARADA e DEITADA, com uma face do módulo paralela à mesa; o eixo
+  que aponta para cima é detectado por software). Se a luva não estiver
+  deitada, o firmware avisa e aplica só o bias do giroscópio. A serial
+  (115200) recebe o cabeçalho `esp_timestamp_us,roll_deg,...,gz_dps`
+  seguido das linhas **com o prefixo do lado** (`1,...` / `2,...`);
   recebe o cabeçalho `esp_timestamp_us,roll_deg,...,gz_dps` seguido das
   linhas **com o prefixo do lado** (`1,...` / `2,...`);
-- taxa: `delay(5)` no loop → ~100 Hz por MPU (o limitador é o Wi-Fi).
+- taxa: `delay(5)` no loop -> ~100 Hz por MPU (o limitador é o Wi-Fi);
+- **filtro/config (item 124)**: giroscópio em **±1000 °/s** (FS_SEL=2; a
+  faixa de ±250 saturava -- medimos picos de 230-247 °/s nas rotações da
+  calibração), DLPF ~42 Hz e ODR ~100 Hz (`0x1A=0x03`, `0x19=0x09`).
+  Ajustável por `-D GYRO_FS_SEL=...` no `platformio.ini`.
 
 ## 4. Rede (idêntica ao firmware antigo)
 

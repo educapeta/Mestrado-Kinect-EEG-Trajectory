@@ -19,6 +19,32 @@
 #define ADDR_ESQUERDO 0x69  // MPU conectado a 0x69 publica na porta 4211
 #endif
 
+// ==================== ESCALA/CALIBRACAO DO MPU (item 124) ============
+// Inspirado no projeto ThatProject (Esp32_MPU6050_MahonyARHS): o ganho de
+// orientacao dele vem principalmente de CALIBRAR os offsets do acelerometro
+// e do giroscopio e de usar faixa de giroscopio alta o bastante para nao
+// saturar em movimentos rapidos. Medido nos nossos logs: giroscopio chegou a
+// 230-247 graus/s com FS=+-250 (saturando/quase) -> rotacao perdida e angulo
+// errado. Aqui: FS=+-1000 dps (macro), DLPF ~42 Hz e ODR ~100 Hz.
+#ifndef GYRO_FS_SEL
+#define GYRO_FS_SEL 0x10      // FS_SEL=2 (+/-1000 dps); 0x00=250, 0x08=500
+#endif
+#ifndef MPU_DLPF_CFG
+#define MPU_DLPF_CFG 0x03     // accel 44 Hz / gyro 42 Hz
+#endif
+#ifndef MPU_SMPLRT_DIV
+#define MPU_SMPLRT_DIV 0x09   // ODR = 1 kHz / (1 + 9) = 100 Hz
+#endif
+
+//: LSB por grau/s conforme GYRO_FS_SEL (datasheet do MPU6050).
+constexpr float GYRO_LSB_POR_DPS =
+    (GYRO_FS_SEL == 0x00) ? 131.0f
+    : (GYRO_FS_SEL == 0x08) ? 65.5f
+    : (GYRO_FS_SEL == 0x10) ? 32.8f
+                            : 16.4f;
+//: LSB por g com AFS_SEL=0 (+/-2 g).
+constexpr float ACCEL_LSB_POR_G = 16384.0f;
+
 // Pinos I2C. O firmware antigo e o documentado usavam 22/23, mas a bancada
 // foi re-fiada com 21/22 (padrao dos tutoriais de ESP32). Em vez de
 // adivinhar, setupI2c() SONDEIA os tres mapas possiveis no boot e imprime
@@ -192,6 +218,9 @@ class AttitudeMahony {
 // antigo nao conseguia: ver item 83). A classe ficou como referencia/historico.
 float gyroBiasDx = 0.0f, gyroBiasDy = 0.0f, gyroBiasDz = 0.0f;
 float gyroBiasEx = 0.0f, gyroBiasEy = 0.0f, gyroBiasEz = 0.0f;
+//: Offsets de zero-g do acelerometro em LSB (calibrados no boot, item 124).
+float accelOffDx = 0.0f, accelOffDy = 0.0f, accelOffDz = 0.0f;
+float accelOffEx = 0.0f, accelOffEy = 0.0f, accelOffEz = 0.0f;
 uint32_t previousMicrosD = 0;
 uint32_t previousMicrosE = 0;
 // Quando o loop tentou reconectar o Wi-Fi pela ultima vez (backoff de 15 s:
@@ -220,32 +249,72 @@ bool readMpuAt(uint8_t addr, int16_t &accelX, int16_t &accelY, int16_t &accelZ,
   return true;
 }
 
-// Calibra o giroscopio do MPU em 'addr' (500 amostras). Chamada DUAS vezes no
-// setup (uma por MPU), com 4 ms de delay entre cada amostra.
-void calibrateGyroscopeAt(uint8_t addr, float &biasX, float &biasY, float &biasZ) {
-  const int samples = 500;
-  long sumX = 0, sumY = 0, sumZ = 0;
+// Calibra giroscopio E acelerometro do MPU em 'addr' (item 124).
+//
+// O giroscopio e' a media das amostras PARADAS (bias). O acelerometro usa o
+// metodo do ThatProject generalizado: com a luva DEITADA na mesa (qualquer
+// face reta para cima), o eixo que estiver mais alinhado com a gravidade mede
+// +-1 g e os outros medem ~0; assim o offset de zero-g de cada eixo sai da
+// propria media, SEM precisar saber qual eixo e' o "z" do sensor:
+//   - eixo dominante (|media| > 0.95*|vetor|): offset = media - signo*1g
+//   - eixos horizontais: offset = media (verdade ~0)
+// Se a luva nao estiver deitada/reta (vetor longe de um eixo), avisa e NAO
+// aplica offsets de acelerometro (so' o bias do giroscopio).
+void calibrateImuAt(uint8_t addr, float &biasX, float &biasY, float &biasZ,
+                    float &accelOffX, float &accelOffY, float &accelOffZ) {
+  const int samples = 1000;
+  long sumGx = 0, sumGy = 0, sumGz = 0;
+  long sumAx = 0, sumAy = 0, sumAz = 0;
   int validas = 0;
   int16_t ax, ay, az, gx, gy, gz;
-  Serial.printf("[imu] calibrando giroscopio MPU 0x%02X... mantenha parado\n", addr);
+  Serial.printf("[imu] calibrando giroscopio+acelerometro MPU 0x%02X"
+                "... mantenha a luva PARADA e DEITADA na mesa\n", addr);
   for (int i = 0; i < samples; i++) {
     if (readMpuAt(addr, ax, ay, az, gx, gy, gz)) {
-      sumX += gx; sumY += gy; sumZ += gz;
+      sumGx += gx; sumGy += gy; sumGz += gz;
+      sumAx += ax; sumAy += ay; sumAz += az;
       validas++;
     }
-    delay(4);
+    delay(2);
   }
-  // Divide pelo numero de amostras VALIDAS: uma leitura I2C perdida nao pode
-  // puxar o bias para zero (o denominador antigo era sempre 500).
   const float divisor = (validas > 0) ? (float)validas : 1.0f;
-  biasX = (float)sumX / divisor / 131.0f;
-  biasY = (float)sumY / divisor / 131.0f;
-  biasZ = (float)sumZ / divisor / 131.0f;
+  biasX = (float)sumGx / divisor / GYRO_LSB_POR_DPS;
+  biasY = (float)sumGy / divisor / GYRO_LSB_POR_DPS;
+  biasZ = (float)sumGz / divisor / GYRO_LSB_POR_DPS;
   if (validas < samples * 9 / 10) {
-    Serial.printf("[imu] AVISO: so' %d/%d leituras validas no bias do MPU 0x%02X\n",
+    Serial.printf("[imu] AVISO: so' %d/%d leituras validas no MPU 0x%02X\n",
                   validas, samples, addr);
   }
-  Serial.printf("[imu] bias MPU 0x%02X: (%.4f, %.4f, %.4f)\n", addr, biasX, biasY, biasZ);
+  //: offsets de acelerometro em LSB (unidades RAW do sensor)
+  accelOffX = (float)sumAx / divisor;
+  accelOffY = (float)sumAy / divisor;
+  accelOffZ = (float)sumAz / divisor;
+  float vetor[3] = {accelOffX, accelOffY, accelOffZ};
+  float norma = sqrtf(vetor[0]*vetor[0] + vetor[1]*vetor[1] + vetor[2]*vetor[2]);
+  int eixo = 0;
+  for (int i = 1; i < 3; i++) {
+    if (fabsf(vetor[i]) > fabsf(vetor[eixo])) eixo = i;
+  }
+  bool deitada = (norma > 0.6f * ACCEL_LSB_POR_G)
+                 && (fabsf(vetor[eixo]) > 0.95f * norma);
+  if (deitada) {
+    float signo = (vetor[eixo] >= 0.0f) ? 1.0f : -1.0f;
+    vetor[eixo] -= signo * ACCEL_LSB_POR_G;
+    accelOffX = vetor[0]; accelOffY = vetor[1]; accelOffZ = vetor[2];
+    Serial.printf("[imu] accel offsets MPU 0x%02X: (%.2f, %.2f, %.2f) g"
+                  " (eixo dominante %d, %s)\n",
+                  addr, accelOffX / ACCEL_LSB_POR_G,
+                  accelOffY / ACCEL_LSB_POR_G, accelOffZ / ACCEL_LSB_POR_G,
+                  eixo, (signo > 0.0f) ? "para cima" : "para baixo");
+  } else {
+    accelOffX = accelOffY = accelOffZ = 0.0f;
+    Serial.printf("[imu] AVISO MPU 0x%02X: acelerometro nao esta' deitado "
+                  "(%0.2f g fora de eixo) -- offsets de accel NAO aplicados; "
+                  "deixe a luva deitada e reinicie\n",
+                  addr, norma / ACCEL_LSB_POR_G);
+  }
+  Serial.printf("[imu] bias MPU 0x%02X: (%.4f, %.4f, %.4f)\n",
+                addr, biasX, biasY, biasZ);
 }
 
 // ==================== FUNCOES DE REDE ================================
@@ -371,20 +440,25 @@ void setup() {
   Serial.begin(115200);
   setupI2c();
 
-  // Configura os DOIS MPUs (acorda, giro +/-250, accel +/-2g).
-  writeRegisterAt(ADDR_DIREITO, 0x6B, 0x00);
-  writeRegisterAt(ADDR_DIREITO, 0x1B, 0x00);
-  writeRegisterAt(ADDR_DIREITO, 0x1C, 0x00);
-  writeRegisterAt(ADDR_ESQUERDO, 0x6B, 0x00);
-  writeRegisterAt(ADDR_ESQUERDO, 0x1B, 0x00);
-  writeRegisterAt(ADDR_ESQUERDO, 0x1C, 0x00);
+  // Configura os DOIS MPUs (item 124): acorda, clock PLL, FS do giro
+  // (+-1000 dps por padrao), accel +-2 g, DLPF ~42 Hz e ODR ~100 Hz.
+  for (uint8_t addr : {ADDR_DIREITO, ADDR_ESQUERDO}) {
+    writeRegisterAt(addr, 0x6B, 0x00);   // acorda (sai do sleep)
+    writeRegisterAt(addr, 0x6B, 0x03);   // clock PLL com giroscopio Z
+    writeRegisterAt(addr, 0x1B, GYRO_FS_SEL);
+    writeRegisterAt(addr, 0x1C, 0x00);   // AFS_SEL=0 (+/-2 g)
+    writeRegisterAt(addr, 0x1A, MPU_DLPF_CFG);
+    writeRegisterAt(addr, 0x19, MPU_SMPLRT_DIV);
+  }
 
   // Primeira tentativa com tempo cheio (o hotspot da bancada pode demorar a
   // subir); depois o loop cuida da reconexao com backoff.
   connectWiFi(20000);
   ultimaTentativaWifi = millis();
-  calibrateGyroscopeAt(ADDR_DIREITO, gyroBiasDx, gyroBiasDy, gyroBiasDz);
-  calibrateGyroscopeAt(ADDR_ESQUERDO, gyroBiasEx, gyroBiasEy, gyroBiasEz);
+  calibrateImuAt(ADDR_DIREITO, gyroBiasDx, gyroBiasDy, gyroBiasDz,
+                 accelOffDx, accelOffDy, accelOffDz);
+  calibrateImuAt(ADDR_ESQUERDO, gyroBiasEx, gyroBiasEy, gyroBiasEz,
+                 accelOffEx, accelOffEy, accelOffEz);
   previousMicrosD = micros();
   previousMicrosE = micros();
 
@@ -416,8 +490,12 @@ void loop() {
       float dt = (now - previousMicrosD) * 1.0e-6f;
       previousMicrosD = now;
       if (dt > 0.0f && dt <= 0.1f) {
-        float ax = rawAx / 16384.0f, ay = rawAy / 16384.0f, az = rawAz / 16384.0f;
-        float gx = rawGx / 131.0f - gyroBiasDx, gy = rawGy / 131.0f - gyroBiasDy, gz = rawGz / 131.0f - gyroBiasDz;
+        float ax = (rawAx - accelOffDx) / ACCEL_LSB_POR_G,
+              ay = (rawAy - accelOffDy) / ACCEL_LSB_POR_G,
+              az = (rawAz - accelOffDz) / ACCEL_LSB_POR_G;
+        float gx = rawGx / GYRO_LSB_POR_DPS - gyroBiasDx,
+              gy = rawGy / GYRO_LSB_POR_DPS - gyroBiasDy,
+              gz = rawGz / GYRO_LSB_POR_DPS - gyroBiasDz;
         // ATITUDE propria (quaternion + Mahony 6 eixos): substitui
         // `yaw += gz*dt` e o Kalman de roll/pitch -- ver item 83 e a classe.
         static AttitudeMahony atitudeD;
@@ -454,8 +532,12 @@ void loop() {
       float dt = (now - previousMicrosE) * 1.0e-6f;
       previousMicrosE = now;
       if (dt > 0.0f && dt <= 0.1f) {
-        float ax = rawAx / 16384.0f, ay = rawAy / 16384.0f, az = rawAz / 16384.0f;
-        float gx = rawGx / 131.0f - gyroBiasEx, gy = rawGy / 131.0f - gyroBiasEy, gz = rawGz / 131.0f - gyroBiasEz;
+        float ax = (rawAx - accelOffEx) / ACCEL_LSB_POR_G,
+              ay = (rawAy - accelOffEy) / ACCEL_LSB_POR_G,
+              az = (rawAz - accelOffEz) / ACCEL_LSB_POR_G;
+        float gx = rawGx / GYRO_LSB_POR_DPS - gyroBiasEx,
+              gy = rawGy / GYRO_LSB_POR_DPS - gyroBiasEy,
+              gz = rawGz / GYRO_LSB_POR_DPS - gyroBiasEz;
         // ATITUDE propria (quaternion + Mahony 6 eixos) -- mesmo filtro do
         // lado direito, com o SEU proprio estado (item 83).
         static AttitudeMahony atitudeE;

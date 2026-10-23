@@ -255,11 +255,13 @@ def calibra_imu(participante="", sessao="", portas=(4210, 4211),
     avisar(f"  participante: {participante or '(nao informado)'} | "
            f"sessao: {sessao or '(nao informada)'}")
     avisar("  O firmware calibra o bias do giroscopio NO BOOT; ele PRECISA que")
-    avisar("  as luvas estejam PARADAS na mesa (sem mao, sem mexer).")
+    avisar("  as luvas estejam PARADAS e DEITADAS na mesa (sem mao, sem "
+             "mexer; uma face do modulo IMU paralela a mesa) -- o "
+             "firmware calibra o acelerometro no boot (item 124).")
     avisar("=" * 72)
     if confirmar:
         try:
-            input("  Deixe as luvas paradas e tecle ENTER para reiniciar "
+            input("  Deixe as luvas PARADAS e DEITADAS e tecle ENTER para reiniciar "
                   "(ou 'n' para pular): ").strip().lower()
         except EOFError:
             avisar("  (sem terminal interativo: seguindo automaticamente)")

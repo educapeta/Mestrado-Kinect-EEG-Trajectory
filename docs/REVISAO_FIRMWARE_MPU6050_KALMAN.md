@@ -151,7 +151,49 @@ Interpretação:
   desconhecido em segundos. É exatamente o cenário em que a seta "não acompanha"
   mesmo com a calibração feita.
 
-## 5. Recomendações (em ordem de impacto)
+## 5. Comparação com o projeto ThatProject (Esp32_MPU6050_MahonyARHS)
+
+O projeto do vídeo (`0015/ThatProject`, `MPU6050_Calibration_ESP32.ino` e
+`MahonyAHRS_ESP32.ino`) usa **o mesmo filtro de Mahony com quaternion** que
+nós, mas obtém orientação visivelmente mais estável. A diferença está na
+preparação dos dados:
+
+| item | ThatProject | nosso firmware (antes do item 124) |
+|---|---|---|
+| offsets do acelerômetro | **calibrados** (AX=-208, AY=417, AZ=93; subtraídos antes de normalizar) | **nenhum** (raw/16384; medimos \|a\|=1,065-1,068 g em repouso) |
+| bias do giroscópio | **calibrado** e subtraído | só no boot, 500 amostras (~2 s) |
+| faixa do giroscópio | **±2000 °/s** (FS_SEL=3) | ±250 °/s (nossos logs: picos de 230-247 °/s = saturando) |
+| faixa do acelerômetro | ±8 g (ganho 4096) | ±2 g (16384; melhor resolução, satura em >2 g) |
+| DLPF/ODR | DLPF 0 (260/256 Hz), loop ~4 ms | DLPF 0 (não configurado), loop ~10-15 ms |
+| filtro | Mahony `twoKp=1.0`, `twoKi=0` | Mahony `KP=2.0`, sem integral |
+| yaw | integrado (sem referência absoluta) | integrado (sem referência absoluta) |
+
+O que foi **adotado no item 124** (compilado; ainda não gravado no ESP32):
+1. **Calibração automática dos offsets do acelerômetro no boot**, junto com o
+   bias do giroscópio, generalizando a ideia do ThatProject: com a luva parada
+   e deitada (uma face do módulo paralela à mesa), o eixo que aponta para cima
+   mede ±1 g e os outros ~0; o firmware detecta o eixo dominante sozinho,
+   calcula os offsets de zero-g e os subtrai no loop. Se a luva não estiver
+   deitada, avisa e aplica só o bias do giroscópio.
+2. **Giroscópio em ±1000 °/s** (FS_SEL=2, macro `GYRO_FS_SEL`; ±500/±2000 sem
+   reescrever a lógica), eliminando a saturação observada.
+3. **DLPF ~42 Hz e ODR ~100 Hz** (`0x1A=0x03`, `0x19=0x09`).
+4. Clock PLL do giroscópio Z (como o ThatProject), em vez do oscilador interno.
+
+O que **não** foi adotado:
+- acelerômetro ±8 g: nosso uso tem aceleração menor e ±2 g dá mais resolução
+  (o gate `|a| ~ 1 g` do Mahony também filtra aceleração linear); se aparecer
+  saturação >2 g, trocar é uma macro.
+- loop de 4 ms: nosso I2C está a 50 kHz por causa do flat de 2 m (decisão de
+  bancada documentada); subir para 400 kHz como no vídeo é risco de
+  comunicação. O Mahony com KP=2 roda a ~100 Hz.
+- `twoKi=0` do ThatProject é igual ao nosso; um Ki pequeno é opcional.
+
+Conclusão: **a diferença não é o algoritmo** (o Mahony é o mesmo e o nosso foi
+validado por simulação) e sim **a calibração dos offsets do acelerômetro e a
+faixa do giroscópio**. O item 124 fecha essas duas lacunas.
+
+## 6. Recomendações (em ordem de impacto)
 
 1. **Calibrar o acelerômetro** (6 posições: ±X, ±Y, ±Z contra a gravidade),
    obtendo offsets de zero-g (e, se quiser, fatores de escala), e aplicar antes
@@ -170,7 +212,7 @@ Interpretação:
 5. Se quiser comparar com o vídeo, implementar o Kalman 1D dele **apenas como
    referência/validação** de roll/pitch — não substitui o Mahony para 3D/yaw.
 
-## 6. O que foi corrigido neste commit (sem mudar o comportamento de atitude)
+## 7. O que foi corrigido neste commit
 
 - `calibrateGyroscopeAt` (dual) e `calibrateGyroscope` (luva única) agora
   dividem o bias pelo número de leituras **válidas** (antes dividiam por 500
