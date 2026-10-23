@@ -36,3 +36,8 @@ static const char *WIFI_SENHAS[] = {
 //     nenhuma outra opcao funciona). 0 = broadcast 255.255.255.255.
 #define UDP_USAR_UNICAST 1
 #define UDP_DESTINO "192.168.137.1"
+
+// --- OTA (item 129): senha do upload por Wi-Fi ----------------------------
+// Deixe igual ao --auth do platformio.ini (env esp32_duas_imus_ota) e ao
+// OTA_SENHA do main.cpp. Troque antes de publicar o firmware.
+#define OTA_SENHA "mestrado"

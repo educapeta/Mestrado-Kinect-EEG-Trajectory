@@ -178,3 +178,61 @@ CORPO (sem singularidade) e a inclinacao e' corrigida pelo acelerometro;
 usa (`imu.rotation_matrix` = Rz(yaw) Ry(pitch) Rx(roll)). O `yaw` continua sem
 referencia ABSOLUTA (nao ha' magnetometro): pode derivar lentamente, mas agora
 e' CONSISTENTE entre poses -- que e' o que a calibracao da palma precisa.
+
+---
+
+## 7. Auto-reset (BOOT) e OTA pela rede (item 129)
+
+### Por que hoje precisa segurar BOOT
+O `platformio.ini` desta placa esta' com **`board_upload.before_reset = no_reset`**
+de proposito: o auto-reset nao funciona e o pulso de DTR/RTS fazia o CP210x cair
+no meio do upload. O diagnostico do Windows (23/10/2026) mostrou dois agravantes:
+
+- driver **CP210x 6.7.4.261, de 2016** (o atual da Silicon Labs e' bem mais
+  novo, 11.x/2023+);
+- **USB selective suspend LIGADO** para o dispositivo
+  (`DeviceSelectiveSuspended=1`, `SelectiveSuspendTimeout=10000`).
+
+Antes de desistir do auto-reset, tente (nesta ordem):
+
+1. Instalar o **CP210x Universal Windows Driver** mais recente da Silicon Labs
+   (silabs.com -> CP210x -> Universal Windows Driver), reiniciar o PC e
+   conferir no Gerenciador de Dispositivos se a versao subiu de 6.7.4.261.
+2. Gerenciador de Dispositivos -> **Portas (COM e LPT)** -> Silicon Labs
+   CP210x -> Propriedades -> **Gerenciamento de energia** -> DESMARCAR
+   "Permitir que o computador desligue este dispositivo para economizar
+   energia". (Tambem vale desativar o USB selective suspend no plano de
+   energia e ligar direto numa porta USB do PC, sem hub.)
+3. No `platformio.ini`, trocar `board_upload.before_reset = no_reset` por
+   `default_reset` (ou apagar a linha) e testar `pio run -e esp32_duas_imus
+   -t upload` **sem segurar o BOOT**. Se conectar e gravar, o auto-reset
+   voltou -- o `.bat`/BOOT manual deixa de ser necessario no USB.
+4. Se mesmo assim o `Connecting...` falhar (Wrong boot mode 0x13), a placa
+   **nao tem o circuito de auto-reset** (dois transistores DTR/RTS -> EN/IO0).
+   Solucoes: add o circuito (2 transistores NPN + resistores, como no
+   ESP32-DevKitC/NodeMCU-32S), usar um adaptador USB-UART externo com DTR/RTS e
+   esse circuito, ou trocar por uma placa que ja' tenha auto-reset.
+
+### OTA: solucao definitiva para o dia a dia (sem BOOT)
+O firmware do item 129 tem **ArduinoOTA** embutido. Depois de gravar UMA vez
+por USB (com BOOT), os proximos uploads sao por Wi-Fi:
+
+```powershell
+# hotspot ligado + ESP32 na mesma rede; a serial do boot mostra o IP
+C:\Users\Usuario\.platformio\penv\Scripts\pio.exe run `
+  -d firmware/esp32_duas_imus -e esp32_duas_imus_ota -t upload
+```
+
+- O env `esp32_duas_imus_ota` usa `upload_protocol = espota`,
+  `upload_port = 192.168.137.83` (IP padrao da bancada) e
+  `upload_flags = --auth=mestrado`; ajuste o IP se mudar (a serial imprime
+  `[wifi] conectado em ... | IP: ...`).
+- Senha padrao: `mestrado` (define `OTA_SENHA` em `src/credenciais.h`, NAO
+  versionado, para trocar; mantenha igual ao `--auth` do `platformio.ini`).
+- Durante o OTA o loop dos sensores PARA (o ESP32 reinicia no fim); nao deixe
+  uma aquisicao rodando durante a atualizacao.
+- **Recuperacao**: se o Wi-Fi nao subir ou o firmware travar, volte ao USB com
+  BOOT (`gravar.bat COM4` / env `esp32_duas_imus`). O OTA e' comodidade, nao
+  substitui o cabo em caso de brick.
+- OTA nao precisa de `--before_reset`: o upload e' por rede; o ESP32 reinicia
+  sozinho e volta anunciando o IP.

@@ -3,6 +3,7 @@
 #include <math.h>
 #include <WiFi.h>
 #include <WiFiUdp.h>
+#include <ArduinoOTA.h>
 
 // Credenciais de rede (eduroam / WPA2-PSK). Arquivo esta' no .gitignore.
 #include "credenciais.h"
@@ -57,6 +58,15 @@ int SCL_PIN = 23;
 // Um ESP32, dois UDP fixos -- casa com imu.py: IMU_PORTAS_PADRAO = {1: 4210, 2: 4211}.
 const uint16_t UDP_PORT_DIREITA = 4210;
 const uint16_t UDP_PORT_ESQUERDA = 4211;
+// OTA (item 129): atualizacao do firmware pela rede Wi-Fi, sem cabo/BOOT. A
+// senha fica em credenciais.h (nao versionado) ou usa o padrao abaixo -- o
+// upload tem de usar a MESMA senha (ver platformio.ini env _ota).
+#ifndef OTA_HOSTNAME
+#define OTA_HOSTNAME "esp32-luvas-mestrado"
+#endif
+#ifndef OTA_SENHA
+#define OTA_SENHA "mestrado"
+#endif
 const char *GLOVE_NOME_DIREITA = "direita";
 const char *GLOVE_NOME_ESQUERDO = "esquerda";
 #if UDP_USAR_UNICAST
@@ -357,6 +367,43 @@ void connectWiFi(uint32_t timeoutMs) {
   Serial.printf("\n[wifi] FALHA ao conectar (status %d).\n", (int)WiFi.status());
 }
 
+// ==================== OTA (item 129) =================================
+// Atualizacao pela REDE: depois de gravar UMA vez este firmware (com BOOT),
+// os proximos uploads podem ser feitos por Wi-Fi (espota/ArduinoOTA), sem
+// cabo USB e sem segurar BOOT. Requisitos: hotspot ligado e o ESP32 na mesma
+// rede do PC; se a rede cair, a recuperacao volta a ser por USB (BOOT).
+bool otaPronto = false;
+
+void talvezIniciarOta() {
+  if (otaPronto || WiFi.status() != WL_CONNECTED) return;
+  ArduinoOTA.setHostname(OTA_HOSTNAME);
+  ArduinoOTA.setPassword(OTA_SENHA);
+  ArduinoOTA.onStart([]() {
+    Serial.println("[ota] atualizacao iniciada (sensores param durante o "
+                   "upload)");
+  });
+  ArduinoOTA.onEnd([]() { Serial.println("[ota] atualizacao concluida; "
+                                         "reiniciando..."); });
+  ArduinoOTA.onProgress([](unsigned int progresso, unsigned int total) {
+    if (total > 0 && progresso % (total / 10 + 1) < 2048) {
+      Serial.printf("[ota] %u%%\n", (progresso * 100U) / total);
+    }
+  });
+  ArduinoOTA.onError([](ota_error_t erro) {
+    Serial.printf("[ota] ERRO %u: %s\n", (unsigned int)erro,
+                  (erro == OTA_AUTH_ERROR) ? "senha"
+                  : (erro == OTA_BEGIN_ERROR) ? "begin"
+                  : (erro == OTA_CONNECT_ERROR) ? "conexao"
+                  : (erro == OTA_RECEIVE_ERROR) ? "recepcao"
+                  : "fim");
+  });
+  ArduinoOTA.begin();
+  otaPronto = true;
+  Serial.printf("[ota] pronto: hostname %s | IP %s | porta 3232 | senha %s\n",
+                OTA_HOSTNAME, WiFi.localIP().toString().c_str(),
+                (strlen(OTA_SENHA) > 0) ? "definida" : "VAZIA");
+}
+
 void writeRegisterAt(uint8_t addr, uint8_t reg, uint8_t value) {
   Wire.beginTransmission(addr);
   Wire.write(reg);
@@ -461,6 +508,7 @@ void setup() {
                  accelOffEx, accelOffEy, accelOffEz);
   previousMicrosD = micros();
   previousMicrosE = micros();
+  talvezIniciarOta();
 
   Serial.println("esp_timestamp_us,roll_deg,pitch_deg,yaw_deg,ax_g,ay_g,az_g,gx_dps,gy_dps,gz_dps");
 }
@@ -474,6 +522,10 @@ void loop() {
       millis() - ultimaTentativaWifi >= 15000) {
     ultimaTentativaWifi = millis();
     connectWiFi(6000);
+  }
+  talvezIniciarOta();
+  if (otaPronto) {
+    ArduinoOTA.handle();
   }
 
   // --- DIREITO: MPU 0x68 -> UDP 4210 ---

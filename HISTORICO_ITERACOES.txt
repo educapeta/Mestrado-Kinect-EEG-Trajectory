@@ -8101,3 +8101,58 @@ PENDENCIAS: rodar a calibracao X na bancada (uma mao por vez, folha rigida),
 comparar com J+V/teste de mira; gravar o firmware do item 124 (offsets de
 accel/giroscopio) no ESP32.
 
+
+
+================================================================================
+ITEM 129 (23/10/2026) - NAO PRECISAR MAIS SEGURAR O BOOT PARA GRAVAR:
+    diagnostico do CP210x + auto-reset e OTA (ArduinoOTA) por Wi-Fi
+================================================================================
+PERGUNTA DO USUARIO: "o que eu preciso fazer futuramente no meu esp para eu
+nao precisar mais pressionar o BOOT nele pra rodar um programa novo?"
+DIAGNOSTICO (Windows, 23/10/2026)
+  - O `platformio.ini` do dual esta' com `board_upload.before_reset =
+    no_reset` de proposito (auto-reset nao entra em download mode e DTR/RTS
+    derruba o CP210x). Ou seja: hoje o proprio PlatformIO nao tenta resetar.
+  - Driver do CP210x instalado: **6.7.4.261, de 18/09/2016** (antigo; o atual
+    da Silicon Labs e' 11.x/2023+).
+  - No registro do dispositivo: `DeviceSelectiveSuspended=1` e
+    `SelectiveSuspendTimeout=10000` -> economia de energia USB pode derrubar o
+    adaptador justamente quando o esptool mexe nas linhas de controle.
+CAMINHOS PARA RESOLVER (do mais barato ao mais definitivo)
+  1) SOFTWARE NO WINDOWS/USB (sem tocar no ESP):
+     a. instalar o CP210x Universal Windows Driver mais recente da Silicon Labs
+        e reiniciar; conferir a versao no Gerenciador de Dispositivos;
+     b. desmarcar "Permitir que o computador desligue este dispositivo..." no
+        dispositivo (Gerenciamento de energia), desativar USB selective suspend
+        no plano de energia e usar porta USB direta do PC (sem hub);
+     c. no platformio.ini, trocar `before_reset = no_reset` por
+        `default_reset` e testar `pio run -e esp32_duas_imus -t upload` sem
+        BOOT. Se conectar, o `.bat` com BOOT vira so' plano B.
+  2) HARDWARE (se o teste acima continuar em "Wrong boot mode 0x13"): a placa
+     nao tem o circuito de auto-reset (2 transistores NPN: DTR->EN e RTS->IO0,
+     com pull-ups/caps do DevKitC/NodeMCU-32S). Opcoes: soldar o circuito,
+     usar adaptador USB-UART externo com DTR/RTS + circuito, ou trocar a placa
+     por uma com auto-reset (Espressif DevKitC, NodeMCU-32S, etc.).
+  3) OTA (ADOTADO AGORA, item 129): ArduinoOTA embutido no firmware. Depois de
+     gravar UMA vez por USB (com BOOT), os proximos uploads vao por Wi-Fi, sem
+     cabo/BOOT:
+       pio.exe run -d firmware/esp32_duas_imus -e esp32_duas_imus_ota -t upload
+     Env `esp32_duas_imus_ota` = extends do env serial + upload_protocol
+     espota + upload_port 192.168.137.83 + `--auth=mestrado`; OTA_SENHA padrao
+     "mestrado" (`#ifndef` no main.cpp; pode ser trocada em credenciais.h, NAO
+     versionado, e tem de bater com o --auth). O loop para durante o upload e
+     reinicia no fim; recuperacao continua por USB+BOOT se o Wi-Fi/firmware
+     falhar. README do firmware ganhou a secao 7 com o passo a passo.
+IMPLEMENTADO NO FIRMWARE (main.cpp + platformio.ini + credenciais.h.example)
+  - `#include <ArduinoOTA.h>`, OTA_HOSTNAME "esp32-luvas-mestrado", OTA_SENHA
+    configuravel; `talvezIniciarOta()` inicia depois do Wi-Fi (setup e
+    reconexao no loop) e `ArduinoOTA.handle()` no topo do loop; logs
+    [ota] inicio/%/fim/erro; sensores param durante o upload.
+  - Novo env `[env:esp32_duas_imus_ota]` (extends do env serial, espota, IP,
+    senha) -- NAO muda o env serial/recovery.
+  - Compilado: env esp32_duas_imus SUCCESS e env esp32_duas_imus_ota SUCCESS.
+PENDENCIAS: gravar UMA vez por USB (BOOT) o firmware novo (item 124 + OTA);
+depois testar o OTA na bancada (`pio run -e esp32_duas_imus_ota -t upload`) com
+o hotspot ligado e conferir o IP na serial; opcionalmente tentar o item 1
+(driver CP210x) para recuperar tambem o auto-reset USB.
+
