@@ -148,9 +148,376 @@ from imu import (  # noqa: E402
     parse_portas_imu,
     rotation_matrix,
     solve_palm_alignment,
+    solve_palm_alignment_pesos,
 )
 CALIBRATION_SECONDS = 3.0
 PALM_VECTOR_LENGTH_M = 0.20
+
+# ============================================================================
+# CALIBRACAO GEOMETRICA DA PALMA (item 127, tecla X)
+# ============================================================================
+#: Tempo PARADO (s) com o alvo geometrico alcancado para gravar um take.
+CALIB_GEO_TAKE_SEC = 2.0
+#: Angulo maximo (graus) entre a normal medida pelo Kinect e o alvo para o
+#: take valer. E' um controle de EXECUCAO (a verdade e' o alvo exato): o plano
+#: do Kinect serve de QA, nao de verdade.
+CALIB_GEO_QA_MAX_DEG = 8.0
+#: Variacao maxima de rotacao (graus) e posicao (m) dentro da janela de 2 s.
+CALIB_GEO_ESTAB_ROT_DEG = 4.0
+CALIB_GEO_ESTAB_POS_M = 0.03
+#: Movimento minimo desde o ultimo take antes de armar o proximo (evita take
+#: duplicado da mesma pose).
+CALIB_GEO_MOV_MIN_DEG = 8.0
+CALIB_GEO_MOV_MIN_M = 0.10
+#: Minimo de takes para resolver/salvar e limite de residuo medio (graus).
+#: O GATE de gravacao oficial exige ainda a pose de MIRA e a validacao
+#: independente dela (sem isso o ajuste pode nao generalizar para a direcao
+#: absoluta) e um limite para o pior take geometrico.
+CALIB_GEO_MIN_TAKES = 6
+CALIB_GEO_MAX_RESIDUO_DEG = 12.0
+CALIB_GEO_MAX_POSE_DEG = 20.0
+CALIB_GEO_MAX_VALIDACAO_MIRA_DEG = 20.0
+CALIB_GEO_MAX_LOO_MEDIANA_DEG = 15.0
+#: Pesos no ajuste hibrido: a pose de mira (verdade por posicao, independente
+#: do plano do Kinect) ancora a direcao absoluta; as poses geometricas tem
+#: verdade EXATA (alvo do referencial da camera) mas erro de execucao maior.
+CALIB_GEO_PESO_GEOMETRICA = 1.0
+CALIB_GEO_PESO_POSICAO = 1.5
+#: Poses por mao. `alvo` e' a direcao EXATA da normal da palma no referencial
+#: da CAMERA (x=direita, y=CIMA na imagem, z=para DENTRO da cena -- a lente
+#: fica em -Z vista de quem esta' na frente dela). `dedos` e' a direcao de
+#: referencia da mao no MESMO referencial (guia a "rolagem" do punho, nao entra
+#: na verdade). O tipo "posicao" usa a verdade `-normalize(posicao da mao)`.
+_R2 = 0.7071067811865476
+POSES_CALIBRACAO_GEOMETRICA = (
+    {"nome": "PALMA PARA A CAMERA", "tipo": "geometrica",
+     "alvo": (0.0, 0.0, -1.0), "dedos": (0.0, 1.0, 0.0),
+     "instrucao": "Palma de FRENTE para a camera: plano da mao (folha) "
+                  "PARALELO ao plano da imagem; dedos para CIMA na imagem."},
+    {"nome": "DORSO PARA A CAMERA", "tipo": "geometrica",
+     "alvo": (0.0, 0.0, 1.0), "dedos": (0.0, 1.0, 0.0),
+     "instrucao": "Dorso de frente para a camera (palma para LONGE): plano do "
+                  "dorso PARALELO ao plano da imagem; dedos para CIMA."},
+    {"nome": "PALMA PARA A DIREITA", "tipo": "geometrica",
+     "alvo": (1.0, 0.0, 0.0), "dedos": (0.0, 1.0, 0.0),
+     "instrucao": "Palma apontando para a DIREITA da imagem (mao de perfil): "
+                  "dedos para CIMA; o plano da mao contem o eixo da camera."},
+    {"nome": "PALMA PARA A ESQUERDA", "tipo": "geometrica",
+     "alvo": (-1.0, 0.0, 0.0), "dedos": (0.0, 1.0, 0.0),
+     "instrucao": "Palma apontando para a ESQUERDA da imagem (mao de perfil): "
+                  "dedos para CIMA."},
+    {"nome": "PALMA PARA CIMA (cam)", "tipo": "geometrica",
+     "alvo": (0.0, 1.0, 0.0), "dedos": (1.0, 0.0, 0.0),
+     "instrucao": "Palma apontando para CIMA NO REFERENCIAL DA CAMERA (a "
+                  "camera e' inclinada ~51 graus: use o plano guia, NAO a "
+                  "gravidade); dedos para a DIREITA da imagem."},
+    {"nome": "PALMA PARA BAIXO (cam)", "tipo": "geometrica",
+     "alvo": (0.0, -1.0, 0.0), "dedos": (1.0, 0.0, 0.0),
+     "instrucao": "Palma apontando para BAIXO NO REFERENCIAL DA CAMERA (use o "
+                  "plano guia, NAO a gravidade); dedos para a DIREITA."},
+    {"nome": "DIAGONAL FRENTE-DIREITA", "tipo": "geometrica",
+     "alvo": (_R2, 0.0, -_R2), "dedos": (0.0, 1.0, 0.0),
+     "instrucao": "Palma na diagonal FRENTE-DIREITA da camera (entre 'palma "
+                  "para a camera' e 'palma para a direita'); dedos para CIMA."},
+    {"nome": "DIAGONAL FRENTE-CIMA", "tipo": "geometrica",
+     "alvo": (0.0, _R2, -_R2), "dedos": (1.0, 0.0, 0.0),
+     "instrucao": "Palma na diagonal FRENTE-CIMA da camera (entre 'palma para "
+                  "a camera' e 'palma para cima'); dedos para a DIREITA."},
+    {"nome": "MIRA DESLOCADA (palma na lente)", "tipo": "posicao",
+     "alvo": None, "dedos": None,
+     "instrucao": "Mao a ~45-50 cm e DESLOCADA ~20 cm para a ESQUERDA da "
+                  "imagem; palma MIRANDO a lente. A verdade e' a POSICAO 3D da "
+                  "mao (independente do plano do Kinect)."},
+)
+
+
+def _rotacao_a_para_b(a, b):
+    """Rotacao minima que leva o vetor unitario `a` no vetor unitario `b`."""
+    a = np.asarray(a, np.float64)
+    b = np.asarray(b, np.float64)
+    na, nb = np.linalg.norm(a), np.linalg.norm(b)
+    if na < 1e-12 or nb < 1e-12:
+        return np.eye(3)          # entrada degenerada: rotacao neutra
+    a = a / na
+    b = b / nb
+    eixo = np.cross(a, b)
+    cos = float(np.clip(np.dot(a, b), -1.0, 1.0))
+    if np.linalg.norm(eixo) < 1e-12:
+        if cos > 0.0:
+            return np.eye(3)
+        # 180 graus: qualquer eixo perpendicular
+        perp = np.cross(a, [1.0, 0.0, 0.0])
+        if np.linalg.norm(perp) < 1e-9:
+            perp = np.cross(a, [0.0, 1.0, 0.0])
+        perp /= np.linalg.norm(perp)
+        return _matriz_rotacao_eixo(perp, np.pi)
+    eixo /= np.linalg.norm(eixo)
+    return _matriz_rotacao_eixo(eixo, float(np.arccos(cos)))
+
+
+def _matriz_rotacao_eixo(eixo, angulo):
+    x, y, z = eixo
+    c, s = np.cos(angulo), np.sin(angulo)
+    C = 1.0 - c
+    return np.array([
+        [c + x * x * C, x * y * C - z * s, x * z * C + y * s],
+        [y * x * C + z * s, c + y * y * C, y * z * C - x * s],
+        [z * x * C - y * s, z * y * C + x * s, c + z * z * C],
+    ], np.float64)
+
+
+def _angulo_rotacoes(rot_a, rot_b):
+    """Angulo (graus) entre duas rotacoes."""
+    a = np.asarray(rot_a, np.float64)
+    b = np.asarray(rot_b, np.float64)
+    c = (float(np.trace(a.T @ b)) - 1.0) / 2.0
+    return float(np.degrees(np.arccos(np.clip(c, -1.0, 1.0))))
+
+
+class CalibracaoGeometrica:
+    """Calibracao da palma por ALVOS GEOMETRICOS da camera (item 127).
+
+    Diferenca para o J (verdade = direcao mao->lente): aqui as primeiras 8
+    poses tem verdade EXATA no referencial da camera (ex.: normal da palma
+    paralela a X, Y ou Z da camera), com o usuario alinhando o plano da mao a
+    um plano-guia desenhado no video. A ultima pose e' de MIRA (verdade por
+    posicao) para ancorar a direcao absoluta. O ajuste e' hibrido e ponderado:
+    as direcoes geometricas nao tem erro de MEDIDA (so de execucao); a mira
+    nao depende do plano do Kinect.
+
+    Uma mao por vez: o tool cria uma instancia para "right" e, no fim, outra
+    para "left". Cada `amostra` recebe rotacao do IMU, posicao 3D da palma e
+    normal da palma medida pelo Kinect (usada apenas como QA de execucao).
+
+    Regras de take (mesmas dos takes do J):
+      - QA = angulo entre normal medida e o alvo <= CALIB_GEO_QA_MAX_DEG;
+      - 2 s PARADO (rotacao/posicao estaveis) -> grava;
+      - exige movimento minimo desde o ultimo take antes do proximo;
+      - pose de mira: alvo/verdade = -normalize(posicao da mao).
+    """
+
+    def __init__(self, lado, poses=None, avisar=print):
+        self.lado = str(lado)
+        self.poses = [dict(pose) for pose in (poses or
+                                              POSES_CALIBRACAO_GEOMETRICA)]
+        self.avisar = avisar
+        self.indice = 0
+        self.capturas = []
+        self.ativa = True
+        self.qa_atual = None
+        self.status = "aguardando a mao"
+        self._inicio_ok = None
+        self._rot_ref = None
+        self._pos_ref = None
+        self._ultima_rot = None
+        self._ultima_pos = None
+
+    # -- estado ---------------------------------------------------------
+    @property
+    def completa(self):
+        return self.indice >= len(self.poses)
+
+    @property
+    def pose_atual(self):
+        return None if self.completa else self.poses[self.indice]
+
+    def parar(self):
+        self.ativa = False
+
+    def progresso(self, now):
+        if self.completa:
+            return {"indice": len(self.poses), "total": len(self.poses),
+                    "pose": None, "qa_deg": self.qa_atual,
+                    "tempo_ok": 0.0, "status": "COMPLETA"}
+        pose = self.pose_atual
+        tempo = (0.0 if self._inicio_ok is None
+                 else max(0.0, float(now) - self._inicio_ok))
+        return {"indice": self.indice, "total": len(self.poses),
+                "pose": pose, "qa_deg": self.qa_atual,
+                "tempo_ok": tempo, "status": self.status}
+
+    # -- verdade --------------------------------------------------------
+    def _verdade(self, pose, posicao):
+        if pose.get("tipo") == "posicao":
+            if posicao is None:
+                return None
+            vetor = -np.asarray(posicao, np.float64).reshape(3)
+            norma = np.linalg.norm(vetor)
+            return None if norma < 1e-6 else vetor / norma
+        alvo = np.asarray(pose["alvo"], np.float64).reshape(3)
+        norma = np.linalg.norm(alvo)
+        return None if norma < 1e-9 else alvo / norma
+
+    # -- amostra --------------------------------------------------------
+    def amostra(self, now, rotacao, posicao_palma, normal_medida):
+        """Recebe uma amostra; devolve evento {'tipo': 'take'...} ou None."""
+        if not self.ativa or self.completa:
+            return None
+        pose = self.pose_atual
+        if rotacao is None or posicao_palma is None or normal_medida is None:
+            self.qa_atual = None
+            self._inicio_ok = None
+            self.status = "SEM MAO/PLANO -- mostre a mao e o plano da palma"
+            return None
+        rot = np.asarray(rotacao, np.float64)
+        pos = np.asarray(posicao_palma, np.float64).reshape(3)
+        normal = np.asarray(normal_medida, np.float64).reshape(3)
+        norma = np.linalg.norm(normal)
+        if (rot.shape != (3, 3) or not np.isfinite(rot).all()
+                or norma < 1e-9 or not np.isfinite(pos).all()):
+            self.qa_atual = None
+            self._inicio_ok = None
+            return None
+        normal = normal / norma
+        verdade = self._verdade(pose, pos)
+        if verdade is None:
+            self.qa_atual = None
+            self._inicio_ok = None
+            return None
+        self.qa_atual = angle_between(normal, verdade)
+        if not np.isfinite(self.qa_atual) or                 self.qa_atual > CALIB_GEO_QA_MAX_DEG:
+            self._inicio_ok = None
+            self.status = (f"ALINHE o plano ao alvo (desvio "
+                           f"{self.qa_atual:.1f} > {CALIB_GEO_QA_MAX_DEG:g})")
+            return None
+        if self._ultima_rot is not None:
+            mudou_rot = _angulo_rotacoes(rot, self._ultima_rot)
+            mudou_pos = float(np.linalg.norm(pos - self._ultima_pos))
+            if mudou_rot < CALIB_GEO_MOV_MIN_DEG and                     mudou_pos < CALIB_GEO_MOV_MIN_M:
+                self._inicio_ok = None
+                self.status = "MOVA a mao para a proxima pose"
+                return None
+        if self._inicio_ok is None:
+            self._inicio_ok = float(now)
+            self._rot_ref = rot
+            self._pos_ref = pos
+            self.status = "PARADO 0.0/2.0 s"
+            return None
+        if _angulo_rotacoes(rot, self._rot_ref) > CALIB_GEO_ESTAB_ROT_DEG or                 float(np.linalg.norm(pos - self._pos_ref)) >                 CALIB_GEO_ESTAB_POS_M:
+            self._inicio_ok = float(now)
+            self._rot_ref = rot
+            self._pos_ref = pos
+            self.status = "PARADO 0.0/2.0 s"
+            return None
+        decorrido = float(now) - self._inicio_ok
+        if decorrido < CALIB_GEO_TAKE_SEC:
+            self.status = f"PARADO {decorrido:.1f}/{CALIB_GEO_TAKE_SEC:.1f} s"
+            return None
+        captura = {
+            "indice": self.indice,
+            "pose": pose["nome"],
+            "tipo": pose.get("tipo", "geometrica"),
+            "alvo": (None if pose.get("alvo") is None
+                     else np.asarray(pose["alvo"], np.float64).tolist()),
+            "verdade": verdade.tolist(),
+            "qa_deg": float(self.qa_atual),
+            "rotacao": rot.tolist(),
+            "posicao": pos.tolist(),
+            "normal_medida": normal.tolist(),
+        }
+        self.capturas.append(captura)
+        self.indice += 1
+        self._ultima_rot = rot
+        self._ultima_pos = pos
+        self._inicio_ok = None
+        self.qa_atual = None
+        self.status = "TAKE GRAVADO"
+        return {"tipo": "take", "captura": captura,
+                "total": len(self.poses)}
+
+    def pular_pose(self):
+        """Pula a pose atual (sem gravar) e devolve evento."""
+        if not self.ativa or self.completa:
+            return None
+        pose = self.pose_atual
+        self.indice += 1
+        self._inicio_ok = None
+        self.qa_atual = None
+        self.status = "POSE PULADA"
+        return {"tipo": "pulada", "pose": pose["nome"],
+                "total": len(self.poses)}
+
+    # -- resultado ------------------------------------------------------
+    def resultado(self):
+        """Resolve T/f hibrido + estatisticas e validacao (dict)."""
+        if len(self.capturas) < CALIB_GEO_MIN_TAKES:
+            return {"erro": (f"takes insuficientes ({len(self.capturas)} < "
+                             f"{CALIB_GEO_MIN_TAKES})")}
+        rotacoes = [np.asarray(c["rotacao"], np.float64)
+                    for c in self.capturas]
+        verdades = [np.asarray(c["verdade"], np.float64)
+                    for c in self.capturas]
+        pesos = [CALIB_GEO_PESO_POSICAO if c["tipo"] == "posicao"
+                 else CALIB_GEO_PESO_GEOMETRICA for c in self.capturas]
+        solucao = solve_palm_alignment_pesos(rotacoes, verdades, pesos=pesos)
+        if solucao is None:
+            return {"erro": "o ajuste T/f nao convergiu"}
+        T, f_body, residuo = solucao
+        por_pose = []
+        for c, rot, verdade in zip(self.capturas, rotacoes, verdades):
+            erro = angle_between(T @ rot @ f_body, verdade)
+            por_pose.append({"pose": c["pose"], "tipo": c["tipo"],
+                             "qa_deg": c["qa_deg"], "erro_deg": float(erro)})
+        erros = [p["erro_deg"] for p in por_pose
+                 if np.isfinite(p["erro_deg"])]
+        # validacao POR POSICAO: resolve sem a(s) pose(s) de mira e mede nelas
+        validacao_posicao = None
+        indices_pos = [i for i, c in enumerate(self.capturas)
+                       if c["tipo"] == "posicao"]
+        if indices_pos and len(self.capturas) - len(indices_pos) >=                 CALIB_GEO_MIN_TAKES:
+            rot_sem = [rot for i, rot in enumerate(rotacoes)
+                       if i not in indices_pos]
+            ver_sem = [ver for i, ver in enumerate(verdades)
+                       if i not in indices_pos]
+            pe_sem = [pe for i, pe in enumerate(pesos) if i not in indices_pos]
+            sol_sem = solve_palm_alignment_pesos(rot_sem, ver_sem,
+                                                 pesos=pe_sem)
+            if sol_sem is not None:
+                erros_mira = []
+                for i in indices_pos:
+                    erros_mira.append(float(angle_between(
+                        sol_sem[0] @ rotacoes[i] @ sol_sem[1], verdades[i])))
+                validacao_posicao = {
+                    "n": len(indices_pos),
+                    "mediana_deg": float(np.median(erros_mira)),
+                    "max_deg": float(np.max(erros_mira)),
+                }
+        # validacao CRUZADA: deixa cada take de fora e mede nele
+        loo = []
+        if len(self.capturas) >= CALIB_GEO_MIN_TAKES + 1:
+            for i in range(len(self.capturas)):
+                rot_sem = [r for j, r in enumerate(rotacoes) if j != i]
+                ver_sem = [v for j, v in enumerate(verdades) if j != i]
+                pe_sem = [p for j, p in enumerate(pesos) if j != i]
+                sol = solve_palm_alignment_pesos(rot_sem, ver_sem,
+                                                 pesos=pe_sem)
+                if sol is not None:
+                    loo.append(float(angle_between(
+                        sol[0] @ rotacoes[i] @ sol[1], verdades[i])))
+        erros_geo = [p["erro_deg"] for p in por_pose
+                     if p["tipo"] == "geometrica" and
+                     np.isfinite(p["erro_deg"])]
+        erros_pos = [p["erro_deg"] for p in por_pose
+                     if p["tipo"] == "posicao" and np.isfinite(p["erro_deg"])]
+        return {
+            "lado": self.lado,
+            "rotation": np.asarray(T, np.float64).tolist(),
+            "body": np.asarray(f_body, np.float64).tolist(),
+            "residual_deg": float(residuo),
+            "n_takes": len(self.capturas),
+            "por_pose": por_pose,
+            "erro_geometricas_mediana": (float(np.median(erros_geo))
+                                         if erros_geo else None),
+            "erro_geometricas_max": (float(np.max(erros_geo))
+                                     if erros_geo else None),
+            "erro_mira_mediana": (float(np.median(erros_pos))
+                                  if erros_pos else None),
+            "validacao_mira": validacao_posicao,
+            "loo_mediana_deg": (float(np.median(loo)) if loo else None),
+            "loo_max_deg": (float(np.max(loo)) if loo else None),
+            "erros_globais_mediana": (float(np.median(erros)) if erros
+                                      else None),
+        }
 #: Lateralidade da mao detectada (colunas KT_hand / PALM_hand do CSV):
 #: 0 = desconhecida, 1 = direita, 2 = esquerda.
 HAND_SIDE_CODE = {"": 0, "right": 1, "left": 2}

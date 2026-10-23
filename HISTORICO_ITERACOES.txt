@@ -7932,3 +7932,172 @@ RECOMENDACAO DE PROTOCOLO
     lente; verdade = -normalize(posicao da mao)); mede o erro do vetor 3D em
     varias posicoes/orientacoes sem depender do plano do Kinect.
 
+
+
+================================================================================
+ITEM 127 (22/10/2026) - CALIBRACAO GEOMETRICA DA PALMA (tecla X): verdade EXATA
+    do referencial da camera (8 poses geometricas + 1 mira deslocada), ajuste
+    T/f hibrido ponderado e gate proprio antes de tocar o alinhamento oficial
+================================================================================
+MOTIVO
+  - O J calibra com a verdade "direcao mao->lente" = -normalize(posicao da
+    mao). Duas fragilidades: (a) a POSICAO 3D tambem e' estimativa (depth +
+    resgate pelo esqueleto, com ruido/vies proprios); (b) as poses de mira
+    ficam num CONE ESTREITO em volta do eixo optico (-Z da camera) -- pouco
+    espalhamento deixa o ajuste mal condicionado e o vetor deixa de acompanhar
+    a mao fora do cone (o item 122 mediu: poses quase iguais -> erro mediano
+    12-39 graus).
+  - Na calibracao geometrica a verdade e' o ALVO do referencial da camera
+    (normal da palma paralela a +-X, +-Y, +-Z ou diagonais): por construcao o
+    erro de MEDIDA da verdade e' ~0 -- sobra so' o erro de EXECUCAO humana
+    (alinhar a mao ao guia), medido por quadro pelo QA (a normal medida pelo
+    Kinect vira controle de qualidade, NAO verdade). Uma pose de MIRA
+    DESLOCADA (verdade por posicao) ancora a direcao absoluta no fim.
+O QUE FOI IMPLEMENTADO
+  1) imu.py: solve_palm_alignment_pesos -- o mesmo Kabsch alternado do
+     solve_palm_alignment, agora com PESO por amostra (H = soma w*v*(R f)^T;
+     com T fixo, f = media ponderada normalizada de R^T T^T v). Peso
+     0/negativo/NaN ignora a amostra; a inicializacao usa a amostra de MAIOR
+     peso (comecar por outlier de peso baixo podia travar o ajuste num minimo
+     local -- item 127). O solve_palm_alignment antigo continua existindo
+     (chama a nova com peso 1).
+  2) kinect_imu_groundtruth.py: constantes CALIB_GEO_* (take 2,0 s; QA max
+     8,0 graus; estabilidade 4,0 graus / 3 cm; movimento minimo 8,0 graus /
+     10 cm; MIN_TAKES 6; MAX_RESIDUO 12,0 graus; PESO_GEOMETRICA 1.0;
+     PESO_POSICAO 1.5), POSES_CALIBRACAO_GEOMETRICA (9 poses), helpers
+     _rotacao_a_para_b/_matriz_rotacao_eixo/_angulo_rotacoes e a classe
+     CalibracaoGeometrica: uma mao por vez, estado por pose, amostra() aplica
+     QA + gate de movimento + janela de 2 s e devolve o take, pular_pose()
+     avanca sem gravar e resultado() resolve T/f + diagnostico (erro por
+     pose, LOO deixa-um-de-fora e validacao da MIRA fora do ajuste: resolve
+     so com as geometricas e mede o erro na mira).
+  3) tools/kinect_groundtruth_tool.py: tecla X inicia/cancela o modo (mao
+     DIREITA primeiro; ao fechar a direita, o modo abre a ESQUERDA sozinho);
+     tecla N pula a pose atual; overlay desenha o plano-guia
+     (desenhar_guia_plano_palma: quadro MAGENTA = plano-alvo projetado com a
+     mesma camera_para_pixel_color do esqueleto, seta MAGENTA = normal-alvo,
+     seta CIANA = referencia de dedos -- so padroniza a rolagem do punho,
+     nao entra na verdade) e o status (lado, pose, QA colorido, PARADO x/2 s,
+     instrucao); a amostragem por frame chama calib_geo.amostra(...) com a
+     rotacao do IMU, a posicao 3D da palma e a normal estabilizada do plano
+     (QA de execucao, nao verdade).
+PROTOCOLO (uma mao por vez)
+  - OUTRA mao fora do quadro/parada; FOLHA RIGIDA presa na palma (papelao/
+    plastico) para alinhar o plano ao quadro magenta -- NAO papel mole e NAO
+    cobrir dedos/landmarks (o Kinect precisa ve-los para normal e posicao);
+  - 8 poses geometricas com alvo exato: palma/dorso para a camera, palma para
+    direita/esquerda (perfil), palma para cima/baixo NO referencial da camera
+    (a camera esta' inclinada ~51 graus: usar o guia, NAO a gravidade) e 2
+    diagonais frente-direita/frente-cima; a rolagem segue a seta ciana;
+  - MIRA DESLOCADA: mao a ~45-50 cm, deslocada ~20 cm para a ESQUERDA da
+    imagem, palma mirando a lente (verdade = -normalize(posicao da mao));
+  - take automatico com QA <= 8 graus + 2 s PARADO (rot < 4 graus, pos <
+    3 cm); depois de cada take e' preciso MOVER (>= 8 graus ou >= 10 cm) para
+    armar o proximo; N pula pose (util nas de perfil, cujo QA de plano e'
+    mais ruidoso); X cancela sem gravar nada.
+VALIDACAO/GATE
+  - JSON piloto calibracao_geometrica_<lado>_<timestamp>.json gravado sempre
+    que o ajuste resolve: dados brutos de cada take (alvo, verdade, QA,
+    rotacao, posicao, normal medida), solucao (rotation/body/residual_deg) e
+    diagnostico (erro por pose, validacao da mira, LOO) + constantes usadas;
+    com < 6 takes ou sem convergencia NADA e' gravado;
+  - imu_palm_alignment_<lado>.json (oficial) so' e' substituido se o gate
+    passar: >= 6 takes E residuo ponderado <= 12 graus E pior pose geometrica
+    <= 20 graus; o arquivo anterior vira .json.bak (mesma politica do J/O);
+    se falhar, o console lista os motivos e o oficial NAO e' tocado.
+TESTES (test_calibracao_geometrica.py, novo; aritmetica pura, sem hardware)
+  - solver ponderado recupera T/f de dados limpos (residuo ~0, atol 1e-6) e
+    outlier com peso 0.01 nao estraga o ajuste (T continua perto da verdade);
+  - 9 poses sinteticas -> CalibracaoGeometrica completa, recupera T/f e
+    devolve validacao_mira e loo;
+  - QA alto (normal 30 graus fora do alvo) NAO grava take e mantem o status
+    "ALINHE"; repetir a MESMA rotacao nao arma o 2o take (gate de movimento);
+    apos mover, grava; pular_pose avanca sem gravar;
+  - integracao estatica no tool: ord("x"), ord("n"), instancia
+    CalibracaoGeometrica, finalizar_calibracao_geometrica,
+    desenhar_guia_plano_palma e .pular_pose() presentes.
+  - Resultado: CALIBRACAO_GEOMETRICA_OK.
+LIMITACOES/PENDENCIAS
+  - AINDA NAO TESTADO NA BANCADA: primeira sessao real deve rodar o X e
+    comparar com J+V no teste de mira (V) e na conferencia visual do vetor
+    vermelho (QA bom nao garante take perfeito -- sobra o erro manual);
+  - FIRMWARE do item 124 (offsets de accel/zero-g no boot, giroscopio a
+    ±1000 dps, DLPF ~42 Hz) AINDA NAO FOI GRAVADO NO ESP32: enquanto isso o
+    erro dependente da orientacao (1,5-7 graus, item 123) continua e aparece
+    no residuo do X (e do J); boot com as luvas PARADAS e DEITADAS segue
+    obrigatorio;
+  - poses de perfil podem precisar de N (QA de plano mais ruidoso); sem
+    magnetometro o yaw nao e' absoluto -- o T absorve o yaw do boot atual
+    (igual ao J): refazer apos religar/reflashar o ESP32;
+  - o J/V continuam existindo e seguem a referencia de certificado (V): o X
+    e' caminho alternativo/complementar (cobre direcoes fora do cone do J);
+    iniciar um cancela o outro (um modo por vez).
+
+
+
+================================================================================
+ITEM 128 (23/10/2026) - VERIFICACAO DO ITEM 127 POR 3 SUBAGENTES GLM-5.3-FLASH
+    (provider NVIDIA, modelo z-ai/glm-5.3-flash): achados e correcoes
+================================================================================
+CONTEXTO: o usuario pediu para tercerizar o desenvolvimento do codigo para
+subagentes usando o GLM-5.3-Flash gratis da NVIDIA (em vez do modelo usado
+antes). O item 127 (calibracao geometrica da palma, tecla X) estava implementado
+mas faltava documentacao/teste/verificacao; foram disparados 3 subagentes em
+paralelo (workflow com provider=nvidia e model=z-ai/glm-5.3-flash):
+  A) VERIFICACAO independente (somente leitura): py_compile + suite completa +
+     revisao adversarial do codigo novo;
+  B) DOCUMENTACAO: docs/CALIBRACAO_GEOMETRICA.md, secao no README e este item;
+  C) FERRAMENTA: tools/analisa_calibracao_geometrica.py + teste.
+RESULTADO DOS SUBAGENTES
+  - A: py_compile 135/135 sem erro; suite 60/60 OK (61/61 com o teste do C);
+    nenhum achado BLOCKER/HIGH; 3 MEDIUM (M1 comentario de convencao de eixos
+    contraditorio; M2 rotacao NaN podia entrar na captura; M3 gate oficial
+    ignorava validacao da mira/LOO) e 6 LOW (O/D nao cancelavam X; finalizar sem
+    teste funcional; limite "pior pose" hardcoded; validacoes ausentes com
+    poucos takes; pesos de comprimento divergente; guarda de vetor nulo).
+  - B: docs/CALIBRACAO_GEOMETRICA.md (~185 linhas, protocolo/poses/solver/gate/
+    limitacoes), secao curta no README e ITEM 127 no historico.
+  - C: ferramenta offline (CLI com --arquivo/--lado/--oficial/--json-out/
+    --verbose; recalcula erro por pose, LOO e compara com o alinhamento oficial;
+    exit 0/1) + test_analisa_calibracao_geometrica.py (44 verificacoes, exit 0).
+CORRECOES FEITAS PELO LEAD A PARTIR DOS ACHADOS
+  - M1: comentario de convencao corrigido (X=direita, Y=CIMA, Z=para DENTRO da
+    cena; lente em -Z) e docs/README atualizados para a mesma redacao. Os
+    alvos/QA ja estavam certos (o QA compara no mesmo espaco; o guia projeta o
+    alvo); era risco de interpretacao, nao bug de runtime.
+  - M2: `CalibracaoGeometrica.amostra` agora exige `np.isfinite(rotacao).all()`
+    (rotacao NaN/inf nao vira take JSON invalido).
+  - M3: gate de gravacao do alinhamento oficial agora exige >=7 takes
+    (6 geometricas + mira), validacao independente da mira existente e mediana
+    <=20, pior pose <=20 e LOO mediana <=15; constantes novas
+    CALIB_GEO_MAX_POSE_DEG, CALIB_GEO_MAX_VALIDACAO_MIRA_DEG e
+    CALIB_GEO_MAX_LOO_MEDIANA_DEG (antes o 20 era hardcoded).
+  - L1: teclas O e D agora cancelam o modo X ao iniciar (um modo por vez).
+  - L2: teste funcional do `finalizar_calibracao_geometrica` adicionado em
+    test_calibracao_geometrica.py (gera calibracao sintetica COMPLETA, roda em
+    diretorio temporario, confere: JSON piloto, alinhamento oficial, T perto da
+    verdade, segunda execucao gera .json.bak, sem NaN/Infinity no piloto).
+    Esse teste revelou um KeyError REAL que derrubaria a sessao no fim do X:
+    o payload do piloto usava pose["nome"], mas as capturas guardam a chave
+    "pose"; corrigido para pose["pose"] antes de qualquer sessao de bancada.
+  - L6: guarda de vetor nulo em _rotacao_a_para_b (retorna identidade).
+  - .gitignore: calibracao_geometrica_*.json (dados de sessao).
+AVALIACAO DO GLM-5.3-FLASH COMO SUBAGENTE (para referencia)
+  - Pontos fortes: cumpriu os escopos combinados; a verificacao foi minuciosa
+    (achou M2/M3/L1 que passariam batido e confirmou 60/60 com runner proprio);
+    a documentacao ficou completa e coerente; a ferramenta offline + teste
+    funcional foi entregue funcionando (44 verificacoes, CLI testado, json-out
+    sem NaN).
+  - Pontos de atencao: o subagente C se baseou no schema do JSON piloto mas nao
+    exercitou o `finalizar` da tool (ficou para o Lead; foi onde apareceu o
+    KeyError); o agente B escreveu a convencao de eixos seguindo a descricao
+    ambigua que recebeu (Z "saindo da lente"), corrigida depois; o agente A
+    reportou o mojibake do console como artefato (correto) mas nao verificou o
+    comentario do codigo por conta propria.
+  - Conclusao: util e rapido para verificacao/documentacao/ferramenta em
+    escopos separados; a supervisao do Lead continua necessaria para integrar,
+    rodar o teste funcional do caminho critico e decidir os gates.
+PENDENCIAS: rodar a calibracao X na bancada (uma mao por vez, folha rigida),
+comparar com J+V/teste de mira; gravar o firmware do item 124 (offsets de
+accel/giroscopio) no ESP32.
+

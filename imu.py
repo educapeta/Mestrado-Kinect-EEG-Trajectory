@@ -203,33 +203,40 @@ def solve_palm_alignment(rotations, palm_directions,
                          iterations=PALM_ALIGNMENT_ITERATIONS):
     """Resolve (T, f_body, residuo_graus) do modelo `v_i = T R_i f`.
 
-    Por que este modelo (e nao o antigo `R_novo R_ref^T v_ref`): a rotacao que o
-    IMU entrega (`R_i`, corpo -> mundo do IMU) e a direcao da palma medida pelo
-    Kinect (`v_i`, no referencial da CAMERA) vivem em referenciais DIFERENTES. O
-    referencial do IMU tem a vertical do acelerometro, mas o "norte" dele e'
-    arbitrario (sem magnetometro) e ainda muda com a MONTAGEM de cada luva --
-    cada lado tem o seu. Compor as duas rotacoes sem converter da' um vetor certo
-    APENAS na pose de calibracao e erra cada vez mais conforme a mao gira, e o
-    erro e' diferente em cada luva (uma pode ate' parecer certa). Aqui o
-    referencial e' RESOLVIDO a partir das amostras: `T` leva o mundo do IMU para
-    o da camera e `f` e' a direcao da palma no corpo do sensor.
+    Kabsch alternado: com `f` fixo, `T` leva `R_i f` em `v_i`; com `T` fixo,
+    `f` e' a media normalizada de `R_i^T T^T v_i`. A versao com PESOS por
+    amostra e' `solve_palm_alignment_pesos` (usada pela calibracao geometrica).
+    """
+    return solve_palm_alignment_pesos(rotations, palm_directions,
+                                      iterations=iterations)
 
-    Solucao: Kabsch alternado. Com `f` fixo, `T` e' o Kabsch dos pares
-    (`R_i f` -> `v_i`); com `T` fixo, `f` e' a media normalizada de
-    `R_i^T T^T v_i`. Comeca em `f = R_0^T v_0` e `T = I` (o comportamento antigo)
-    e converge em poucas iteracoes.
+
+def solve_palm_alignment_pesos(rotations, palm_directions, pesos=None,
+                               iterations=PALM_ALIGNMENT_ITERATIONS):
+    """Como `solve_palm_alignment`, mas com PESO por amostra (item 127).
+
+    Por que existe: a calibracao geometrica (tecla X) mistura duas familias de
+    verdade: direcoes EXATAS do referencial da camera (peso 1, sem erro de
+    medida) e uma pose de MIRA cuja verdade vem da POSICAO da mao (erro de
+    medida maior, mas independente do plano do Kinect; peso maior para ela nao
+    distorcer a direcao absoluta). Peso 0/negativo/NaN = amostra ignorada.
+
+    Mesma solucao Kabsch alternada, agora com `H = soma w * v (R f)^T` e
+    `f = normaliza(soma w * R^T T^T v)`.
 
     Args:
-        rotations: lista de (3, 3) corpo -> mundo do IMU, uma por amostra.
+        rotations: lista de (3,3) corpo -> mundo do IMU.
         palm_directions: lista de (3,) direcao da palma no referencial da camera.
+        pesos: lista opcional de pesos (None = todos 1.0).
         iterations: teto de iteracoes.
 
     Returns:
-        (T, f_body, residuo_graus) ou None se houver menos de
-        PALM_ALIGNMENT_MIN_SAMPLES pares validos.
+        (T, f_body, residuo_graus_ponderado) ou None.
     """
+    lista_pesos = list(pesos) if pesos is not None else None
     pares = []
-    for rotacao, direcao in zip(rotations or [], palm_directions or []):
+    for indice, (rotacao, direcao) in enumerate(
+            zip(rotations or [], palm_directions or [])):
         r = np.asarray(rotacao, np.float64)
         v = np.asarray(direcao, np.float64).reshape(3)
         if r.shape != (3, 3) or not np.isfinite(r).all():
@@ -237,23 +244,40 @@ def solve_palm_alignment(rotations, palm_directions,
         norma = np.linalg.norm(v)
         if not np.isfinite(v).all() or norma < 1e-9:
             continue
-        pares.append((r, v / norma))
+        if lista_pesos is None:
+            peso = 1.0
+        elif indice < len(lista_pesos):
+            peso = float(lista_pesos[indice])
+        else:
+            peso = 1.0
+        if not np.isfinite(peso) or peso <= 0.0:
+            continue
+        pares.append((r, v / norma, peso))
     if len(pares) < PALM_ALIGNMENT_MIN_SAMPLES:
         return None
-    rotacoes = [r for r, _v in pares]
-    direcoes = [v for _r, v in pares]
-    f_body = rotacoes[0].T @ direcoes[0]
+    peso_total = sum(peso for _r, _v, peso in pares)
+    if peso_total <= 1e-12:
+        return None
+    # Inicializa pela amostra de MAIOR peso: comecar por uma amostra
+    # corrompida (peso baixo) podia levar o Kabsch alternado a um minimo
+    # local errado (item 127).
+    _r0, _v0, _ = max(pares, key=lambda par: par[2])
+    f_body = _r0.T @ _v0
     norma = np.linalg.norm(f_body)
     if norma < 1e-9:
         return None
     f_body = f_body / norma
     alinhamento = np.eye(3)
     for _ in range(max(1, int(iterations))):
-        alinhamento = kabsch_rotation([(r @ f_body, v)
-                                       for r, v in pares])
-        if alinhamento is None:
-            return None
-        media = np.mean([r.T @ alinhamento.T @ v for r, v in pares], axis=0)
+        matriz = np.zeros((3, 3))
+        for r, v, peso in pares:
+            matriz += peso * np.outer(v, r @ f_body)
+        u, _s, vt = np.linalg.svd(matriz)
+        sinal = 1.0 if np.linalg.det(u @ vt) >= 0 else -1.0
+        alinhamento = u @ np.diag([1.0, 1.0, sinal]) @ vt
+        media = np.zeros(3)
+        for r, v, peso in pares:
+            media += peso * (r.T @ alinhamento.T @ v)
         norma = np.linalg.norm(media)
         if norma < 1e-9:
             return None
@@ -262,12 +286,15 @@ def solve_palm_alignment(rotations, palm_directions,
         f_body = novo
         if convergiu:
             break
-    residuos = [angle_between(alinhamento @ r @ f_body, v)
-                for r, v in pares]
-    residuos = [valor for valor in residuos if np.isfinite(valor)]
+    residuos = []
+    for r, v, peso in pares:
+        angulo = angle_between(alinhamento @ r @ f_body, v)
+        if np.isfinite(angulo):
+            residuos.append(peso * angulo)
     if not residuos:
         return None
-    return alinhamento, f_body, float(np.mean(residuos))
+    return (alinhamento, f_body,
+            float(sum(residuos) / peso_total))
 
 
 def reancorar_yaw(alinhamento, corpo, rotacoes, normais_camera,

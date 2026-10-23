@@ -8,6 +8,7 @@ gravacoes/
 clips/
 *.csv
 *.avi
+calibracao_geometrica_*.json
 overlay_deviation_log.csv
 BCICIV_2a_gdf/
 dados_legado/

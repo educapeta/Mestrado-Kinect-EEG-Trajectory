@@ -159,6 +159,73 @@ def desenhar_vetor_palma_seguro(tracker, frame, landmarks, direcao, **kwargs):
             print(f"[desenho] seta da palma ignorada neste frame: {exc}",
                   flush=True)
 
+def desenhar_guia_plano_palma(tracker, frame, origem_camera, normal_camera,
+                               dedos_camera=None, tamanho_m=0.16,
+                               cor=(255, 0, 255), cor_dedos=(255, 255, 0)):
+    """Desenha o PLANO-ALVO da calibracao geometrica (tecla X) no video.
+
+    O quadrado representa o plano que a FOLHA/PALMA deve "vestir": o usuario
+    gira a mao ate o plano dela ficar paralelo ao quadrado. A seta MAGENTA e'
+    a normal-alvo (a direcao EXATA que entra na verdade) e a seta CIANO e' a
+    referencia de dedos (so' para padronizar a rolagem do punho; nao entra na
+    verdade). Tudo e' projetado com `camera_para_pixel_color`, a MESMA funcao
+    do esqueleto -- se falhar num frame, retorna False e a aquisicao segue.
+    """
+    if tracker is None or frame is None or origem_camera is None \
+            or normal_camera is None:
+        return False
+    try:
+        origem = np.asarray(origem_camera, np.float64).reshape(3)
+        normal = np.asarray(normal_camera, np.float64).reshape(3)
+        norma = np.linalg.norm(normal)
+        if not np.isfinite(origem).all() or norma < 1e-9:
+            return False
+        normal = normal / norma
+        dedos = None
+        if dedos_camera is not None:
+            dedos = np.asarray(dedos_camera, np.float64).reshape(3)
+            dedos = dedos - float(np.dot(dedos, normal)) * normal
+            if np.linalg.norm(dedos) < 1e-6:
+                dedos = None
+        if dedos is None:
+            aux = np.array([0.0, 1.0, 0.0])
+            if abs(float(np.dot(aux, normal))) > 0.9:
+                aux = np.array([1.0, 0.0, 0.0])
+            dedos = aux - float(np.dot(aux, normal)) * normal
+        dedos = dedos / np.linalg.norm(dedos)
+        lado_plano = np.cross(normal, dedos)
+        meio = 0.5 * float(tamanho_m)
+        cantos = [origem + sx * meio * dedos + sy * meio * lado_plano
+                  for sx, sy in ((-1, -1), (1, -1), (1, 1), (-1, 1))]
+        pixels = [tracker.camera_para_pixel_color(ponto)
+                  for ponto in cantos]
+        if all(pixel is not None for pixel in pixels):
+            cv2.polylines(frame, [np.array(pixels, np.int32)], True, cor, 2,
+                          cv2.LINE_AA)
+            # diagonais suaves para o usuario perceber o plano no espaco
+            cv2.line(frame, tuple(int(v) for v in pixels[0]),
+                     tuple(int(v) for v in pixels[2]), cor, 1, cv2.LINE_AA)
+            cv2.line(frame, tuple(int(v) for v in pixels[1]),
+                     tuple(int(v) for v in pixels[3]), cor, 1, cv2.LINE_AA)
+        # seta da normal-alvo (magenta) -- direcao exata da verdade
+        fim_normal = tracker.camera_para_pixel_color(
+            origem + 0.16 * normal)
+        inicio = tracker.camera_para_pixel_color(origem)
+        if fim_normal is not None and inicio is not None:
+            cv2.arrowedLine(frame, tuple(int(v) for v in inicio),
+                            tuple(int(v) for v in fim_normal), cor, 3,
+                            cv2.LINE_AA, tipLength=0.25)
+        # seta de referencia dos dedos (ciano)
+        fim_dedos = tracker.camera_para_pixel_color(origem + 0.12 * dedos)
+        if fim_dedos is not None and inicio is not None:
+            cv2.arrowedLine(frame, tuple(int(v) for v in inicio),
+                            tuple(int(v) for v in fim_dedos), cor_dedos, 2,
+                            cv2.LINE_AA, tipLength=0.3)
+        return True
+    except Exception:  # noqa: BLE001 -- desenho nunca aborta aquisicao
+        return False
+
+
 # --- alinhamento IMU <-> camera da palma (por luva) --------------------------
 #: Arquivo do alinhamento resolvido de cada luva. Fica na raiz (junto das
 #: calibracoes) e e' POR LADO: cada luva tem a sua montagem, e o alinhamento de
@@ -327,6 +394,118 @@ def save_palm_alignment(fusion, lado, avisar=print):
         except OSError as exc:
             avisar(f"IMU {lado}: AVISO backup de {caminho.name} falhou ({exc})")
     return True
+
+
+def finalizar_calibracao_geometrica(calib, fusion, participante="",
+                                     avisar=print):
+    """Resolve T/f da calibracao geometrica, grava o piloto e talvez o oficial.
+
+    Sempre grava `calibracao_geometrica_<lado>_<data>.json` (dados brutos +
+    solucao + validacoes) para auditoria/reanalise. So' substitui o alinhamento
+    OFICIAL (`imu_palm_alignment_<lado>.json`) se o gate passar; o arquivo
+    anterior vira `.json.bak` (mesma politica do `save_palm_alignment`).
+    Devolve dict com `ok`, `salvou_oficial`, `resolucao` e `arquivo_piloto`.
+    """
+    resolucao = calib.resultado()
+    if "erro" in resolucao:
+        avisar(f"[GEO {calib.lado}] {resolucao['erro']} -- alinhamento NAO "
+               "alterado")
+        return {"ok": False, "salvou_oficial": False,
+                "resolucao": resolucao}
+    erro_geo_max = resolucao.get("erro_geometricas_max")
+    gate = True
+    motivos = []
+    if resolucao["n_takes"] < CALIB_GEO_MIN_TAKES + 1:
+        gate = False
+        motivos.append(f"takes {resolucao['n_takes']} < "
+                       f"{CALIB_GEO_MIN_TAKES + 1} (6 geometricas + mira)")
+    if resolucao["residual_deg"] > CALIB_GEO_MAX_RESIDUO_DEG:
+        gate = False
+        motivos.append(f"residuo {resolucao['residual_deg']:.1f} > "
+                       f"{CALIB_GEO_MAX_RESIDUO_DEG:g}")
+    if erro_geo_max is not None and erro_geo_max > CALIB_GEO_MAX_POSE_DEG:
+        gate = False
+        motivos.append(f"pior pose geometrica {erro_geo_max:.1f} > "
+                       f"{CALIB_GEO_MAX_POSE_DEG:g}")
+    # A pose de MIRA e a validacao dela FORA do ajuste sao a unica prova de
+    # que o T/f generaliza para a direcao absoluta (as poses geometricas so'
+    # pinam a rotacao). Sem elas, NAO sobrescrever o alinhamento oficial.
+    if resolucao.get("validacao_mira") is None:
+        gate = False
+        motivos.append("sem validacao independente da mira (pule <= 2 poses "
+                       "geometricas)")
+    else:
+        _val_mira = resolucao["validacao_mira"]
+        if _val_mira["mediana_deg"] > CALIB_GEO_MAX_VALIDACAO_MIRA_DEG:
+            gate = False
+            motivos.append(f"validacao da mira {_val_mira['mediana_deg']:.1f} > "
+                           f"{CALIB_GEO_MAX_VALIDACAO_MIRA_DEG:g}")
+    if (resolucao.get("loo_mediana_deg") is not None
+            and resolucao["loo_mediana_deg"] > CALIB_GEO_MAX_LOO_MEDIANA_DEG):
+        gate = False
+        motivos.append(f"validacao cruzada (LOO) "
+                       f"{resolucao['loo_mediana_deg']:.1f} > "
+                       f"{CALIB_GEO_MAX_LOO_MEDIANA_DEG:g}")
+    avisar("")
+    avisar(f"===== CALIBRACAO GEOMETRICA -- {calib.lado.upper()} =====")
+    avisar(f"takes: {resolucao['n_takes']} | residuo ponderado: "
+           f"{resolucao['residual_deg']:.2f} graus")
+    for linha in resolucao.get("por_pose", ()):
+        avisar(f"  {linha['pose']:<32} QA {linha['qa_deg']:5.1f} | "
+               f"erro {linha['erro_deg']:5.2f} graus")
+    if resolucao.get("validacao_mira"):
+        val = resolucao["validacao_mira"]
+        avisar(f"  validacao independente (mira, fora do ajuste): "
+               f"{val['mediana_deg']:.2f} graus (n={val['n']})")
+    if resolucao.get("loo_mediana_deg") is not None:
+        avisar(f"  validacao cruzada (deixa-um-de-fora): mediana "
+               f"{resolucao['loo_mediana_deg']:.2f} / max "
+               f"{resolucao['loo_max_deg']:.2f} graus")
+    quando = time.strftime("%Y-%m-%d %H:%M:%S")
+    nome = time.strftime(f"calibracao_geometrica_{calib.lado}_%Y%m%d_%H%M%S.json")
+    payload = {
+        "modo": "calibracao_geometrica",
+        "lado": calib.lado,
+        "participante": participante or "",
+        "quando": quando,
+        "posicoes": [
+            {"posicao": pose["pose"], "tipo": pose["tipo"],
+             "alvo_camera": pose["alvo"], "verdade_camera": pose["verdade"],
+             "qa_deg": pose["qa_deg"], "rotacao": pose["rotacao"],
+             "posicao_mao_camera": pose["posicao"],
+             "normal_medida_camera": pose["normal_medida"]}
+            for pose in calib.capturas
+        ],
+        "solucao": {chave: valor for chave, valor in resolucao.items()
+                    if chave in ("rotation", "body", "residual_deg")},
+        "diagnostico": {chave: valor for chave, valor in resolucao.items()
+                        if chave not in ("rotation", "body")},
+        "constantes": {
+            "TAKE_SEC": CALIB_GEO_TAKE_SEC,
+            "QA_MAX_DEG": CALIB_GEO_QA_MAX_DEG,
+            "PESO_GEOMETRICA": CALIB_GEO_PESO_GEOMETRICA,
+            "PESO_POSICAO": CALIB_GEO_PESO_POSICAO,
+        },
+    }
+    arquivo = Path(nome)
+    try:
+        arquivo.write_text(json.dumps(payload, indent=2, ensure_ascii=False),
+                           encoding="utf-8")
+        avisar(f"  dados completos: {arquivo.name}")
+    except OSError as exc:
+        avisar(f"  AVISO: nao gravei {arquivo.name} ({exc})")
+    salvou_oficial = False
+    if gate:
+        fusion.set_palm_alignment(resolucao["rotation"], resolucao["body"],
+                                  resolucao["residual_deg"])
+        salvou_oficial = save_palm_alignment(fusion, calib.lado, avisar=avisar)
+        avisar(f"  ALINHAMENTO OFICIAL {calib.lado.upper()} "
+               + ("gravado" if salvou_oficial else "NAO gravado")
+               + " (gate passou)")
+    else:
+        avisar("  ALINHAMENTO OFICIAL NAO alterado (" + "; ".join(motivos) + ")")
+    return {"ok": True, "salvou_oficial": salvou_oficial,
+            "resolucao": resolucao, "arquivo_piloto": str(arquivo)}
 
 
 class CapturaAlinhamentoPalma:
@@ -1851,7 +2030,7 @@ def main():
     }
     print(f"IMU: direita na porta {receivers['right'].port} | esquerda na porta "
           f"{receivers['left'].port}")
-    print("TECLAS (C/B/M/O/D/G/J/K/H/L/R/V): clique ANTES em uma janela de VIDEO -- sem "
+    print("TECLAS (C/B/M/O/D/G/J/K/H/L/R/V/X/N): clique ANTES em uma janela de VIDEO -- sem "
           "foco no video o OpenCV nao recebe a tecla (a tecla O parece nao "
           "funcionar e o console fica mudo).")
     print("  M = MEDIR NIVEL DA MESA (plano do Kinect, compensa inclinacao)")
@@ -2053,6 +2232,8 @@ def main():
     #: depender de landmark/depth/sinal do Kinect.
     poses_fisicas = ColetorPosesFisicas()
     poses_fisicas_fase_vista = None
+    #: CALIBRACAO GEOMETRICA (item 127, tecla X): uma mao por vez; None = off.
+    calib_geo = None
     # --- NIVEL DA MESA (item 115): referencia de gravidade medida pelo depth.
     # O usuario confirmou o Kinect nivelado em relacao a mesa; medimos o
     # PLANO DA MESA e usamos a normal como referencia das poses 2/3, o que
@@ -3224,6 +3405,56 @@ def main():
                     if _fase_normal is not None:
                         poses_fisicas.coletar_normal_kinect(
                             lado, _fase_normal[0], plano_estavel)
+                # --- CALIBRACAO GEOMETRICA (item 127, tecla X) -------------
+                # Só alimenta o lado que está sendo calibrado. A normal medida
+                # entra apenas como QA de execucao; a VERDADE e' o alvo exato
+                # (ou, na pose de mira, -normalize(posicao da mao)).
+                if (calib_geo is not None and calib_geo.ativa
+                        and calib_geo.lado == lado):
+                    _rot_geo = (None if sample_lado is None
+                                else rotation_matrix(sample_lado.roll_deg,
+                                                     sample_lado.pitch_deg,
+                                                     sample_lado.yaw_deg))
+                    _pos_geo = None
+                    if landmarks_lado is not None:
+                        try:
+                            _pos_geo = tracker._landmark_camera_point(
+                                landmarks_lado[HAND_TRACK_LANDMARK], lado)
+                        except (AttributeError, IndexError, TypeError):
+                            _pos_geo = None
+                    _nrm_geo = (plano_estavel if plano_estavel is not None
+                                else normal_lado)
+                    _evento_geo = calib_geo.amostra(
+                        now, _rot_geo, _pos_geo, _nrm_geo)
+                    if _evento_geo is not None:
+                        if _evento_geo["tipo"] == "take":
+                            _cap_geo = _evento_geo["captura"]
+                            print(
+                                f"[GEO {lado}] TAKE "
+                                f"{_cap_geo['indice'] + 1}/"
+                                f"{_evento_geo['total']} GRAVADO: "
+                                f"{_cap_geo['pose']} (QA "
+                                f"{_cap_geo['qa_deg']:.1f} graus)",
+                                flush=True)
+                        elif _evento_geo["tipo"] == "pulada":
+                            print(f"[GEO {lado}] pose PULADA: "
+                                  f"{_evento_geo['pose']}", flush=True)
+                    if calib_geo.completa:
+                        _fechou_geo = finalizar_calibracao_geometrica(
+                            calib_geo, fusions[lado],
+                            participante=getattr(args, "participante", ""))
+                        _lado_feito_geo = calib_geo.lado
+                        calib_geo = None
+                        if (_fechou_geo.get("ok")
+                                and _lado_feito_geo == "right"):
+                            calib_geo = CalibracaoGeometrica("left")
+                            print(
+                                "AGORA A MAO ESQUERDA: repita as mesmas poses "
+                                "(o modo NAO grava nada da mao esquerda antes "
+                                "de voce alinhar a pose 1).", flush=True)
+                        else:
+                            print("Calibracao geometrica encerrada.",
+                                  flush=True)
                 mao["palm_normal_plano"] = normal_plano_lado
                 mao["palm_plano_estavel"] = plano_estavel
                 mao["palm_plano_rms_m"] = rms_plano_lado
@@ -4043,6 +4274,64 @@ def main():
                             f"{poses_fisicas.contar('left')}",
                             (12, 228), cv2.FONT_HERSHEY_SIMPLEX, 0.6,
                             (255, 255, 0), 2)
+            # --- OVERLAY DA CALIBRACAO GEOMETRICA (item 127, tecla X) -----
+            if display is not None and calib_geo is not None \
+                    and calib_geo.ativa:
+                _prog_geo = calib_geo.progresso(now)
+                _pose_geo = _prog_geo["pose"]
+                _lado_geo = calib_geo.lado
+                _mao_geo = resultados_por_lado.get(_lado_geo)
+                _origem_geo = None
+                if (_mao_geo is not None
+                        and _mao_geo.get("landmarks") is not None):
+                    try:
+                        _origem_geo = tracker._landmark_camera_point(
+                            _mao_geo["landmarks"][HAND_TRACK_LANDMARK],
+                            _lado_geo)
+                    except (AttributeError, IndexError, TypeError):
+                        _origem_geo = None
+                if (_pose_geo is not None and _origem_geo is not None
+                        and _pose_geo.get("tipo") == "geometrica"):
+                    desenhar_guia_plano_palma(
+                        tracker, display, _origem_geo,
+                        _pose_geo.get("alvo"), _pose_geo.get("dedos"))
+                _lado_txt_geo = ("DIREITA" if _lado_geo == "right"
+                                 else "ESQUERDA")
+                _indice_geo = min(_prog_geo["indice"] + 1,
+                                  _prog_geo["total"])
+                cv2.putText(
+                    display,
+                    f"GEO {_lado_txt_geo} {_indice_geo}/"
+                    f"{_prog_geo['total']} -- alinhe o PLANO ao quadro "
+                    "MAGENTA",
+                    (12, 260), cv2.FONT_HERSHEY_SIMPLEX, 0.62,
+                    (0, 255, 255), 2)
+                if _pose_geo is not None:
+                    cv2.putText(display, _pose_geo["nome"][:78],
+                                (12, 290), cv2.FONT_HERSHEY_SIMPLEX, 0.6,
+                                (255, 255, 0), 2)
+                    _qa_geo_txt = ("--" if _prog_geo["qa_deg"] is None
+                                   else f"{_prog_geo['qa_deg']:.1f}")
+                    _cor_qa_geo = ((0, 255, 0)
+                                   if (_prog_geo["qa_deg"] is not None
+                                       and _prog_geo["qa_deg"]
+                                       <= CALIB_GEO_QA_MAX_DEG)
+                                   else (0, 165, 255))
+                    cv2.putText(
+                        display,
+                        f"QA {_qa_geo_txt} graus (max "
+                        f"{CALIB_GEO_QA_MAX_DEG:g}) | "
+                        f"{_prog_geo['status']} | "
+                        f"{_prog_geo['tempo_ok']:.1f}/"
+                        f"{CALIB_GEO_TAKE_SEC:.1f} s",
+                        (12, 318), cv2.FONT_HERSHEY_SIMPLEX, 0.55,
+                        _cor_qa_geo, 2)
+                    cv2.putText(display, _pose_geo["instrucao"][:92],
+                                (12, 346), cv2.FONT_HERSHEY_SIMPLEX, 0.5,
+                                (255, 255, 0), 1)
+                cv2.putText(display, "N: pular pose | X: cancelar",
+                            (12, 374), cv2.FONT_HERSHEY_SIMPLEX, 0.55,
+                            (200, 200, 200), 1)
             depth_status = "depth: sem frame"
             stats = tracker.depth_stats()
             if stats is not None:
@@ -4220,6 +4509,10 @@ def main():
                     print("Captura do alinhamento da palma cancelada (nada foi "
                           "gravado).")
                 else:
+                    if calib_geo is not None:
+                        calib_geo.parar()
+                        calib_geo = None
+                        print("Calibracao geometrica cancelada pela tecla O.")
                     captura_palma.iniciar(now)
                     print(
                         f"Captura do alinhamento da palma por "
@@ -4333,6 +4626,10 @@ def main():
                     poses_fisicas.parar()
                     print("Verificacao por poses fisicas cancelada.")
                 else:
+                    if calib_geo is not None:
+                        calib_geo.parar()
+                        calib_geo = None
+                        print("Calibracao geometrica cancelada pelo V.")
                     captura_palma_plano.parar()
                     verificacao_palma.parar()
                     poses_fisicas = ColetorPosesFisicas()
@@ -4357,6 +4654,10 @@ def main():
                     poses_fisicas.parar()
                     print("Calibracao por poses fisicas cancelada.")
                 else:
+                    if calib_geo is not None:
+                        calib_geo.parar()
+                        calib_geo = None
+                        print("Calibracao geometrica cancelada pelo J.")
                     captura_palma_plano.parar()
                     verificacao_palma.parar()
                     # O J resolve T/f para o boot ATUAL com a verdade geometrica
@@ -4386,6 +4687,47 @@ def main():
                         "automaticamente; depois: 1) CENTRO; 2) BEM A "
                         "ESQUERDA; 3) BEM A DIREITA; 4) BEM PARA BAIXO. "
                         "Mantenha as DUAS maos visiveis. J de novo cancela.")
+            elif key == ord("x"):
+                # CALIBRACAO GEOMETRICA (item 127): verdade EXATA da camera
+                # (alvos X/Y/Z e diagonais), uma mao por vez, com plano-guia
+                # no video + QA de execucao; a ultima pose ancora a direcao
+                # absoluta pela posicao da mao (mira deslocada).
+                if calib_geo is not None:
+                    calib_geo.parar()
+                    calib_geo = None
+                    print("Calibracao geometrica cancelada.")
+                else:
+                    poses_fisicas.parar()
+                    poses_fisicas_fase_vista = None
+                    captura_palma_plano.parar()
+                    verificacao_palma.parar()
+                    if diag_palma.ativa:
+                        diag_palma.finalizar()
+                    for _lado_ancora, _ancora in ancoras_yaw.items():
+                        if not _ancora.pronto:
+                            _ancora.cancelar()
+                    calib_geo = CalibracaoGeometrica("right")
+                    print(
+                        "CALIBRACAO GEOMETRICA -- MAO DIREITA PRIMEIRO "
+                        "(uma mao por vez).\n"
+                        "  - Deixe a OUTRA mao fora do quadro/parada;\n"
+                        "  - Cole uma FOLHA RIGIDA (papelao/plastico) na palma "
+                        "para alinhar o plano com o quadro MAGENTA;\n"
+                        "  - O quadro/setas do video sao o ALVO EXATO no "
+                        "referencial da camera; a seta CIANO guia os dedos;\n"
+                        "  - Alinhe, fique PARADO 2 s com QA <= "
+                        f"{CALIB_GEO_QA_MAX_DEG:g} graus; o take e' gravado "
+                        "automaticamente;\n"
+                        "  - 8 poses geometricas + 1 MIRA DESLOCADA "
+                        f"(~20 cm para a esquerda) por mao;\n"
+                        "  - N pula uma pose; X cancela. No fim resolve T/f "
+                        "hibrido e grava o JSON piloto (o oficial so' se o "
+                        "gate passar).")
+            elif key == ord("n") and calib_geo is not None:
+                _ev_pular = calib_geo.pular_pose()
+                if _ev_pular is not None:
+                    print(f"[GEO {calib_geo.lado}] pose pulada: "
+                          f"{_ev_pular['pose']}")
             elif key == ord("p"):
                 hand_calib_active = False
                 hand_calib_samples_aux = []
@@ -4409,6 +4751,10 @@ def main():
                     diag_palma.finalizar()
                     diag_fase_vista = None
                 else:
+                    if calib_geo is not None:
+                        calib_geo.parar()
+                        calib_geo = None
+                        print("Calibracao geometrica cancelada pelo D.")
                     diag_palma.iniciar(now, fusions)
                     diag_fase_vista = None
             elif key == 27:

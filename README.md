@@ -662,3 +662,27 @@ Observação: os números ao vivo "erro palma/erro plano" comparam com a normal
 instantânea do Kinect (ruidosa/viesada) e NÃO devem ser usados para julgar a
 calibração; o critério é o certificado do J/V e a conferência visual do vetor
 vermelho ao girar a mão.
+
+---
+
+## Calibração geométrica da palma (item 127, tecla X)
+
+Complemento do `J`/`V`: em vez da verdade *mao→lente* (por posição, que fica
+num cone estreito ao redor do eixo óptico), a tecla `X` calibra o vetor da
+palma com ALVOS EXATOS do referencial da câmera (normal da palma em ±X/±Y/±Z e
+diagonais) projetados no vídeo — 8 poses geométricas + 1 MIRA DESLOCADA por
+mão, uma mão por vez, ajuste T/f híbrido ponderado e gate próprio (≥ 7 takes =
+6 geométricas + mira, resíduo ≤ 12 graus, pior pose ≤ 20 graus, validação da
+mira ≤ 20 graus) antes de tocar o `imu_palm_alignment_<lado>.json` (o anterior
+sempre vira `.json.bak`).
+
+- Folha RÍGIDA na palma (papelão/plástico, sem cobrir dedos/landmarks); quadro
+  MAGENTA = plano-alvo, seta CIANA = referência dos dedos; QA ≤ 8 graus + 2 s
+  parado gravam o take; `N` pula pose (útil nas de perfil), `X` cancela.
+- Sempre grava o JSON piloto `calibracao_geometrica_<lado>_<timestamp>.json`
+  (dados brutos + solução + LOO + validação da mira) para auditoria.
+- AINDA não testado na bancada: rode `J` + `V` na mesma sessão e compare no
+  teste de mira.
+- Passo a passo, convenção de eixos (X = direita, Y = cima, Z para dentro da
+  cena; a lente fica em −Z) e tabela das 9 poses:
+  **[docs/CALIBRACAO_GEOMETRICA.md](docs/CALIBRACAO_GEOMETRICA.md)**.
