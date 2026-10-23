@@ -53,7 +53,7 @@ class KalmanAngle {
   float bias = 0.0f;
   float update(float measuredAngle, float gyroRate, float dt) {
     angle += dt * (gyroRate - bias);
-    covariance[0][0] += dt * (dt * covariance[1][1] - covariance[0][1] - covariance[1][0] + covariance[1][0]);
+    covariance[0][0] += dt * (dt * covariance[1][1] - covariance[0][1] - covariance[1][0] + processNoise);
     covariance[0][1] -= dt * covariance[1][1];
     covariance[1][0] -= dt * covariance[1][1];
     covariance[1][1] += biasNoise * dt;
@@ -225,17 +225,26 @@ bool readMpuAt(uint8_t addr, int16_t &accelX, int16_t &accelY, int16_t &accelZ,
 void calibrateGyroscopeAt(uint8_t addr, float &biasX, float &biasY, float &biasZ) {
   const int samples = 500;
   long sumX = 0, sumY = 0, sumZ = 0;
+  int validas = 0;
   int16_t ax, ay, az, gx, gy, gz;
   Serial.printf("[imu] calibrando giroscopio MPU 0x%02X... mantenha parado\n", addr);
   for (int i = 0; i < samples; i++) {
     if (readMpuAt(addr, ax, ay, az, gx, gy, gz)) {
       sumX += gx; sumY += gy; sumZ += gz;
+      validas++;
     }
     delay(4);
   }
-  biasX = (float)sumX / samples / 131.0f;
-  biasY = (float)sumY / samples / 131.0f;
-  biasZ = (float)sumZ / samples / 131.0f;
+  // Divide pelo numero de amostras VALIDAS: uma leitura I2C perdida nao pode
+  // puxar o bias para zero (o denominador antigo era sempre 500).
+  const float divisor = (validas > 0) ? (float)validas : 1.0f;
+  biasX = (float)sumX / divisor / 131.0f;
+  biasY = (float)sumY / divisor / 131.0f;
+  biasZ = (float)sumZ / divisor / 131.0f;
+  if (validas < samples * 9 / 10) {
+    Serial.printf("[imu] AVISO: so' %d/%d leituras validas no bias do MPU 0x%02X\n",
+                  validas, samples, addr);
+  }
   Serial.printf("[imu] bias MPU 0x%02X: (%.4f, %.4f, %.4f)\n", addr, biasX, biasY, biasZ);
 }
 

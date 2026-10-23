@@ -224,6 +224,7 @@ void writeRegister(uint8_t reg, uint8_t value) {
 void calibrateGyroscope() {
   const int samples = 500;
   long sumX = 0, sumY = 0, sumZ = 0;
+  int validas = 0;
   int16_t accelX, accelY, accelZ, gyroX, gyroY, gyroZ;
   Serial.println("Calibrando giroscopio. Mantenha o sensor parado...");
   for (int i = 0; i < samples; i++) {
@@ -231,12 +232,20 @@ void calibrateGyroscope() {
       sumX += gyroX;
       sumY += gyroY;
       sumZ += gyroZ;
+      validas++;
     }
     delay(4);
   }
-  gyroBiasX = (float)sumX / samples / 131.0f;
-  gyroBiasY = (float)sumY / samples / 131.0f;
-  gyroBiasZ = (float)sumZ / samples / 131.0f;
+  // Divide pelo numero de amostras VALIDAS: uma leitura I2C perdida nao pode
+  // puxar o bias para zero (o denominador antigo era sempre 500).
+  const float divisor = (validas > 0) ? (float)validas : 1.0f;
+  gyroBiasX = (float)sumX / divisor / 131.0f;
+  gyroBiasY = (float)sumY / divisor / 131.0f;
+  gyroBiasZ = (float)sumZ / divisor / 131.0f;
+  if (validas < samples * 9 / 10) {
+    Serial.printf("[imu] AVISO: so' %d/%d leituras validas no bias\n",
+                  validas, samples);
+  }
 }
 
 // ==================== CONEXAO Wi-Fi ====================

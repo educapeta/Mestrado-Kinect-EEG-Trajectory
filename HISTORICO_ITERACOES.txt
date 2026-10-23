@@ -7696,3 +7696,74 @@ ESTADO PARA A PROXIMA SESSAO
     recusa poses parecidas e so' grava com min>=15/max>=30.
   - Depois: V (mesmas poses) e conferencia visual do vetor vermelho.
 
+
+
+================================================================================
+ITEM 123 (22/10/2026) - REVISAO DO FIRMWARE DO MPU6050 x "KALMAN 1D" DO VIDEO
+    (pedido do usuario): o firmware NAO usa o Kalman do video; usa Mahony
+    quaternion, que foi verificado por simulacao; os "angulos ruins" tem causa
+    medida: acelerometro sem calibracao (|a|=1,065-1,068 g em repouso) + yaw
+    nao absoluto + bias de giroscopio dependente do boot.
+================================================================================
+PERGUNTA: "mesmo com o kalman filter no firmware do MPU6050 ele da' valores de
+angulo tao mal; consegue revisar o firmware e explicar se ele segue a logica
+deste video (Kalman 1D de roll/pitch com giroscopio + acelerometro)?"
+RESPOSTA (documento completo em docs/REVISAO_FIRMWARE_MPU6050_KALMAN.md)
+  1) O firmware ATIVO (esp32_duas_imus) NAO usa o Kalman do video. A classe
+     KalmanAngle existe mas esta' marcada como legada/nao usada; a atitude real
+     e' `AttitudeMahony`: quaternion 6 eixos, integra a taxa do giroscopio e
+     corrige a inclinacao com o acelerometro por ganho PROPORCIONAL fixo
+     (KP=2,0 1/s), normalizando o acelerometro e so' corrigindo quando
+     |a| entre 0,5 e 1,5 g.
+  2) O video faz DOIS Kalman 1D (roll e pitch), com P0=2 graus, sigma_gyro=4
+     graus/s, sigma_accel=3 graus, ganho K=P/(P+sigma_accel^2); nao calcula
+     yaw (sem magnetometro nao ha' referencia absoluta de yaw).
+  3) SIMULACAO do codigo do firmware (Python, mesma matematica):
+     - estatica ideal: roll/pitch exatos;
+     - convergencia a partir de estimativa inicial errada (45/10 para 15/-30):
+       erro de tilt 32,7 -> 6,6 -> 0,86 -> 0 graus em 0,2/1/2/5 s; com o sinal
+       invertido divergiria para 180 (logo o sinal do firmware esta' correto);
+     - rastreamento dinamico (roll 0->30, pitch 0->-20, yaw 0->20 em 2 s):
+       erro de tilt maximo 0,36 graus (filtro bem implementado);
+     - convencao ZYX do firmware == imu.rotation_matrix do PC (Rz Ry Rx).
+  4) CAUSAS MEDIDAS dos "angulos ruins":
+     a) ACELEROMETRO SEM CALIBRACAO: nos CSVs de deriva estatica a norma em
+        repouso e' 1,065-1,068 g (deveria ser 1,000) e as componentes nao sao
+        gravidade pura (~-0,05,-0,03,+1,07 g na direita). Simulacao: offsets
+        tipicos de zero-g de 0,03-0,10 g geram erro de tilt de 1,5 a 7 graus,
+        DEPENDENTE DA ORIENTACAO -> nao pode ser absorvido por um T/f unico
+        (explica a seta acompanhar so' perto das poses de calibracao).
+     b) YAW NAO E' ABSOLUTO: sem magnetometro, yaw comeca em 0 a cada boot e
+        deriva com o bias residual; nos dados: -34,4 graus/min numa porta com
+        bias ruim e -0,04 a -0,20 graus/min depois do reboot parado.
+     c) BIAS DE GIROSCOPIO DEPENDE DO BOOT: o primeiro arquivo tem -12,5 °/s
+        (luva mexida no boot); o ritual de reboot parado (item 101) derruba
+        para ~0,00 °/s. Mahony corrige roll/pitch com o acelerometro, mas NAO
+        o yaw (nao observavel).
+     d) DLPF e taxa de amostragem do MPU6050 nao configurados (regs 0x1A/0x19);
+        com loop de ~50-100 Hz e DLPF desligado (~260 Hz) ha' risco de
+        aliasing de vibracao.
+     e) A classe KalmanAngle legada nao implementa o filtro do video
+        (covariancia inicia em zero, constantes em unidades diferentes e, no
+        firmware dual, faltava o termo +processNoise); NAO usar.
+  5) CONCLUSAO: a logica do video NAO esta' no firmware atual; o Mahony e' uma
+     extensao correta do Kalman 1D para 3D (e foi validado na simulacao). O
+     problema de "angulos ruins" e' de CALIBRACAO/FISICA (acelerometro sem
+     offset/escala, yaw nao observavel, bias de boot), nao do filtro.
+  6) Correcoes de higiene feitas e compiladas (PlatformIO SUCCESS nos tres
+     ambientes): calibracao do giroscopio agora divide pelo numero de amostras
+     VALIDAS (antes dividia sempre por 500, puxando o bias para zero quando o
+     I2C perdia leituras) e avisa se <90% foram validas; adicionado o termo
+     +processNoise que faltava no KalmanAngle legado do firmware dual.
+  7) RECOMENDACOES (proximos passos, em ordem de impacto): (i) calibrar o
+     acelerometro em 6 posicoes e aplicar offsets/escala antes de normalizar;
+     (ii) configurar DLPF=~44 Hz e ODR=~100 Hz nos dois MPUs; (iii) reforcar o
+     bias do giroscopio (mais amostras + verificacao de variancia/retry) ou
+     manter o ritual item 101; (iv) opcional: termo integral (Ki) no Mahony
+     para bias de tilt; (v) se quiser, Kalman 1D do video apenas como
+     referencia/validacao de roll/pitch (nao da' yaw).
+NADA FOI GRAVADO NO ESP32 nesta sessao: as correcoes do firmware precisam ser
+gravadas (`pio run -e esp32_duas_imus -t upload`) e o comportamento de atitude
+nao mudou (as mudancas sao so' de robustez da calibracao de bias e do codigo
+legado nao usado).
+
