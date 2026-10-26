@@ -267,6 +267,9 @@ check("tool finaliza gravando JSON/solucao",
 check("tool desenha o plano-guia",
       "desenhar_guia_plano_palma(" in fonte_tool)
 check("tool sabe pular pose", ".pular_pose()" in fonte_tool)
+check("tool avisa quando mao/depth nao detectados (plano ancorado na mao)",
+      "MAO NAO DETECTADA" in fonte_tool and
+      "mao/plano NAO detectado" in fonte_tool)
 fonte_lib = open("kinect_imu_groundtruth.py", encoding="utf-8").read()
 check("biblioteca define a classe/pesos/poses",
       "class CalibracaoGeometrica" in fonte_lib and

@@ -48,6 +48,16 @@ A projeção usa a mesma `camera_para_pixel_color` do esqueleto.
 > eixos: o guia no vídeo é a projeção do alvo, então basta alinhar a folha ao
 > quadro e os dedos à seta.
 
+## O guia só aparece com a mão detectada
+
+O quadro MAGENTA e as setas são desenhados **ancorados no centro da palma
+detectada** (landmark 9 + profundidade válida via `camera_para_pixel_color`).
+Se a mão não estiver em quadro, se o MediaPipe não achar os landmarks ou se o
+depth não devolver um ponto 3D para o centro da palma, **não existe origem
+para desenhar o plano** — a tela mostra o banner vermelho "MÃO NÃO DETECTADA"
+e o console repete o aviso a cada ~5 s; o take não avança até a mão aparecer.
+Não é bug e não tem relação com a pose atual: é o guia que é ancorado na mão.
+
 ## As 9 poses (por mão)
 
 O campo `dedos` é só a direção de referência para padronizar a **rolagem** do

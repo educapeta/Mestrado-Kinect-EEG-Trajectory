@@ -8156,3 +8156,42 @@ depois testar o OTA na bancada (`pio run -e esp32_duas_imus_ota -t upload`) com
 o hotspot ligado e conferir o IP na serial; opcionalmente tentar o item 1
 (driver CP210x) para recuperar tambem o auto-reset USB.
 
+
+
+================================================================================
+ITEM 130 (23/10/2026) - "O PLANO MAGENTA NAO APARECE NO VIDEO" (teste remoto do
+    modo X): o guia e' ancorado na MAO detectada; aviso explicito quando
+    landmark/depth faltam
+================================================================================
+SINTOMA: ao iniciar a calibracao geometrica (tecla X) remotamente, o console
+mostrou as instrucoes do modo (inclusive "ancoragem do yaw do boot CANCELADA"),
+mas no video do Kinect NAO apareceu o quadro MAGENTA para alinhar a folha.
+Duvida do usuario: seria porque a primeira pose e' a palma apontada para a
+camera, ou seria um bug?
+DIAGNOSTICO: nao e' bug e nao tem relacao com a pose. O guia (`desenhar_guia_
+plano_palma`) e' desenhado ANCORADO no centro da palma detectada:
+  - precisa de `mao["landmarks"]` (MediaPipe) e de
+    `tracker._landmark_camera_point(landmarks[9])` -> landmark + profundidade
+    valida + mapeamento cor->profundidade;
+  - sem isso `_origem_geo = None` e o quadro/setas simplesmente nao sao
+    desenhados (a origem 3D nao existe). O take tambem nao avanca (a classe
+    fica em "SEM MAO/PLANO").
+Ou seja: rodando remoto, sem a mao em quadro (ou sem depth/camera), e' o
+comportamento esperado. O texto "GEO DIREITA 1/9 -- alinhe o PLANO..." deve
+aparecer de qualquer forma; se ELE tambem nao aparece, o problema e' outro
+(janela do overlay errada, `display` None, Kinect/camera nao conectados).
+MELHORIA (para nao confundir de novo):
+  - banner vermelho na tela quando a pose e' geometrica e nao ha' posicao 3D:
+    "MAO NAO DETECTADA -- mostre a MAO + PROFUNDIDADE para o Kinect; o PLANO
+    MAGENTA e' ancorado na mao";
+  - aviso no console com throttle de 5 s: "[GEO lado] mao/plano NAO detectado
+    (landmark ou depth ausente): o plano MAGENTA so' aparece ancorado na MAO";
+  - docs/CALIBRACAO_GEOMETRICA.md ganhou a secao "O guia so' aparece com a mao
+    detectada";
+  - teste estatico em test_calibracao_geometrica.py verifica banner+aviso.
+VALIDACAO: suite 61/61 OK.
+PROXIMA BANCADA: antes de apertar X, garantir a mao do lado escolhido em quadro
+e o depth funcionando (o status do tool mostra depth/mao; o console avisa). Se
+aparecer o banner mesmo com a mao visivel, investigar mapeamento cor-depth
+(nao e' o guia: e' a posicao 3D da palma que nao existe).
+

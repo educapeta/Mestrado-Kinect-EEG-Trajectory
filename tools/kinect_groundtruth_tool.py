@@ -2234,6 +2234,8 @@ def main():
     poses_fisicas_fase_vista = None
     #: CALIBRACAO GEOMETRICA (item 127, tecla X): uma mao por vez; None = off.
     calib_geo = None
+    #: Throttle do aviso "mao/plano nao detectado" do modo geometrico (5 s).
+    ultimo_aviso_mao_geo = 0.0
     # --- NIVEL DA MESA (item 115): referencia de gravidade medida pelo depth.
     # O usuario confirmou o Kinect nivelado em relacao a mesa; medimos o
     # PLANO DA MESA e usamos a normal como referencia das poses 2/3, o que
@@ -3424,6 +3426,18 @@ def main():
                             _pos_geo = None
                     _nrm_geo = (plano_estavel if plano_estavel is not None
                                 else normal_lado)
+                    # O PLANO-GUIA magenta e' ancorado na mao detectada: sem
+                    # landmark+depth nao ha' origem para desenhar (o usuario
+                    # remoto achou que era bug; item 130). Avisa no console
+                    # (throttle 5 s) e a tela mostra um banner.
+                    if (_pos_geo is None or _nrm_geo is None) \
+                            and now - ultimo_aviso_mao_geo > 5.0:
+                        ultimo_aviso_mao_geo = now
+                        print(
+                            f"[GEO {lado}] mao/plano NAO detectado (landmark "
+                            "ou depth ausente): o plano MAGENTA so' aparece "
+                            "ancorado na MAO -- mostre a mao e o dorso para o "
+                            "Kinect; o take nao avanca sem isso.", flush=True)
                     _evento_geo = calib_geo.amostra(
                         now, _rot_geo, _pos_geo, _nrm_geo)
                     if _evento_geo is not None:
@@ -4295,6 +4309,16 @@ def main():
                     desenhar_guia_plano_palma(
                         tracker, display, _origem_geo,
                         _pose_geo.get("alvo"), _pose_geo.get("dedos"))
+                elif _pose_geo is not None:
+                    # Sem mao/depth a projecao 3D nao existe: explica na tela
+                    # em vez de simplesmente "nao desenhar nada" (confundiu no
+                    # teste remoto). O guia volta assim que a mao aparece.
+                    cv2.putText(
+                        display,
+                        "MAO NAO DETECTADA -- mostre a MAO + PROFUNDIDADE "
+                        "para o Kinect; o PLANO MAGENTA e' ancorado na mao",
+                        (12, 430), cv2.FONT_HERSHEY_SIMPLEX, 0.6,
+                        (0, 0, 255), 2)
                 _lado_txt_geo = ("DIREITA" if _lado_geo == "right"
                                  else "ESQUERDA")
                 _indice_geo = min(_prog_geo["indice"] + 1,
