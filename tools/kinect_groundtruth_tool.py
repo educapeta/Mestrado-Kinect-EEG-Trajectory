@@ -140,6 +140,11 @@ import imu_reset  # noqa: E402
 #: rastreado sao os programas -- e a coluna `aux_pair_*_m` do CSV grava ESTE no'.
 HAND_TRACK_LANDMARK = 9
 
+#: Modo --log-limpo: esconde logs PERIODICOS de acompanhamento
+#: ([status], [desempenho], [lateralidade], [gate-tri]) para a tela ficar
+#: legivel durante a calibracao. Logs de calibracao/takes/erros continuam.
+LOG_LIMPO = False
+
 
 def desenhar_vetor_palma_seguro(tracker, frame, landmarks, direcao, **kwargs):
     """Desenha a seta da palma sem derrubar a sessao por erro de desenho.
@@ -1425,6 +1430,13 @@ def parse_cli():
               "'esquerda' e' mesmo a mao esquerda."),
     )
     parser.add_argument(
+        "--log-limpo", action="store_true",
+        help=("esconde os logs PERIODICOS de acompanhamento ([status], "
+              "[desempenho], [lateralidade], [gate-tri]) e deixa a tela "
+              "legivel. Logs de calibracao/takes/erros continuam (inclui "
+              "[GEO] do modo X)."),
+    )
+    parser.add_argument(
         "--sem-ancora-yaw", action="store_true",
         help=("desliga a REANCORAGEM AUTOMATICA do yaw do boot. Com alinhamento "
               "salvo, o tool resolve nas primeiras amostras (palma fora da "
@@ -1969,6 +1981,12 @@ def diagnostico_tabuleiro(color, color_for_calibration, auxiliary_frame, tracker
 
 def main():
     args = parse_cli()
+    global LOG_LIMPO
+    LOG_LIMPO = bool(getattr(args, "log_limpo", False))
+    if LOG_LIMPO:
+        print("[log-limpo] logs periodicos de acompanhamento silenciados "
+              "([status]/[desempenho]/[lateralidade]/[gate-tri]); erros, "
+              "calibracao e takes continuam aparecendo.")
     # O indice escolhido vale para a camera aberta E para o arquivo de
     # calibracao (stereo_calibration_aux{N}.npz) -- os dois andam juntos.
     # Sem `--aux-index`, a camera ATIVA vem do NOME do Windows
@@ -2481,8 +2499,9 @@ def main():
                     >= ESTABILIDADE_LOG_LATERALIDADE_S
                     and time.monotonic() - lateralidade_impressa_em
                     >= INTERVALO_LOG_LATERALIDADE_S):
-                for linha in arbitro.resumo(nomes_aux):
-                    print("[lateralidade] " + linha, flush=True)
+                if not LOG_LIMPO:
+                    for linha in arbitro.resumo(nomes_aux):
+                        print("[lateralidade] " + linha, flush=True)
                 lateralidade_anterior = agora_lateralidade
                 lateralidade_impressa_em = time.monotonic()
             aux_entries = aux_por_camera.get(int(AUX_CAMERA_INDEX), [])
@@ -2699,7 +2718,8 @@ def main():
                                 mao["triangulated_3d"] = tri3d
                                 mao["tri_gate"] = f"{categoria}-crua"
                                 tri_gate_cont["cruas"] += 1
-                        if (tri_gate_pend and now - tri_gate_log_em
+                        if (not LOG_LIMPO and tri_gate_pend
+                                and now - tri_gate_log_em
                                 >= INTERVALO_LOG_LATERALIDADE_S):
                             print(f"[gate-tri] recusadas "
                                   f"reproj={tri_gate_cont['reproj']} "
@@ -4136,7 +4156,7 @@ def main():
             # Uma linha [status] a cada STATUS_LOG_INTERVALO_S: a saude do IMU
             # num lugar so' (taxa por porta, alinhamento O SIM/NAO -- so' conta
             # com residual do solve, nao o bootstrap -- e erro da palma ao vivo).
-            if now - status_log_em >= STATUS_LOG_INTERVALO_S:
+            if not LOG_LIMPO and now - status_log_em >= STATUS_LOG_INTERVALO_S:
                 taxas = []
                 for lado in ("right", "left"):
                     recebidas = receivers[lado].count

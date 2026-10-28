@@ -289,6 +289,8 @@ check("tool finaliza gravando JSON/solucao",
 check("tool desenha o plano-guia",
       "desenhar_guia_plano_palma(" in fonte_tool)
 check("tool sabe pular pose", ".pular_pose()" in fonte_tool)
+check("tool tem --log-limpo (tela limpa no X)",
+      "--log-limpo" in fonte_tool and "LOG_LIMPO" in fonte_tool)
 check("tool avisa quando mao/depth nao detectados (plano ancorado na mao)",
       "MAO NAO DETECTADA" in fonte_tool and
       "mao/plano NAO detectado" in fonte_tool)

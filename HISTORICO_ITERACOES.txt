@@ -8247,3 +8247,29 @@ ser feita SEM folha e com a palma de frente para a lente. Serial CP210x continua
 morta (driver 2016 + selective suspend) -- usar `--sem-calibra-imu`; resolver o
 auto-reset/OTA depois (item 129).
 
+
+
+================================================================================
+ITEM 133 (28/10/2026) - CONSOLE POLUIDO NA CALIBRACAO: modo --log-limpo
+================================================================================
+SINTOMA: durante o X o console imprimia o tempo todo [status] (taxas/alinhamento/
+erros), [desempenho] (fps/ms/sync), [lateralidade] (veredito das cameras
+auxiliares) e [gate-tri], escondendo o que importa na calibracao (takes,
+QA/[GEO], erros).
+SOLUCAO: flag `--log-limpo`:
+  - silencia [status], [desempenho], [lateralidade] e [gate-tri] (logs
+    PERIODICOS de acompanhamento);
+  - mantem tudo que importa para calibrar/operar: instrucoes, [GEO] do X
+    (pose/alvo/normal/QA), TAKE GRAVADO/RECUSADO, resultados de J/V/X, gate,
+    avisos e erros;
+  - imprime uma linha unica no inicio dizendo que o modo esta ativo.
+Implementacao: global LOG_LIMPO setado em main() a partir da flag; guards nos
+quatro pontos de impressao periodica. Nada muda sem a flag (debug completo
+continua igual).
+Teste: check estatico em test_calibracao_geometrica.py (flag + LOG_LIMPO).
+USO NA BANCADA (com a serial do CP210x morta, pular ritual):
+  .venv\Scripts\python.exe tools\kinect_groundtruth_tool.py --sem-calibra-imu \
+      --log-limpo --log-palma --exposicao "0:-7,1:-5" --participante eduardo
+PENDENCIA: com o console limpo, rodar X de novo e copiar as linhas [GEO] da
+pose que nao fecha o QA (para separar execucao x sinal x depth).
+
