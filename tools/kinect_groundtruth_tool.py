@@ -479,7 +479,9 @@ def finalizar_calibracao_geometrica(calib, fusion, participante="",
         "posicoes": [
             {"posicao": pose["pose"], "tipo": pose["tipo"],
              "alvo_camera": pose["alvo"], "verdade_camera": pose["verdade"],
-             "qa_deg": pose["qa_deg"], "rotacao": pose["rotacao"],
+             "qa_deg": pose["qa_deg"],
+             "qa_efetivo_deg": pose.get("qa_efetivo_deg"),
+             "rotacao": pose["rotacao"],
              "posicao_mao_camera": pose["posicao"],
              "normal_medida_camera": pose["normal_medida"]}
             for pose in calib.capturas
@@ -3489,6 +3491,10 @@ def main():
                                 f"n_usada={_n_est} | QA="
                                 + ("--" if _qa_diag is None
                                    else f"{_qa_diag:.1f}")
+                                + " | QAef="
+                                + ("--" if _prog_diag.get(
+                                    "qa_efetivo_deg") is None
+                                   else f"{_prog_diag['qa_efetivo_deg']:.1f}")
                                 + f" | {_prog_diag['status']}", flush=True)
                     if (_pos_geo is None or _nrm_geo is None) \
                             and now - ultimo_aviso_mao_geo > 5.0:

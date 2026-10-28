@@ -8353,3 +8353,37 @@ PROXIMA BANCADA: reiniciar o tool (codigo novo) e rodar X: poses 1/2/3
 (palma/dorso mirando a lente e mira) devem gravar mesmo com QA do Kinect
 invertido; as 6 geometricas continuam com QA obrigatorio.
 
+
+
+================================================================================
+ITEM 136 (28/10/2026) - QA DOBRADO NAS POSES DE POSICAO: aceitar o Kinect
+    invertendo palma/dorso SEM perder o gate de alinhamento do plano
+================================================================================
+CONTEXTO: no item 135 as poses de POSICAO (palma/dorso mirando a lente e mira)
+passaram a IGNORAR o QA do Kinect, porque ele pode medir 170 graus (inverte
+palma x dorso) e a verdade delas vem da POSICAO 3D. O usuario propos' usar o
+valor: se o desvio passa de 90 graus, dobrar (180 - angulo).
+ANALISE: faz sentido EXATAMENTE para as poses de posicao:
+  - ali a verdade e' a linha de mira (posicao); o que importa e' o plano da mao
+    estar ALINHADO a essa linha, e o sentido palma/dorso e' ambiguo no Kinect;
+  - `QA_efetivo = min(ang, 180-ang)` mede esse alinhamento e aceita a inversao
+    de sentido;
+  - para as 6 poses GEOMETRICAS isso NAO pode ser usado: +X e -X, +Y e -Y,
+    +Z e -Z sao alvos diferentes; dobrar o angulo tornaria opostos
+    indistinguiveis e corromperia a calibracao.
+IMPLEMENTADO
+  - constante `CALIB_GEO_QA_MAX_POSICAO_DEG = 10.0`;
+  - `CalibracaoGeometrica`: `qa_efetivo` = min(ang, 180-ang) para posicao;
+    gate das posicoes usa o efetivo (10 graus); geometricas continuam no gate
+    bruto de 8 graus;
+  - status mostra "QA bruto X, efetivo Y; sentido palma/dorso NAO bloqueia";
+  - overlay/log [GEO] mostram QAef; captura e JSON piloto guardam
+    `qa_efetivo_deg`; finalizar reporta QA bruto (-- quando indisponivel);
+  - teste: posicao com normal INVERTIDA (QA bruto 180) grava; posicao com plano
+    PERPENDICULAR a linha (QA bruto ~90, efetivo ~90) bloqueia; geometrica com
+    normal invertida continua bloqueando.
+DOC atualizado. PROXIMA BANCADA: reiniciar o tool e rodar X; nas poses de
+posicao o QA bruto pode aparecer ~170 mas o efetivo deve ser pequeno e o take
+grava; se aparecer "ALINHE o plano a linha de mira" com efetivo > 10, a mao
+esta' de lado em relacao a linha (girar o punho).
+

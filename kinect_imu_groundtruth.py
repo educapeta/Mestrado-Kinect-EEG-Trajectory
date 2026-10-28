@@ -178,6 +178,11 @@ CALIB_GEO_MAX_RESIDUO_DEG = 12.0
 CALIB_GEO_MAX_POSE_DEG = 20.0
 CALIB_GEO_MAX_VALIDACAO_MIRA_DEG = 20.0
 CALIB_GEO_MAX_LOO_MEDIANA_DEG = 15.0
+#: QA EFETIVO das poses de POSICAO (palma/dorso/mira): o angulo medido e'
+#: dobrado para min(ang, 180-ang) porque o Kinect pode inverter o sentido da
+#: normal; assim o gate confere o ALINHAMENTO do plano a linha de mira sem
+#: depender de palma x dorso (item 136). Geometricas NAO usam isso.
+CALIB_GEO_QA_MAX_POSICAO_DEG = 10.0
 #: Pesos no ajuste hibrido: a pose de mira (verdade por posicao, independente
 #: do plano do Kinect) ancora a direcao absoluta; as poses geometricas tem
 #: verdade EXATA (alvo do referencial da camera) mas erro de execucao maior.
@@ -308,6 +313,7 @@ class CalibracaoGeometrica:
         self.capturas = []
         self.ativa = True
         self.qa_atual = None
+        self.qa_efetivo = None
         self.status = "aguardando a mao"
         self._inicio_ok = None
         self._rot_ref = None
@@ -337,6 +343,7 @@ class CalibracaoGeometrica:
                  else max(0.0, float(now) - self._inicio_ok))
         return {"indice": self.indice, "total": len(self.poses),
                 "pose": pose, "qa_deg": self.qa_atual,
+                "qa_efetivo_deg": self.qa_efetivo,
                 "tempo_ok": tempo, "status": self.status}
 
     # -- verdade --------------------------------------------------------
@@ -372,6 +379,7 @@ class CalibracaoGeometrica:
         tipo_pose = pose.get("tipo", "geometrica")
         if rotacao is None or posicao_palma is None:
             self.qa_atual = None
+            self.qa_efetivo = None
             self._inicio_ok = None
             self.status = "SEM MAO -- mostre a mao para o Kinect"
             return None
@@ -380,6 +388,7 @@ class CalibracaoGeometrica:
         if (rot.shape != (3, 3) or not np.isfinite(rot).all()
                 or not np.isfinite(pos).all()):
             self.qa_atual = None
+            self.qa_efetivo = None
             self._inicio_ok = None
             return None
         normal = None
@@ -394,10 +403,17 @@ class CalibracaoGeometrica:
         verdade = self._verdade(pose, pos)
         if verdade is None:
             self.qa_atual = None
+            self.qa_efetivo = None
             self._inicio_ok = None
             return None
         self.qa_atual = (None if normal is None
                          else angle_between(normal, verdade))
+        # QA "dobrado": min(ang, 180-ang). Para POSICAO ele aceita o Kinect
+        # invertendo palma/dorso (item 136); para GEOMETRICA nao e' usado no
+        # gate (la' o sentido importa: +X != -X).
+        self.qa_efetivo = (
+            None if self.qa_atual is None or not np.isfinite(self.qa_atual)
+            else float(min(self.qa_atual, 180.0 - self.qa_atual)))
         if tipo_pose == "geometrica":
             if (normal is None or self.qa_atual is None
                     or not np.isfinite(self.qa_atual)
@@ -411,10 +427,21 @@ class CalibracaoGeometrica:
                         f"{self.qa_atual:.1f} > {CALIB_GEO_QA_MAX_DEG:g})")
                 return None
         else:
-            # Pose de POSICAO: QA do Kinect so' informativo.
+            # Pose de POSICAO: gate pelo angulo DOBRADO (alinhamento do plano
+            # a linha de mira, sem depender do sentido palma x dorso).
+            if (self.qa_efetivo is not None
+                    and self.qa_efetivo > CALIB_GEO_QA_MAX_POSICAO_DEG):
+                self._inicio_ok = None
+                self.status = (
+                    f"ALINHE o plano a linha de mira (desvio efetivo "
+                    f"{self.qa_efetivo:.1f} > "
+                    f"{CALIB_GEO_QA_MAX_POSICAO_DEG:g}; bruto "
+                    f"{self.qa_atual:.1f})")
+                return None
             if self.qa_atual is not None and np.isfinite(self.qa_atual):
-                self.status = (f"MIRANDO (QA Kinect {self.qa_atual:.1f} -- "
-                               "nao bloqueia; verdade=posicao)")
+                self.status = (
+                    f"MIRANDO (QA bruto {self.qa_atual:.1f}, efetivo "
+                    f"{self.qa_efetivo:.1f}; sentido palma/dorso NAO bloqueia)")
             else:
                 self.status = "MIRANDO (posicao; normal do Kinect indisponivel)"
 
@@ -452,6 +479,7 @@ class CalibracaoGeometrica:
             "qa_deg": (None if self.qa_atual is None
                        or not np.isfinite(self.qa_atual)
                        else float(self.qa_atual)),
+            "qa_efetivo_deg": self.qa_efetivo,
             "rotacao": rot.tolist(),
             "posicao": pos.tolist(),
             "normal_medida": (None if normal is None else normal.tolist()),
@@ -462,6 +490,7 @@ class CalibracaoGeometrica:
         self._ultima_pos = pos
         self._inicio_ok = None
         self.qa_atual = None
+        self.qa_efetivo = None
         self.status = "TAKE GRAVADO"
         return {"tipo": "take", "captura": captura,
                 "total": len(self.poses)}
@@ -474,6 +503,7 @@ class CalibracaoGeometrica:
         self.indice += 1
         self._inicio_ok = None
         self.qa_atual = None
+        self.qa_efetivo = None
         self.status = "POSE PULADA"
         return {"tipo": "pulada", "pose": pose["nome"],
                 "total": len(self.poses)}

@@ -239,6 +239,19 @@ agora = 0.0
 for _ in range(30):
     agora += 0.1
     calib_geo_ruim.amostra(agora, R_geo, pos_geometrica, -alvo_geo)
+# posicao com plano PERPENDICULAR a linha de mira (QA dobrado ~90) bloqueia
+calib_pos_ruim = k.CalibracaoGeometrica("right", poses=[pose_posicao],
+                                        avisar=lambda *_a: None)
+normal_perp = np.cross(verdade_pos, np.array([0.0, 0.0, 1.0]))
+if np.linalg.norm(normal_perp) < 1e-6:
+    normal_perp = np.cross(verdade_pos, np.array([1.0, 0.0, 0.0]))
+normal_perp /= np.linalg.norm(normal_perp)
+agora = 0.0
+for _ in range(30):
+    agora += 0.1
+    calib_pos_ruim.amostra(agora, R_pos, pos_mira, normal_perp)
+check("posicao: plano perpendicular a linha de mira bloqueia",
+      len(calib_pos_ruim.capturas) == 0, len(calib_pos_ruim.capturas))
 check("geometrica: normal invertida continua bloqueando",
       len(calib_geo_ruim.capturas) == 0, len(calib_geo_ruim.capturas))
 
