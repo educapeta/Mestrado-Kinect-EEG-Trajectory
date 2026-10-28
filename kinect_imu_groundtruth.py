@@ -188,6 +188,12 @@ CALIB_GEO_QA_MAX_POSICAO_DEG = 10.0
 #: A verdade continua sendo o alvo exato/posicao; o take fica marcado
 #: `forcado: true` no JSON piloto (item 137).
 CALIB_GEO_QA_FORCAR_MAX_DEG = 35.0
+#: Separacao minima (graus) entre DIRECOES de mira de dois takes de
+#: posicao (item 139): garante espalhamento no plano de posicoes.
+CALIB_GEO_SEPARACAO_MIN_DEG = 15.0
+#: Espalhamento minimo do conjunto: menor par >= 15, maior par >= 30.
+CALIB_GEO_SPREAD_MIN_DEG = 15.0
+CALIB_GEO_SPREAD_MAX_MIN_DEG = 30.0
 #: Pesos no ajuste hibrido: a pose de mira (verdade por posicao, independente
 #: do plano do Kinect) ancora a direcao absoluta; as poses geometricas tem
 #: verdade EXATA (alvo do referencial da camera) mas erro de execucao maior.
@@ -200,47 +206,41 @@ CALIB_GEO_PESO_POSICAO = 1.5
 #: na verdade). O tipo "posicao" usa a verdade `-normalize(posicao da mao)`.
 _R2 = 0.7071067811865476
 POSES_CALIBRACAO_GEOMETRICA = (
-    {"nome": "PALMA MIRANDO A LENTE", "tipo": "posicao", "sinal": 1.0,
+    {"nome": "CENTRO (~45 cm)", "tipo": "posicao", "sinal": 1.0,
      "alvo": None, "dedos": None,
-     "instrucao": "Mao em qualquer lugar do quadro (de preferencia perto do "
-                  "centro/na frente da lente), PALMA MIRANDO A LENTE (gesto "
-                  "natural de apontar a palma para a camera). A verdade e' a "
-                  "POSICAO 3D mao->lente, nao o plano do Kinect."},
-    {"nome": "DORSO MIRANDO A LENTE", "tipo": "posicao", "sinal": -1.0,
+     "instrucao": "Mao a ~45 cm, no CENTRO do quadro; PALMA MIRANDO A LENTE."},
+    {"nome": "ESQUERDA (~25 cm)", "tipo": "posicao", "sinal": 1.0,
      "alvo": None, "dedos": None,
-     "instrucao": "Mao em qualquer lugar do quadro, DORSO MIRANDO A LENTE "
-                  "(palma para LONGE; como 'empurrar' a lente com as costas da "
-                  "mao). A verdade e' -direcao mao->lente (posicao 3D)."},
-    {"nome": "PALMA PARA A DIREITA", "tipo": "geometrica",
-     "alvo": (1.0, 0.0, 0.0), "dedos": (0.0, 1.0, 0.0),
-     "instrucao": "Palma apontando para a DIREITA da imagem (mao de perfil): "
-                  "dedos para CIMA; o plano da mao contem o eixo da camera."},
-    {"nome": "PALMA PARA A ESQUERDA", "tipo": "geometrica",
-     "alvo": (-1.0, 0.0, 0.0), "dedos": (0.0, 1.0, 0.0),
-     "instrucao": "Palma apontando para a ESQUERDA da imagem (mao de perfil): "
-                  "dedos para CIMA."},
-    {"nome": "PALMA PARA CIMA (cam)", "tipo": "geometrica",
-     "alvo": (0.0, 1.0, 0.0), "dedos": (1.0, 0.0, 0.0),
-     "instrucao": "Palma apontando para CIMA NO REFERENCIAL DA CAMERA (a "
-                  "camera e' inclinada ~51 graus: use o plano guia, NAO a "
-                  "gravidade); dedos para a DIREITA da imagem."},
-    {"nome": "PALMA PARA BAIXO (cam)", "tipo": "geometrica",
-     "alvo": (0.0, -1.0, 0.0), "dedos": (1.0, 0.0, 0.0),
-     "instrucao": "Palma apontando para BAIXO NO REFERENCIAL DA CAMERA (use o "
-                  "plano guia, NAO a gravidade); dedos para a DIREITA."},
-    {"nome": "DIAGONAL FRENTE-DIREITA", "tipo": "geometrica",
-     "alvo": (_R2, 0.0, -_R2), "dedos": (0.0, 1.0, 0.0),
-     "instrucao": "Palma na diagonal FRENTE-DIREITA da camera (entre 'palma "
-                  "para a camera' e 'palma para a direita'); dedos para CIMA."},
-    {"nome": "DIAGONAL FRENTE-CIMA", "tipo": "geometrica",
-     "alvo": (0.0, _R2, -_R2), "dedos": (1.0, 0.0, 0.0),
-     "instrucao": "Palma na diagonal FRENTE-CIMA da camera (entre 'palma para "
-                  "a camera' e 'palma para cima'); dedos para a DIREITA."},
-    {"nome": "MIRA DESLOCADA (palma na lente)", "tipo": "posicao",
+     "instrucao": "Mao deslocada ~25 cm para a ESQUERDA da imagem (~45 cm "
+                  "de distancia); PALMA MIRANDO A LENTE."},
+    {"nome": "DIREITA (~25 cm)", "tipo": "posicao", "sinal": 1.0,
      "alvo": None, "dedos": None,
-     "instrucao": "Mao a ~45-50 cm e DESLOCADA ~20 cm para a ESQUERDA da "
-                  "imagem; palma MIRANDO a lente. A verdade e' a POSICAO 3D da "
-                  "mao (independente do plano do Kinect)."},
+     "instrucao": "Mao deslocada ~25 cm para a DIREITA da imagem (~45 cm); "
+                  "PALMA MIRANDO A LENTE."},
+    {"nome": "CIMA (~20 cm)", "tipo": "posicao", "sinal": 1.0,
+     "alvo": None, "dedos": None,
+     "instrucao": "Mao deslocada ~20 cm para CIMA na imagem (~45 cm); PALMA "
+                  "MIRANDO A LENTE."},
+    {"nome": "BAIXO (~20 cm)", "tipo": "posicao", "sinal": 1.0,
+     "alvo": None, "dedos": None,
+     "instrucao": "Mao deslocada ~20 cm para BAIXO na imagem (~45 cm); PALMA "
+                  "MIRANDO A LENTE."},
+    {"nome": "DIAG. ESQ+CIMA", "tipo": "posicao", "sinal": 1.0,
+     "alvo": None, "dedos": None,
+     "instrucao": "Mao na diagonal ESQUERDA+CIMA (~20 cm em cada eixo); "
+                  "PALMA MIRANDO A LENTE."},
+    {"nome": "DIAG. DIR+BAIXO", "tipo": "posicao", "sinal": 1.0,
+     "alvo": None, "dedos": None,
+     "instrucao": "Mao na diagonal DIREITA+BAIXO (~20 cm em cada eixo); "
+                  "PALMA MIRANDO A LENTE."},
+    {"nome": "DIAG. ESQ+BAIXO", "tipo": "posicao", "sinal": 1.0,
+     "alvo": None, "dedos": None,
+     "instrucao": "Mao na diagonal ESQUERDA+BAIXO (~20 cm em cada eixo); "
+                  "PALMA MIRANDO A LENTE."},
+    {"nome": "DIAG. DIR+CIMA", "tipo": "posicao", "sinal": 1.0,
+     "alvo": None, "dedos": None,
+     "instrucao": "Mao na diagonal DIREITA+CIMA (~20 cm em cada eixo); "
+                  "PALMA MIRANDO A LENTE."},
 )
 
 
@@ -482,6 +482,19 @@ class CalibracaoGeometrica:
         if decorrido < CALIB_GEO_TAKE_SEC:
             self.status = f"PARADO {decorrido:.1f}/{CALIB_GEO_TAKE_SEC:.1f} s"
             return None
+        if tipo_pose == "posicao":
+            for _cap_ant in self.capturas:
+                if _cap_ant.get("tipo") != "posicao":
+                    continue
+                _ang_sep = angle_between(verdade, _cap_ant["verdade"])
+                if np.isfinite(_ang_sep) and \
+                        _ang_sep < CALIB_GEO_SEPARACAO_MIN_DEG:
+                    self._inicio_ok = None
+                    self.status = (
+                        f"MOVA A MAO: direcao {_ang_sep:.0f} graus < "
+                        f"{CALIB_GEO_SEPARACAO_MIN_DEG:g} da pose anterior "
+                        f"({_cap_ant['pose']})")
+                    return None
         captura = {
             "indice": self.indice,
             "pose": pose["nome"],
@@ -648,6 +661,11 @@ class CalibracaoGeometrica:
                      np.isfinite(p["erro_deg"])]
         erros_pos = [p["erro_deg"] for p in por_pose
                      if p["tipo"] == "posicao" and np.isfinite(p["erro_deg"])]
+        espalhamento = [float(angle_between(verdades[i], verdades[j]))
+                        for i in range(len(verdades))
+                        for j in range(i + 1, len(verdades))]
+        espalhamento = [valor for valor in espalhamento
+                        if np.isfinite(valor)]
         return {
             "lado": self.lado,
             "rotation": np.asarray(T, np.float64).tolist(),
@@ -666,6 +684,10 @@ class CalibracaoGeometrica:
             "loo_max_deg": (float(np.max(loo)) if loo else None),
             "erros_globais_mediana": (float(np.median(erros)) if erros
                                       else None),
+            "espalhamento_min_deg": (float(min(espalhamento))
+                                     if espalhamento else None),
+            "espalhamento_max_deg": (float(max(espalhamento))
+                                     if espalhamento else None),
         }
 #: Lateralidade da mao detectada (colunas KT_hand / PALM_hand do CSV):
 #: 0 = desconhecida, 1 = direita, 2 = esquerda.

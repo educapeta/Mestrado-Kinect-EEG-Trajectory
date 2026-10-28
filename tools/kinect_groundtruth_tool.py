@@ -434,7 +434,7 @@ def finalizar_calibracao_geometrica(calib, fusion, participante="",
     if resolucao["n_takes"] < CALIB_GEO_MIN_TAKES + 1:
         gate = False
         motivos.append(f"takes {resolucao['n_takes']} < "
-                       f"{CALIB_GEO_MIN_TAKES + 1} (6 geometricas + mira)")
+                       f"{CALIB_GEO_MIN_TAKES + 1} (9 posicoes de mira)")
     if resolucao["residual_deg"] > CALIB_GEO_MAX_RESIDUO_DEG:
         gate = False
         motivos.append(f"residuo {resolucao['residual_deg']:.1f} > "
@@ -443,29 +443,46 @@ def finalizar_calibracao_geometrica(calib, fusion, participante="",
         gate = False
         motivos.append(f"pior pose geometrica {erro_geo_max:.1f} > "
                        f"{CALIB_GEO_MAX_POSE_DEG:g}")
-    # A pose de MIRA e a validacao dela FORA do ajuste sao a unica prova de
-    # que o T/f generaliza para a direcao absoluta (as poses geometricas so'
-    # pinam a rotacao). Sem elas, NAO sobrescrever o alinhamento oficial.
-    if resolucao.get("validacao_mira") is None:
+    # Espalhamento das direcoes de MIRA (item 139): sem isso o T/f pode acertar
+    # a pose de calibracao e errar em orientacoes arbitrarias.
+    _esp_min = resolucao.get("espalhamento_min_deg")
+    _esp_max = resolucao.get("espalhamento_max_deg")
+    if _esp_min is None or _esp_min < CALIB_GEO_SPREAD_MIN_DEG:
         gate = False
-        motivos.append("sem validacao independente da mira (pule <= 2 poses "
-                       "geometricas)")
-    else:
-        _val_mira = resolucao["validacao_mira"]
-        if _val_mira["mediana_deg"] > CALIB_GEO_MAX_VALIDACAO_MIRA_DEG:
-            gate = False
-            motivos.append(f"validacao da mira {_val_mira['mediana_deg']:.1f} > "
-                           f"{CALIB_GEO_MAX_VALIDACAO_MIRA_DEG:g}")
-    if (resolucao.get("loo_mediana_deg") is not None
-            and resolucao["loo_mediana_deg"] > CALIB_GEO_MAX_LOO_MEDIANA_DEG):
+        motivos.append(f"espalhamento minimo {_esp_min} < "
+                       f"{CALIB_GEO_SPREAD_MIN_DEG:g} (desloque mais a mao)")
+    if _esp_max is None or _esp_max < CALIB_GEO_SPREAD_MAX_MIN_DEG:
         gate = False
-        motivos.append(f"validacao cruzada (LOO) "
-                       f"{resolucao['loo_mediana_deg']:.1f} > "
+        motivos.append(f"espalhamento maximo {_esp_max} < "
+                       f"{CALIB_GEO_SPREAD_MAX_MIN_DEG:g} (desloque mais a mao)")
+    # A validacao CRUZADA (deixa-um-de-fora) e' a prova de generalizacao para
+    # as poses de posicao (nao ha mais alvos geometricos).
+    _loo = resolucao.get("loo_mediana_deg")
+    if _loo is None:
+        gate = False
+        motivos.append("sem validacao cruzada (LOO) -- takes insuficientes")
+    elif _loo > CALIB_GEO_MAX_LOO_MEDIANA_DEG:
+        gate = False
+        motivos.append(f"validacao cruzada (LOO) {_loo:.1f} > "
                        f"{CALIB_GEO_MAX_LOO_MEDIANA_DEG:g}")
+    if (resolucao.get("validacao_mira") is not None
+            and resolucao["validacao_mira"]["mediana_deg"]
+            > CALIB_GEO_MAX_VALIDACAO_MIRA_DEG):
+        gate = False
+        motivos.append(f"validacao da mira "
+                       f"{resolucao['validacao_mira']['mediana_deg']:.1f} > "
+                       f"{CALIB_GEO_MAX_VALIDACAO_MIRA_DEG:g}")
     avisar("")
     avisar(f"===== CALIBRACAO GEOMETRICA -- {calib.lado.upper()} =====")
     avisar(f"takes: {resolucao['n_takes']} | residuo ponderado: "
            f"{resolucao['residual_deg']:.2f} graus")
+    _esp_min_txt = resolucao.get("espalhamento_min_deg")
+    _esp_max_txt = resolucao.get("espalhamento_max_deg")
+    avisar("  espalhamento das direcoes: min "
+           + ("--" if _esp_min_txt is None else f"{_esp_min_txt:.1f}")
+           + " / max "
+           + ("--" if _esp_max_txt is None else f"{_esp_max_txt:.1f}")
+           + " graus")
     for linha in resolucao.get("por_pose", ()):
         _qa_pose = linha.get("qa_deg")
         _qa_txt = ("  -- " if _qa_pose is None
@@ -4478,11 +4495,24 @@ def main():
                             _lado_geo)
                     except (AttributeError, IndexError, TypeError):
                         _origem_geo = None
-                if (_pose_geo is not None and _origem_geo is not None
-                        and _pose_geo.get("tipo") == "geometrica"):
+                _alvo_guia_geo = None
+                _dedos_guia_geo = None
+                if _pose_geo is not None and _origem_geo is not None:
+                    if _pose_geo.get("tipo") == "geometrica":
+                        _alvo_guia_geo = _pose_geo.get("alvo")
+                        _dedos_guia_geo = _pose_geo.get("dedos")
+                    elif _pose_geo.get("tipo") == "posicao":
+                        _v_guia = -np.asarray(_origem_geo, np.float64)
+                        _n_guia = float(np.linalg.norm(_v_guia))
+                        if _n_guia > 1e-6:
+                            _alvo_guia_geo = (
+                                _v_guia / _n_guia
+                                * float(_pose_geo.get("sinal", 1.0)))
+                            _dedos_guia_geo = (0.0, 1.0, 0.0)
+                if _alvo_guia_geo is not None and _origem_geo is not None:
                     desenhar_guia_plano_palma(
                         tracker, display, _origem_geo,
-                        _pose_geo.get("alvo"), _pose_geo.get("dedos"))
+                        _alvo_guia_geo, _dedos_guia_geo)
                 elif _pose_geo is not None:
                     # Sem mao/depth a projecao 3D nao existe: explica na tela
                     # em vez de simplesmente "nao desenhar nada" (confundiu no
@@ -4937,24 +4967,27 @@ def main():
                         "CALIBRACAO GEOMETRICA -- MAO DIREITA PRIMEIRO "
                         "(uma mao por vez).\n"
                         "  - Deixe a OUTRA mao fora do quadro/parada;\n"
-                        "  - FOLHA RIGIDA (papelao/plastico) na palma ajuda nas "
-                        "poses de PERFIL; NAO use na pose 1 (palma para a "
-                        "camera: a folha bloqueia mao/landmarks);\n"
-                        "  - O quadro/setas do video sao o ALVO EXATO no "
-                        "referencial da camera; a seta CIANO guia os dedos;\n"
-                        "  - Alinhe, fique PARADO 2 s com QA <= "
-                        f"{CALIB_GEO_QA_MAX_DEG:g} graus; o take e' gravado "
-                        "automaticamente;\n"
-                        "  - 6 poses geometricas (perfil/diagonais) + 3 de "
-                        "POSICAO: palma e dorso mirando a lente + mira "
-                        "deslocada (~20 cm a esquerda);\n"
-                        "  - Nas 3 de POSICAO a verdade e' a POSICAO 3D: se o "
-                        "Kinect inverter palma/dorso o QA fica alto mas NAO "
-                        "bloqueia -- so' fique parado 2 s;\n"
+                        "  - NOVO PROTOCOLO: 9 POSICOES DE MIRA deslocadas, "
+                        "SEM poses edge-on. Em TODAS aponte a PALMA para a "
+                        "LENTE e desloque a mao: centro, esquerda (~25 cm), "
+                        "direita, cima (~20 cm), baixo e 4 diagonais;\n"
+                        "  - O quadro MAGENTA e' o plano-alvo (perpendicular "
+                        "a linha mao->lente) e a seta CIANO guia os dedos; "
+                        "alinhe a folha/mao ao quadro;\n"
+                        "  - Fique PARADO 2 s; QA dobrado <= "
+                        f"{CALIB_GEO_QA_MAX_POSICAO_DEG:g} graus; o take e' "
+                        "gravado automaticamente;\n"
+                        "  - Desloque a mao entre poses: se a direcao de mira "
+                        "ficar a menos de "
+                        f"{CALIB_GEO_SEPARACAO_MIN_DEG:g} graus da anterior "
+                        "aparece 'MOVA A MAO'; o gate final exige "
+                        "espalhamento min >= "
+                        f"{CALIB_GEO_SPREAD_MIN_DEG:g} e max >= "
+                        f"{CALIB_GEO_SPREAD_MAX_MIN_DEG:g} graus;\n"
                         "  - Se o QA bruto ficar torto (Kinect confundindo "
-                        "palma/dorso) mas voce CONFIRMAR visualmente o "
-                        "alinhamento, F forca o take (QA ate "
-                        f"{CALIB_GEO_QA_FORCAR_MAX_DEG:g}; fica registrado "
+                        "palma/dorso) mas voce CONFIRMAR visualmente, F forca "
+                        "o take (QA efetivo ate "
+                        f"{CALIB_GEO_QA_FORCAR_MAX_DEG:g}; registrado "
                         "'forcado'); N pula; X cancela. A cada take um JSON "
                         "parcial e' salvo.");
             elif key == ord("n") and calib_geo is not None:

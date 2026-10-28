@@ -8489,3 +8489,50 @@ PROXIMA BANCADA: reiniciar o tool, X de novo. Nas poses de perfil esperar
 8-35, F (forcado) apos confirmar; se QA>35, ajustar. Com o oficial salvo,
 conferir vermelho x verde.
 
+
+
+================================================================================
+ITEM 139 (28/10/2026) - FIM DAS POSES EDGE-ON: o X passa a usar 9 POSICOES DE
+    MIRA DESLOCADAS (palma sempre na lente), com espalhamento e gate por LOO
+================================================================================
+SINTOMA NA BANCADA: o log do X "ficava completamente doido" nas poses direita/
+esquerda/cima/baixo: com a mao perpendicular aos raios do Kinect (edge-on) o
+plano de profundidade e' mal condicionado, a normal do vetor verde se perde/
+inverte e o QA oscila; nenhuma filtragem resolve falta de geometria. O usuario
+demorava muito e nao fechava as poses de perfil.
+DIAGNOSTICO: para a palma PERPENDICULAR ao sensor nao existe informacao de
+profundidade suficiente para a normal (PCA com 21 pontos melhora, mas nao
+conserta o caso degenerado). Insistir nessas poses e' o erro de projeto.
+SOLUCAO (protocolo novo, item 139)
+  - `POSES_CALIBRACAO_GEOMETRICA` agora tem 9 POSICOES DE MIRA (sem nenhuma
+    pose geometrica/edge-on): CENTRO (~45 cm), ESQUERDA (~25 cm), DIREITA,
+    CIMA (~20 cm), BAIXO e as 4 diagonais. Em TODAS a palma aponta para a
+    lente; a verdade continua `-normalize(posicao)` (por POSICAO 3D), o QA e'
+    dobrado (limite 10 graus) e o plano da mao fica obliquo (bem condicionado).
+  - Espalhamento obrigatorio: ao gravar um take de posicao, a direcao de mira
+    precisa estar a >= `CALIB_GEO_SEPARACAO_MIN_DEG` (15 graus) de QUALQUER
+    take anterior; senao aparece "MOVA A MAO" e o take nao entra. O resultado
+    calcula o espalhamento minimo/maximo e o gate exige min >= 15 e max >= 30.
+  - Gate novo: >= 7 takes, residuo <= 12, espalhamento min/max, LOO presente e
+    <= 15 graus. A antiga validacao da "mira separada" deixou de ser exigida
+    (todas as poses sao de mira); o LOO e' a validacao independente. A pose de
+    mira deslocada tambem deixou de existir como separada.
+  - O guia MAGENTA agora e' desenhado tambem nas poses de posicao: o alvo e'
+    `-normalize(posicao atual da mao)` (linha mao->lente) e o quadro e' o plano
+    perpendicular a ela, entao o operador ve' exatamente o que alinhar.
+  - Texto do X atualizado: 9 posicoes, sem folha obrigatoria, sem edge-on;
+    F continua disponivel para QA efetivo ate 35 (registrado forcado), N pula,
+    X cancela, JSON parcial a cada take.
+  - Testes: sintetico com 9 posicoes espalhadas recupera T/f, checa espalhamento
+    min/max, LOO e gate; poses geometricas sinteticas continuam testando o QA
+    duro e o `forcar_take`; suite completa deve passar.
+POR QUE ISSO E' MELHOR: a posicao 3D ja' foi validada no J (residuo ~3.6 graus)
+e nao depende da normal da palma; a normal do Kinect fica so' como QA/verde de
+conveniencia. Deslocar a mao lateralmente/superiormente cria direcoes de mira
+espalhadas (ate ~±35-40 graus), o que condiciona T/f melhor que o cone estreito
+do J e sem o problema edge-on.
+PROXIMA BANCADA: reiniciar o tool e rodar X. Fazer as 9 posicoes deslocando a
+mao; se aparecer "MOVA A MAO", deslocar mais antes de estabilizar. O log deve
+ficar estavel (QA dobrado pequeno) e o gate deve salvar o oficial ao completar.
+Depois comparar vermelho x verde e rodar J/V + teste de mira.
+

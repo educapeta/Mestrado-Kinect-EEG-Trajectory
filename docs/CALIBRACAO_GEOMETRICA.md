@@ -89,6 +89,23 @@ janela agora usa a **normal anatômica instantânea** como referência de sinal
 (continua valendo para J/V); a pose 1 também foi marcada para ser feita **SEM
 folha** (com a palma virada para a lente, a folha bloqueia a mão/landmarks).
 
+## PROTOCOLO ATUAL (item 139): 9 POSIÇÕES DE MIRA, SEM EDGE-ON
+
+O protocolo mudou em 28/10/2026. As poses de perfil (±X/±Y e diagonais fixas)
+foram **removidas**: com a mão perpendicular aos raios do Kinect o plano de
+profundidade é mal condicionado e a normal do vetor verde se perde/inverte,
+tornando o QA impossível. Agora são **9 posições de mira deslocadas**, todas
+com a **PALMA MIRANDO A LENTE**: centro (~45 cm), esquerda (~25 cm), direita,
+cima (~20 cm), baixo e as 4 diagonais. A verdade continua sendo a posição 3D
+(`−normalize(posição)`), o plano da mão fica **oblíquo** (bem condicionado para
+o Kinect), e o QA usa o ângulo dobrado (limite 10°). O quadro MAGENTA é o
+plano perpendicular à linha mão→lente. O gate exige **espalhamento**: cada take
+novo precisa estar a ≥ 15° da direção de qualquer take anterior (senão aparece
+"MOVA A MÃO") e o conjunto precisa de espalhamento mínimo ≥ 15° e máximo ≥ 30°.
+A validação independente é o **deixa-um-de-fora (LOO)** — não há mais pose de
+mira separada, porque todas são de mira. A tabela e o protocolo abaixo são
+**históricos** (itens 127–138).
+
 ## As 9 poses (por mão)
 
 O campo `dedos` é só a direção de referência para padronizar a **rolagem** do

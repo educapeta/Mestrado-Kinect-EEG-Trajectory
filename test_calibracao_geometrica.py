@@ -77,20 +77,21 @@ print("2) CalibracaoGeometrica: 9 poses sinteticas -> soluçao")
 calib = k.CalibracaoGeometrica("right", avisar=lambda *_a: None)
 pos_geometrica = np.array([0.10, 0.05, 0.45])
 pos_mira = np.array([0.20, 0.06, 0.45])
+# Deslocamentos (x, y) em metros a 45 cm: direcoes espalhadas (item 139).
+deslocamentos_sinteticos = [
+    (0.00, 0.00), (0.25, 0.00), (-0.25, 0.00), (0.00, 0.20),
+    (0.00, -0.20), (0.18, 0.15), (-0.18, -0.15), (-0.18, 0.15),
+    (0.18, -0.15),
+]
 agora = 0.0
-for pose in calib.poses:
-    if pose["tipo"] == "posicao":
-        posicao = pos_mira
-        verdade = (-posicao / np.linalg.norm(posicao)
-                   * float(pose.get("sinal", 1.0)))
-    else:
-        posicao = pos_geometrica
-        verdade = np.asarray(pose["alvo"], np.float64)
-        verdade = verdade / np.linalg.norm(verdade)
+for desloc_x, desloc_y in deslocamentos_sinteticos:
+    posicao = np.array([desloc_x, desloc_y, 0.45])
+    verdade = -posicao / np.linalg.norm(posicao)
     R = k._rotacao_a_para_b(f_verdade, T_verdade.T @ verdade)
     for _ in range(25):
         agora += 0.1
         calib.amostra(agora, R, posicao, verdade)
+
 check("gravou 9 takes", len(calib.capturas) == 9, len(calib.capturas))
 check("completa", calib.completa is True)
 resultado = calib.resultado()
@@ -103,9 +104,15 @@ if "erro" not in resultado:
                       atol=1e-6))
     check("f recuperado na calibracao",
           np.allclose(np.asarray(resultado["body"]), f_verdade, atol=1e-6))
-    check("validacao da mira presente",
-          resultado.get("validacao_mira") is not None)
-    check("validacao cruzada presente",
+    check("espalhamento minimo >= 15",
+          resultado.get("espalhamento_min_deg") is not None
+          and resultado["espalhamento_min_deg"] >= 15.0,
+          resultado.get("espalhamento_min_deg"))
+    check("espalhamento maximo >= 30",
+          resultado.get("espalhamento_max_deg") is not None
+          and resultado["espalhamento_max_deg"] >= 30.0,
+          resultado.get("espalhamento_max_deg"))
+    check("validacao cruzada (LOO) presente",
           resultado.get("loo_mediana_deg") is not None)
 
 # ============================================================================
@@ -114,8 +121,12 @@ if "erro" not in resultado:
 print("3) QA de execucao, gate de movimento e pular pose")
 # QA: normal 30 graus fora do alvo nao grava (usa poses GEOMETRICAS; as
 # posicoes por posicao nao tem alvo fixo)
-poses_geo_teste = [pose for pose in k.POSES_CALIBRACAO_GEOMETRICA
-                   if pose["tipo"] == "geometrica"][:2]
+poses_geo_teste = [
+    {"nome": "GEO +X (teste)", "tipo": "geometrica",
+     "alvo": (1.0, 0.0, 0.0), "dedos": (0.0, 1.0, 0.0), "sinal": 1.0},
+    {"nome": "GEO -X (teste)", "tipo": "geometrica",
+     "alvo": (-1.0, 0.0, 0.0), "dedos": (0.0, 1.0, 0.0), "sinal": 1.0},
+]
 calib_qa = k.CalibracaoGeometrica("right", poses=poses_geo_teste,
                                  avisar=lambda *_a: None)
 pose0 = calib_qa.pose_atual
@@ -304,19 +315,14 @@ spec_tool.loader.exec_module(tool)
 
 calib_final = k.CalibracaoGeometrica("right", avisar=lambda *_a: None)
 agora = 0.0
-for pose in calib_final.poses:
-    if pose["tipo"] == "posicao":
-        posicao = pos_mira
-        verdade = (-posicao / np.linalg.norm(posicao)
-                   * float(pose.get("sinal", 1.0)))
-    else:
-        posicao = pos_geometrica
-        verdade = np.asarray(pose["alvo"], np.float64)
-        verdade = verdade / np.linalg.norm(verdade)
+for desloc_x, desloc_y in deslocamentos_sinteticos:
+    posicao = np.array([desloc_x, desloc_y, 0.45])
+    verdade = -posicao / np.linalg.norm(posicao)
     R = k._rotacao_a_para_b(f_verdade, T_verdade.T @ verdade)
     for _ in range(25):
         agora += 0.1
         calib_final.amostra(agora, R, posicao, verdade)
+
 check("finalizar: calibracao sintetica completa",
       calib_final.completa and len(calib_final.capturas) == 9)
 
@@ -418,6 +424,6 @@ if FALHAS:
     raise SystemExit(1)
 print()
 print("CALIBRACAO_GEOMETRICA_OK: solver ponderado (outlier com peso baixo), "
-      "9 poses sinteticas recuperam T/f, QA alto nao grava, gate de "
-      "movimento, pular pose, rotacao NaN rejeitada, finalizar grava "
-      "piloto/oficial/.bak, integracao no tool (X/N/overlay/finalizacao)")
+      "9 posicoes de mira sinteticas recuperam T/f com espalhamento, QA "
+      "alto nao grava, gate de movimento, pular pose, rotacao NaN "
+      "rejeitada, finalizar grava piloto/oficial/.bak, integracao no tool")
