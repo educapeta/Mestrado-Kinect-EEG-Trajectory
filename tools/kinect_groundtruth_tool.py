@@ -4808,8 +4808,9 @@ def main():
                         "  - Alinhe, fique PARADO 2 s com QA <= "
                         f"{CALIB_GEO_QA_MAX_DEG:g} graus; o take e' gravado "
                         "automaticamente;\n"
-                        "  - 8 poses geometricas + 1 MIRA DESLOCADA "
-                        f"(~20 cm para a esquerda) por mao;\n"
+                        "  - 6 poses geometricas (perfil/diagonais) + 3 de "
+                        "POSICAO: palma e dorso mirando a lente + mira "
+                        "deslocada (~20 cm a esquerda);\n"
                         "  - N pula uma pose; X cancela. No fim resolve T/f "
                         "hibrido e grava o JSON piloto (o oficial so' se o "
                         "gate passar).")

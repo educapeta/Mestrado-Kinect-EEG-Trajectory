@@ -81,7 +81,8 @@ agora = 0.0
 for pose in calib.poses:
     if pose["tipo"] == "posicao":
         posicao = pos_mira
-        verdade = -posicao / np.linalg.norm(posicao)
+        verdade = (-posicao / np.linalg.norm(posicao)
+                   * float(pose.get("sinal", 1.0)))
     else:
         posicao = pos_geometrica
         verdade = np.asarray(pose["alvo"], np.float64)
@@ -111,11 +112,15 @@ if "erro" not in resultado:
 # 3) QA de execucao, movimento minimo e pular pose
 # ============================================================================
 print("3) QA de execucao, gate de movimento e pular pose")
-# QA: normal 30 graus fora do alvo nao grava
-calib_qa = k.CalibracaoGeometrica("right", avisar=lambda *_a: None)
+# QA: normal 30 graus fora do alvo nao grava (usa poses GEOMETRICAS; as
+# posicoes por posicao nao tem alvo fixo)
+poses_geo_teste = [pose for pose in k.POSES_CALIBRACAO_GEOMETRICA
+                   if pose["tipo"] == "geometrica"][:2]
+calib_qa = k.CalibracaoGeometrica("right", poses=poses_geo_teste,
+                                 avisar=lambda *_a: None)
 pose0 = calib_qa.pose_atual
 alvo0 = np.asarray(pose0["alvo"], np.float64)
-normal_ruim = alvo0 + np.array([0.5, 0.0, 0.0])
+normal_ruim = alvo0 + np.array([0.0, 0.5, 0.5])
 normal_ruim /= np.linalg.norm(normal_ruim)
 agora = 0.0
 R0 = k._rotacao_a_para_b(f_verdade, T_verdade.T @ alvo0)
@@ -128,7 +133,8 @@ check("QA alto mantem status de alinhamento",
       "ALINHE" in calib_qa.status.upper(), calib_qa.status)
 
 # movimento minimo: depois do 1o take, repetir a MESMA rotacao nao arma o 2o
-calib_mov = k.CalibracaoGeometrica("right", avisar=lambda *_a: None)
+calib_mov = k.CalibracaoGeometrica("right", poses=poses_geo_teste,
+                                 avisar=lambda *_a: None)
 agora = 0.0
 for _ in range(25):
     agora += 0.1
@@ -161,7 +167,8 @@ check("pular pose avanca sem gravar",
 # 3b) amostra com rotacao NaN/inf nao pode gravar take (item 127, achado M2)
 # ============================================================================
 print("3b) rotacao NaN/inf nao entra na captura")
-calib_nan = k.CalibracaoGeometrica("right", avisar=lambda *_a: None)
+calib_nan = k.CalibracaoGeometrica("right", poses=poses_geo_teste[:1],
+                                 avisar=lambda *_a: None)
 alvo_nan = np.asarray(calib_nan.pose_atual["alvo"], np.float64)
 R_valida = k._rotacao_a_para_b(f_verdade, T_verdade.T @ alvo_nan)
 agora = 0.0
@@ -219,7 +226,8 @@ agora = 0.0
 for pose in calib_final.poses:
     if pose["tipo"] == "posicao":
         posicao = pos_mira
-        verdade = -posicao / np.linalg.norm(posicao)
+        verdade = (-posicao / np.linalg.norm(posicao)
+                   * float(pose.get("sinal", 1.0)))
     else:
         posicao = pos_geometrica
         verdade = np.asarray(pose["alvo"], np.float64)

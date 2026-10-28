@@ -58,6 +58,20 @@ para desenhar o plano** — a tela mostra o banner vermelho "MÃO NÃO DETECTADA
 e o console repete o aviso a cada ~5 s; o take não avança até a mão aparecer.
 Não é bug e não tem relação com a pose atual: é o guia que é ancorado na mão.
 
+## Por que as poses 1 e 2 usam POSIÇÃO (item 134)
+
+A normal medida pelo Kinect tem dois problemas nas poses “de frente”: (a) o
+estabilizador de janela podia congelar o sinal (corrigido no item 131); (b) a
+estimativa do plano da mão (punho+MCPs) **não é exatamente a normal da palma**
+quando a mão está fora do eixo da câmera ou com luva. Medido na bancada
+(28/10/2026): com a mão apontando a palma para a lente mas deslocada do eixo, o
+QA dava 30-45° e a normal medida era exatamente a direção **mão→lente**. Ou
+seja, o gesto natural é mirar a lente, não alinhar o plano ao plano da imagem.
+Por isso as poses 1 e 2 passaram a usar a **verdade por posição** (`−normalize`
+para palma, `+normalize` para dorso), a mesma que o J já usava com sucesso — o
+Kinect normal serve só de conferência. As 6 poses geométricas restantes
+(±X, ±Y e diagonais) continuam com alvo EXATO no referencial da câmera.
+
 ## Sinal da normal (corrigido no item 131)
 
 A normal medida pelo Kinect tem sinal ambíguo (SVD) e é orientada por uma
@@ -77,8 +91,8 @@ punho (seta ciana) — não entra na verdade.
 
 | # | Nome | Alvo (x, y, z) | Instrução resumida | Tipo |
 |---|---|---|---|---|
-| 1 | PALMA PARA A CAMERA | (0, 0, −1) | Palma de FRENTE para a câmera **SEM folha** (ela bloquearia a mão): mão aberta, palma paralela ao plano da imagem; dedos para CIMA | geométrica |
-| 2 | DORSO PARA A CAMERA | (0, 0, +1) | Dorso de frente (palma para longe): plano do dorso paralelo à imagem; dedos para CIMA | geométrica |
+| 1 | PALMA MIRANDO A LENTE | — (verdade = `−normalize(posição da mão)`) | Gesto natural de apontar a PALMA para a lente, em qualquer posição do quadro (de preferência perto do centro). **SEM folha** (ela bloquearia a mão). Verdade por POSIÇÃO 3D | posição |
+| 2 | DORSO MIRANDO A LENTE | — (verdade = `+normalize(posição da mão)`) | Dorso de frente para a lente (palma para longe, como empurrar a lente com as costas da mão). Verdade por POSIÇÃO 3D | posição |
 | 3 | PALMA PARA A DIREITA | (+1, 0, 0) | Mão de perfil: palma apontando para a DIREITA da imagem; dedos para CIMA | geométrica |
 | 4 | PALMA PARA A ESQUERDA | (−1, 0, 0) | Mão de perfil: palma apontando para a ESQUERDA; dedos para CIMA | geométrica |
 | 5 | PALMA PARA CIMA (cam) | (0, +1, 0) | Palma para CIMA **no referencial da câmera** (ela está inclinada ~51°: use o plano-guia, NÃO a gravidade); dedos para a DIREITA | geométrica |
@@ -107,11 +121,12 @@ punho (seta ciana) — não entra na verdade.
 6. **`N` pula a pose** sem gravar (útil nas de perfil, cujo QA de plano é mais
    ruidoso — a qualidade final é avaliada no gate). **`X` cancela** tudo a
    qualquer momento (nada é gravado).
-7. Mínimo para o ajuste: **6 takes** (`CALIB_GEO_MIN_TAKES`) — o ideal é
-   completar as 9. Para o JSON OFICIAL ser sobrescrito é preciso um pouco mais:
-   **6 geométricas + a MIRA** (≥ 7 takes) e a validação independente da mira
-   tem de existir (pule no máximo 2 poses geométricas); se pular mais, a sessão
-   só grava o JSON piloto.
+7. Mínimo para o ajuste: **6 takes** (`CALIB_GEO_MIN_TAKES`). O ideal é
+   completar as 9 (6 geométricas + 3 de posição). Para o JSON OFICIAL ser
+   sobrescrito é preciso ≥ 7 takes E a validação independente (que exige
+   **as 6 geométricas**); ou seja, **não pule nenhuma das 6 geométricas** —
+   as 3 de posição podem ser puladas no máximo 2; se pular uma geométrica,
+   a sessão só grava o JSON piloto.
 
 ## Como o T/f é resolvido (ajuste híbrido ponderado)
 
@@ -149,7 +164,8 @@ punho (seta ciana) — não entra na verdade.
   NADA é gravado.
 - O alinhamento OFICIAL `imu_palm_alignment_<lado>.json` só é substituído se o
   **gate** passar:
-  - ≥ 7 takes = 6 geométricas + a MIRA (`CALIB_GEO_MIN_TAKES + 1`);
+  - ≥ 7 takes, com **as 6 geométricas** completas + poses de posição
+    (`CALIB_GEO_MIN_TAKES + 1`);
   - residuo ponderado ≤ 12 graus (`CALIB_GEO_MAX_RESIDUO_DEG`);
   - pior pose geométrica ≤ 20 graus (`CALIB_GEO_MAX_POSE_DEG`);
   - a validação independente da MIRA existe e tem mediana ≤ 20 graus

@@ -190,16 +190,17 @@ CALIB_GEO_PESO_POSICAO = 1.5
 #: na verdade). O tipo "posicao" usa a verdade `-normalize(posicao da mao)`.
 _R2 = 0.7071067811865476
 POSES_CALIBRACAO_GEOMETRICA = (
-    {"nome": "PALMA PARA A CAMERA", "tipo": "geometrica",
-     "alvo": (0.0, 0.0, -1.0), "dedos": (0.0, 1.0, 0.0),
-     "instrucao": "Palma de FRENTE para a camera, SEM folha (com a palma "
-                  "virada para a lente a folha bloqueia a mao/landmarks): "
-                  "mao aberta, palma paralela ao plano da imagem, dedos para "
-                  "CIMA."},
-    {"nome": "DORSO PARA A CAMERA", "tipo": "geometrica",
-     "alvo": (0.0, 0.0, 1.0), "dedos": (0.0, 1.0, 0.0),
-     "instrucao": "Dorso de frente para a camera (palma para LONGE): plano do "
-                  "dorso PARALELO ao plano da imagem; dedos para CIMA."},
+    {"nome": "PALMA MIRANDO A LENTE", "tipo": "posicao", "sinal": 1.0,
+     "alvo": None, "dedos": None,
+     "instrucao": "Mao em qualquer lugar do quadro (de preferencia perto do "
+                  "centro/na frente da lente), PALMA MIRANDO A LENTE (gesto "
+                  "natural de apontar a palma para a camera). A verdade e' a "
+                  "POSICAO 3D mao->lente, nao o plano do Kinect."},
+    {"nome": "DORSO MIRANDO A LENTE", "tipo": "posicao", "sinal": -1.0,
+     "alvo": None, "dedos": None,
+     "instrucao": "Mao em qualquer lugar do quadro, DORSO MIRANDO A LENTE "
+                  "(palma para LONGE; como 'empurrar' a lente com as costas da "
+                  "mao). A verdade e' -direcao mao->lente (posicao 3D)."},
     {"nome": "PALMA PARA A DIREITA", "tipo": "geometrica",
      "alvo": (1.0, 0.0, 0.0), "dedos": (0.0, 1.0, 0.0),
      "instrucao": "Palma apontando para a DIREITA da imagem (mao de perfil): "
@@ -343,9 +344,14 @@ class CalibracaoGeometrica:
         if pose.get("tipo") == "posicao":
             if posicao is None:
                 return None
+            # sinal=+1: PALMA mirando a lente (normal = -normalize(pos));
+            # sinal=-1: DORSO mirando a lente (normal = +normalize(pos)).
             vetor = -np.asarray(posicao, np.float64).reshape(3)
             norma = np.linalg.norm(vetor)
-            return None if norma < 1e-6 else vetor / norma
+            if norma < 1e-6:
+                return None
+            vetor = vetor / norma
+            return vetor * float(pose.get("sinal", 1.0))
         alvo = np.asarray(pose["alvo"], np.float64).reshape(3)
         norma = np.linalg.norm(alvo)
         return None if norma < 1e-9 else alvo / norma
@@ -409,6 +415,7 @@ class CalibracaoGeometrica:
             "indice": self.indice,
             "pose": pose["nome"],
             "tipo": pose.get("tipo", "geometrica"),
+            "sinal": float(pose.get("sinal", 1.0)),
             "alvo": (None if pose.get("alvo") is None
                      else np.asarray(pose["alvo"], np.float64).tolist()),
             "verdade": verdade.tolist(),

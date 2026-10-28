@@ -8273,3 +8273,48 @@ USO NA BANCADA (com a serial do CP210x morta, pular ritual):
 PENDENCIA: com o console limpo, rodar X de novo e copiar as linhas [GEO] da
 pose que nao fecha o QA (para separar execucao x sinal x depth).
 
+
+
+================================================================================
+ITEM 134 (28/10/2026) - POSES 1/2 DO X POR POSICAO: o QA de 30-45 graus nao era
+    sinal nem erro do usuario, era a normal do KINECT medindo a direcao mao->lente
+================================================================================
+SINTOMA (bancada): no X, pose 1 (PALMA PARA A CAMERA, alvo -Z) o QA ficava
+estavel em 29-48 graus e nenhum take fechava. O log novo [GEO] mostrou
+`n_inst`/`n_usada` ~(-0.38,-0.37,-0.84), ou seja, a normal medida era a direcao
+**da mao ate a lente** — o usuario estava fazendo o gesto natural de APONTAR a
+palma para a lente, nao de deixar o plano da mao paralelo ao plano da imagem
+(isso so coincide com -Z se a mao estiver no eixo optico).
+DIAGNOSTICO: a pose 1/2 geometrica exigia alinhar o PLANO da mao ao plano da
+imagem; fora do eixo, o gesto natural (mirar a lente) da' uma normal inclinada.
+Nao era bug de sinal (item 131 ja' corrigido), nao era IMU, e nao era
+necessariamente mao torta: e' a diferenca entre "apontar para a lente" e
+"ficar paralelo ao plano da imagem".
+CORRECAO/PROTOCOLO (itens 127/134):
+  - Pose 1 virou **PALMA MIRANDO A LENTE** (tipo posicao, sinal +1): verdade =
+    -normalize(posicao da mao) — a mesma do J, que ja' funcionava (residuo ~3,7).
+  - Pose 2 virou **DORSO MIRANDO A LENTE** (tipo posicao, sinal -1): verdade =
+    +normalize(posicao da mao).
+  - As 6 poses geometricas restantes (+-X, +-Y e 2 diagonais) continuam com
+    alvo EXATO no referencial da camera; nessas a folha rigida ajuda (sem
+    cobrir mao/landmarks).
+  - QA das poses de posicao usa a normal do Kinect so' como conferencia contra
+    a direcao mao->lente (se o usuario mira a palma, deve ficar pequeno; fora
+    do eixo a verdade acompanha a posicao, nao o plano).
+  - `CalibracaoGeometrica` ganhou o campo `sinal` da pose de posicao; capture
+    guarda o sinal; `resultado()`/validacao continuam os mesmos (as 3 poses de
+    posicao entram como posicao; a validacao independente resolve so' com as 6
+    geometricas e mede nas posicoes).
+  - Gate oficial: >=7 takes E as **6 geometricas completas** (a validacao
+    independente exige 6 geometricas); pular geometrica => so' JSON piloto;
+    das 3 de posicao pode pular no maximo 2.
+  - Documentacao (docs/CALIBRACAO_GEOMETRICA.md, secao "Por que as poses 1 e 2
+    usam POSICAO") e README atualizados; tool start text ajustado.
+TESTES: test_calibracao_geometrica.py atualizado para gerar a verdade com sinal
+das poses de posicao; grupos 2/3/3b/3c/4 OK; test_palm_alignment e
+test_palma_plano OK.
+PROXIMA BANCADA: reiniciar o tool (codigo novo), X de novo: pose 1 = apontar a
+PALMA para a lente (sem folha), pose 2 = apontar o DORSO para a lente; depois as
+6 geometricas (folha ajuda nas de perfil). Seria bom J antes para ter fallback,
+mas o J anterior nao salvou o oficial (JSON de 22/10).
+
