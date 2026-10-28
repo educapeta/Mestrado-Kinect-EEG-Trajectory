@@ -177,6 +177,28 @@ check("rotacao NaN nao grava take", len(calib_nan.capturas) == 0,
 check("sequencia com NaN continua sem crash", calib_nan.indice == 0)
 
 # ============================================================================
+# 3b2) normal_robusta: virada REAL de 180 graus entre poses (item 131)
+# ============================================================================
+print("3b2) normal_robusta permite virada real de 180 graus (modo X)")
+anterior = np.array([0.0, 0.0, 1.0])
+rng_sinal = np.random.default_rng(31)
+hist_flip = [np.array([0.0, 0.0, -1.0])
+             + rng_sinal.normal(0.0, 0.005, 3) for _ in range(8)]
+med_antigo, _frac = k.normal_robusta(hist_flip, normal_anterior=anterior)
+check("continuidade antiga trava o sinal (documenta o bug)",
+      med_antigo is not None and float(np.dot(med_antigo, anterior)) > 0.9,
+      med_antigo)
+med_novo, _frac = k.normal_robusta(
+    hist_flip, normal_anterior=anterior,
+    referencia_sinal=np.array([0.0, 0.0, -1.0]))
+check("referencia anatomica permite a virada de 180 graus",
+      med_novo is not None and float(np.dot(med_novo, anterior)) < -0.9,
+      med_novo)
+check("tool usa referencia_sinal no modo X",
+      "referencia_sinal=(normal_plano_lado" in open(
+          "tools/kinect_groundtruth_tool.py", encoding="utf-8").read())
+
+# ============================================================================
 # 3c) finalizar_calibracao_geometrica: gate, JSON piloto e oficial + .bak
 # ============================================================================
 print("3c) finalizar: gate grava piloto + oficial e preserva .bak")

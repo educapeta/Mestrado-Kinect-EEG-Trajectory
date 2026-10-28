@@ -58,6 +58,18 @@ para desenhar o plano** — a tela mostra o banner vermelho "MÃO NÃO DETECTADA
 e o console repete o aviso a cada ~5 s; o take não avança até a mão aparecer.
 Não é bug e não tem relação com a pose atual: é o guia que é ancorado na mão.
 
+## Sinal da normal (corrigido no item 131)
+
+A normal medida pelo Kinect tem sinal ambíguo (SVD) e é orientada por uma
+referência anatômica (`transversal = index−pinky`, `longitudinal = middle−punho`,
+`cross(transversal, longitudinal)`, espelhada para a esquerda). O estabilizador
+de janela (`normal_robusta`) alinhava o sinal pela **normal anterior**; isso
+impedia uma virada REAL de ~180° entre poses (palma→dorso, ±Z/±X): a mediana
+ficava com o sinal antigo, o QA ia a ~170° e o take era recusado. No modo X a
+janela agora usa a **normal anatômica instantânea** como referência de sinal
+(continua valendo para J/V); a pose 1 também foi marcada para ser feita **SEM
+folha** (com a palma virada para a lente, a folha bloqueia a mão/landmarks).
+
 ## As 9 poses (por mão)
 
 O campo `dedos` é só a direção de referência para padronizar a **rolagem** do
@@ -65,7 +77,7 @@ punho (seta ciana) — não entra na verdade.
 
 | # | Nome | Alvo (x, y, z) | Instrução resumida | Tipo |
 |---|---|---|---|---|
-| 1 | PALMA PARA A CAMERA | (0, 0, −1) | Palma de FRENTE para a câmera: folha paralela ao plano da imagem; dedos para CIMA | geométrica |
+| 1 | PALMA PARA A CAMERA | (0, 0, −1) | Palma de FRENTE para a câmera **SEM folha** (ela bloquearia a mão): mão aberta, palma paralela ao plano da imagem; dedos para CIMA | geométrica |
 | 2 | DORSO PARA A CAMERA | (0, 0, +1) | Dorso de frente (palma para longe): plano do dorso paralelo à imagem; dedos para CIMA | geométrica |
 | 3 | PALMA PARA A DIREITA | (+1, 0, 0) | Mão de perfil: palma apontando para a DIREITA da imagem; dedos para CIMA | geométrica |
 | 4 | PALMA PARA A ESQUERDA | (−1, 0, 0) | Mão de perfil: palma apontando para a ESQUERDA; dedos para CIMA | geométrica |

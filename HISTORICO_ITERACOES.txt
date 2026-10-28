@@ -8195,3 +8195,55 @@ e o depth funcionando (o status do tool mostra depth/mao; o console avisa). Se
 aparecer o banner mesmo com a mao visivel, investigar mapeamento cor-depth
 (nao e' o guia: e' a posicao 3D da palma que nao existe).
 
+
+
+================================================================================
+ITEM 131 (23/10/2026) - QA ~170 GRAUS NO MODO X: bug de SINAL da normal
+    robusta (continuidade impedia virada real de 180 graus entre poses)
+================================================================================
+SINTOMA (bancada, item 130 em diante): no X, pose 1 (PALMA PARA A CAMERA) o QA
+mostrava ~170 graus e nenhum take era gravado. O usuario insistia que estava
+mostrando a PALMA (nao o dorso) e que o Kinect "se confunde com o sentido do
+vetor" ha' tempos.
+DIAGNOSTICO (codigo, confirmado numericamente):
+  - O QA do X NAO usa o IMU: e' o angulo entre a normal da palma medida pelo
+    Kinect (landmarks+depth) e o alvo geometrico exato da pose. Um QA de 170
+    graus e' uma recusa de EXECUCAO/medida, nao erro de T/f.
+  - `normal_robusta` (janela que estabiliza a normal) alinhava o sinal de TODOS
+    os quadros pela `normal_anterior` (continuidade). Isso impede uma virada
+    REAL de ~180 graus: se a mao muda de palma-para-camera para dorso-para-
+    camera (ou entre alvos +-Z/+-X/+-Y do X), os novos vetores sao invertidos
+    para combinar com o anterior e a MEDIANA FICA COM O SINAL ANTIGO.
+    Confirmado: historico com verdade -Z, normal_anterior +Z -> mediana +Z
+    (errada); com `referencia_sinal=-Z` -> mediana -Z (correta).
+  - No X a sequencia de alvos inclui viradas de 180 graus; combinado com a
+    historia do J/poses anteriores (palma para a camera, -Z), a continuidade
+    travava o sinal e o QA ia a ~170 no primeiro alvo que nao batia com o
+    sinal "congelado". Era um BUG DE SOFTWARE, nao a mao do usuario.
+CORRECAO
+  - `normal_robusta(..., referencia_sinal=None)`: quando fornecida, usa essa
+    direcao (ex.: normal ANATOMICA instantanea, `normal_plano_lado`) para
+    decidir o sinal da mediana; `normal_anterior` continua valendo como antes
+    quando a referencia nao e' dada (J/V inalterados).
+  - No modo X o tool agora: (a) passa `referencia_sinal=normal_plano_lado` ao
+    robusto; (b) chama `palm_plane_camera` com `normal_anterior=None` (sinal
+    anatomico por frame, sem continuidade); (c) pose 1 foi marcada SEM FOLHA
+    (com a palma virada para a lente a folha bloqueia mao/landmarks) e o texto
+    de inicio do X explica que a folha e' para as poses de perfil.
+  - Overlay: se o QA ainda passar de ~150 graus, mostra em vermelho "NORMAL
+    INVERTIDA (~180) -- confirme PALMA x DORSO e a mao em quadro" (diagnostico
+    para o operador, sem auto-inverter nada).
+  - Teste novo em test_calibracao_geometrica.py (secao 3b2): documenta o bug da
+    continuidade (trava +Z) e valida que `referencia_sinal` permite a virada
+    (-Z); confere que o tool usa `referencia_sinal` no X. Testes focados da
+    palma: 6/6 OK.
+OBSERVACAO IMPORTANTE DA BANCADA: o J rodado pelo usuario NAO atualizou
+`imu_palm_alignment_*.json` (arquivos ainda de 22/10, residuos 3.65/3.71) -- ou
+seja, o "J conseguiu" foi captura/relatorio, mas o gate nao gravou o oficial.
+O X resolve T/f por conta propria e, se passar no gate, e' ele que grava; se o
+X falhar, refazer J e conferir as mensagens de espalhamento/residuo.
+PENDENCIAS: reiniciar o tool (codigo novo) e refazer X na bancada; a pose 1 deve
+ser feita SEM folha e com a palma de frente para a lente. Serial CP210x continua
+morta (driver 2016 + selective suspend) -- usar `--sem-calibra-imu`; resolver o
+auto-reset/OTA depois (item 129).
+

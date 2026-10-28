@@ -3366,11 +3366,17 @@ def main():
                 # normal do plano (punho + 4 MCPs) e' o que o usuario pediu
                 # ("plano medio entre os nos do dorso") e serve para comparar
                 # ao vivo com o vetor do IMU e para refazer T/f.
+                _modo_geo_lado = (calib_geo is not None and calib_geo.ativa
+                                  and calib_geo.lado == lado)
                 plano_lado = (
                     None if landmarks_lado is None
                     else tracker.palm_plane_camera(
                         landmarks_lado, lado,
-                        normal_anterior=ultimo_plano_camera[lado],
+                        # No modo X o sinal tem de vir da ANATOMIA a cada frame:
+                        # a continuidade com a pose anterior invertia a normal
+                        # nas viradas de ~180 graus (item 131).
+                        normal_anterior=(None if _modo_geo_lado
+                                         else ultimo_plano_camera[lado]),
                         rms_max_m=0.015))
                 if plano_lado is None:
                     normal_plano_lado, rms_plano_lado = None, None
@@ -3389,7 +3395,12 @@ def main():
                         hist_plano_camera[lado],
                         normal_anterior=plano_robusto_anterior[lado],
                         tolerancia_deg=PLANO_ROBUSTO_TOLERANCIA_DEG,
-                        minimo_fracao=PLANO_ROBUSTO_FRACAO_MIN)
+                        minimo_fracao=PLANO_ROBUSTO_FRACAO_MIN,
+                        # X: sinal pela normal anatomica instantanea (permite
+                        # a virada real de 180 graus entre poses); J/V mantem
+                        # o comportamento antigo de continuidade.
+                        referencia_sinal=(normal_plano_lado
+                                          if _modo_geo_lado else None))
                     if plano_estavel is not None:
                         plano_robusto_anterior[lado] = plano_estavel
                         if (normal_plano_lado is not None
@@ -4353,6 +4364,14 @@ def main():
                     cv2.putText(display, _pose_geo["instrucao"][:92],
                                 (12, 346), cv2.FONT_HERSHEY_SIMPLEX, 0.5,
                                 (255, 255, 0), 1)
+                    if (_prog_geo["qa_deg"] is not None
+                            and _prog_geo["qa_deg"] > 150.0):
+                        cv2.putText(
+                            display,
+                            "NORMAL INVERTIDA (~180 deg) -- confirme PALMA x "
+                            "DORSO e a mao em quadro",
+                            (12, 402), cv2.FONT_HERSHEY_SIMPLEX, 0.55,
+                            (0, 0, 255), 2)
                 cv2.putText(display, "N: pular pose | X: cancelar",
                             (12, 374), cv2.FONT_HERSHEY_SIMPLEX, 0.55,
                             (200, 200, 200), 1)
@@ -4735,8 +4754,9 @@ def main():
                         "CALIBRACAO GEOMETRICA -- MAO DIREITA PRIMEIRO "
                         "(uma mao por vez).\n"
                         "  - Deixe a OUTRA mao fora do quadro/parada;\n"
-                        "  - Cole uma FOLHA RIGIDA (papelao/plastico) na palma "
-                        "para alinhar o plano com o quadro MAGENTA;\n"
+                        "  - FOLHA RIGIDA (papelao/plastico) na palma ajuda nas "
+                        "poses de PERFIL; NAO use na pose 1 (palma para a "
+                        "camera: a folha bloqueia mao/landmarks);\n"
                         "  - O quadro/setas do video sao o ALVO EXATO no "
                         "referencial da camera; a seta CIANO guia os dedos;\n"
                         "  - Alinhe, fique PARADO 2 s com QA <= "

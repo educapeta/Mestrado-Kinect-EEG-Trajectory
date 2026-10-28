@@ -676,9 +676,10 @@ mão, uma mão por vez, ajuste T/f híbrido ponderado e gate próprio (≥ 7 tak
 mira ≤ 20 graus) antes de tocar o `imu_palm_alignment_<lado>.json` (o anterior
 sempre vira `.json.bak`).
 
-- Folha RÍGIDA na palma (papelão/plástico, sem cobrir dedos/landmarks); quadro
-  MAGENTA = plano-alvo, seta CIANA = referência dos dedos; QA ≤ 8 graus + 2 s
-  parado gravam o take; `N` pula pose (útil nas de perfil), `X` cancela.
+- Folha RÍGIDA na palma ajuda nas poses de PERFIL — mas **não use na pose 1**
+  (palma para a câmera: a folha bloqueia mão/landmarks); quadro MAGENTA =
+  plano-alvo, seta CIANA = referência dos dedos; QA ≤ 8 graus + 2 s parado
+  gravam o take; `N` pula pose (útil nas de perfil), `X` cancela.
 - Sempre grava o JSON piloto `calibracao_geometrica_<lado>_<timestamp>.json`
   (dados brutos + solução + LOO + validação da mira) para auditoria.
 - AINDA não testado na bancada: rode `J` + `V` na mesma sessão e compare no

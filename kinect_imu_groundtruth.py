@@ -192,8 +192,10 @@ _R2 = 0.7071067811865476
 POSES_CALIBRACAO_GEOMETRICA = (
     {"nome": "PALMA PARA A CAMERA", "tipo": "geometrica",
      "alvo": (0.0, 0.0, -1.0), "dedos": (0.0, 1.0, 0.0),
-     "instrucao": "Palma de FRENTE para a camera: plano da mao (folha) "
-                  "PARALELO ao plano da imagem; dedos para CIMA na imagem."},
+     "instrucao": "Palma de FRENTE para a camera, SEM folha (com a palma "
+                  "virada para a lente a folha bloqueia a mao/landmarks): "
+                  "mao aberta, palma paralela ao plano da imagem, dedos para "
+                  "CIMA."},
     {"nome": "DORSO PARA A CAMERA", "tipo": "geometrica",
      "alvo": (0.0, 0.0, 1.0), "dedos": (0.0, 1.0, 0.0),
      "instrucao": "Dorso de frente para a camera (palma para LONGE): plano do "
@@ -1381,7 +1383,8 @@ def resgatar_profundidade(depth_mm, z_priors_m, tolerancia_m=0.30,
 
 
 def normal_robusta(historico, normal_anterior=None, tolerancia_deg=10.0,
-                   minimo_fracao=0.70, minimo_amostras=4):
+                   minimo_fracao=0.70, minimo_amostras=4,
+                   referencia_sinal=None):
     """(normal_mediana, fracao_inliers) tolerante a OUTLIERS de 1-2 quadros.
 
     Por que existe (item 112, medido no log do usuario): no CSV de 22/10 o
@@ -1395,6 +1398,15 @@ def normal_robusta(historico, normal_anterior=None, tolerancia_deg=10.0,
     concorda, a mediana e valida -- um ou dois outliers nao derrubam.
     O sinal e alinhado pela `normal_anterior` (continuidade), se dada; senao
     pelo primeiro vetor da janela.
+
+    ATENCAO (item 131): alinhar o sinal pela continuidade IMPEDE uma virada
+    real de ~180 graus da mao (ex.: palma -> dorso entre poses): o novo conjunto
+    e' invertido para combinar com o anterior e a mediana fica com o sinal
+    ANTIGO. Na calibracao geometrica (tecla X), que alterna alvos ±Z/±X/±Y, isso
+    travava o QA em ~170 graus e nenhum take era gravado. Para esses casos,
+    `referencia_sinal` (ex.: a normal ANATOMICA instantanea, ainda no mesmo
+    referencial) define o sinal da mediana; `normal_anterior` continua valendo
+    so' quando `referencia_sinal` nao e' dada.
     """
     vetores = []
     for valor in historico:
@@ -1408,7 +1420,15 @@ def normal_robusta(historico, normal_anterior=None, tolerancia_deg=10.0,
     if len(vetores) < int(minimo_amostras):
         return None, 0.0
     referencia = None
-    if normal_anterior is not None:
+    # 1) referencia EXPLICITA de sinal (ex.: normal anatomica instantanea do
+    #    modo X) -- permite a virada real de 180 graus entre poses.
+    if referencia_sinal is not None:
+        sinal = np.asarray(referencia_sinal, np.float64).reshape(3)
+        norma_sinal = float(np.linalg.norm(sinal))
+        if np.isfinite(sinal).all() and norma_sinal > 1e-9:
+            referencia = sinal / norma_sinal
+    # 2) continuidade com a normal anterior (comportamento antigo de J/V)
+    if referencia is None and normal_anterior is not None:
         anterior = np.asarray(normal_anterior, np.float64).reshape(3)
         norma = float(np.linalg.norm(anterior))
         if np.isfinite(anterior).all() and norma > 1e-9:
