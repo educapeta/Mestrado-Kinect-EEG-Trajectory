@@ -667,21 +667,25 @@ vermelho ao girar a mão.
 
 ## Calibração geométrica da palma (item 127, tecla X)
 
-Complemento do `J`/`V`. **Novo protocolo (item 139)**: em vez de poses de
-perfil edge-on (onde a normal do Kinect se perde), a tecla `X` usa **9 posições
-de mira deslocadas** — centro (~45 cm), esquerda (~25 cm), direita, cima
-(~20 cm), baixo e 4 diagonais — todas com a **PALMA MIRANDO A LENTE**. A verdade
-é a posição 3D (`−normalize(posição)`), o plano da mão fica oblíquo (bem
-condicionado) e o QA usa o ângulo dobrado (≤ 10°). O quadro MAGENTA é o plano
-perpendicular à linha mão→lente e a seta CIANA guia os dedos; 2 s parado grava
-o take. Cada take novo precisa estar a ≥ 15° da direção de qualquer take
-anterior (senão "MOVA A MÃO"); o gate exige espalhamento min ≥ 15° e max ≥ 30°,
-resíduo ≤ 12°, LOO ≤ 15° e grava piloto + oficial (o anterior vira `.json.bak`).
-`N` pula pose, `X` cancela; **`F`** força um take com QA efetivo até 35° quando
-você confirmar o alinhamento (marcado `forcado`); a cada take é salvo um JSON
-parcial `calibracao_geometrica_<lado>_parcial.json`. O vetor verde usa, quando
-necessário, a normal robusta de 21 landmarks + estabilizador de sinal (item
-138), e o log `[GEO]` mostra `nfonte=edge21(...)`.
+Complemento do `J`/`V`. **Protocolo atual (itens 139/141)**: em vez de poses
+de perfil edge-on, a tecla `X` usa **13 poses por mão**:
+- **9 posições de mira deslocadas** — centro (~45 cm), esquerda (~25 cm),
+  direita, cima (~20 cm), baixo e 4 diagonais — todas com a **PALMA MIRANDO A
+  LENTE** (verdade = `−normalize(posição 3D)`, plano oblíquo, QA dobrado ≤10°);
+- **4 poses geométricas inclinadas** — alvos exatos a **50° direita/esquerda** e
+  **60° cima/baixo** do eixo −Z: a palma é INCLINADA até o quadro MAGENTA (não
+  aponta para a lente); são intermediárias (nada de edge-on) e aumentam o
+  espalhamento; QA bruto ≤8° (ou `F` até 35° com confirmação).
+
+O quadro MAGENTA mostra o plano-alvo e a seta CIANA os dedos; 2 s parado grava o
+take. Nas 9 de mira, cada take novo precisa estar a ≥15° da direção de qualquer
+take anterior (senão "MOVA A MÃO"); o gate exige ≥7 takes, espalhamento min
+≥15° e max ≥30°, resíduo ≤12°, pior inclinada ≤20° e LOO ≤15°, e grava piloto +
+oficial (o anterior vira `.json.bak`). `N` pula pose, `X` cancela; **`F`** força
+um take com QA até 35° quando você confirmar o alinhamento (marcado `forcado`);
+a cada take é salvo um JSON parcial `calibracao_geometrica_<lado>_parcial.json`.
+O vetor verde usa, quando necessário, a normal robusta de 21 landmarks +
+estabilizador de sinal (item 138); o log `[GEO]` mostra `nfonte=edge21(...)`.
 - AINDA não testado na bancada: rode `J` + `V` na mesma sessão e compare no
   teste de mira.
 - Passo a passo, convenção de eixos (X = direita, Y = cima, Z para dentro da

@@ -241,6 +241,34 @@ POSES_CALIBRACAO_GEOMETRICA = (
      "alvo": None, "dedos": None,
      "instrucao": "Mao na diagonal DIREITA+CIMA (~20 cm em cada eixo); "
                   "PALMA MIRANDO A LENTE."},
+    # --- 4 poses GEOMETRICAS INCLINADAS (item 141): alvos EXATOS a 50/60
+    # graus do eixo -Z. Sao INTERMEDIARIAS (nao paralelas ao eixo, nem
+    # edge-on): a profundidade ainda condiciona bem a normal e o alvo exato
+    # aumenta o espalhamento do ajuste. Mire o quadro MAGENTA, nao a lente.
+    {"nome": "INCLINADA 50 DIREITA", "tipo": "geometrica", "sinal": 1.0,
+     "alvo": (0.766044443, 0.0, -0.642787610),
+     "dedos": (0.0, 1.0, 0.0),
+     "instrucao": "Mao no centro (~45 cm); INCLINE a palma ~50 graus para a "
+                  "DIREITA da imagem (nao aponte para a lente); alinhe ao "
+                  "quadro MAGENTA; dedos para CIMA."},
+    {"nome": "INCLINADA 50 ESQUERDA", "tipo": "geometrica", "sinal": 1.0,
+     "alvo": (-0.766044443, 0.0, -0.642787610),
+     "dedos": (0.0, 1.0, 0.0),
+     "instrucao": "Mao no centro (~45 cm); INCLINE a palma ~50 graus para a "
+                  "ESQUERDA da imagem; alinhe ao quadro MAGENTA; dedos para "
+                  "CIMA."},
+    {"nome": "INCLINADA 60 CIMA", "tipo": "geometrica", "sinal": 1.0,
+     "alvo": (0.0, 0.866025404, -0.5),
+     "dedos": (1.0, 0.0, 0.0),
+     "instrucao": "Mao no centro (~45 cm); INCLINE a palma ~60 graus para "
+                  "CIMA na imagem (nao aponte para a lente); alinhe ao quadro "
+                  "MAGENTA; dedos para a DIREITA."},
+    {"nome": "INCLINADA 60 BAIXO", "tipo": "geometrica", "sinal": 1.0,
+     "alvo": (0.0, -0.866025404, -0.5),
+     "dedos": (1.0, 0.0, 0.0),
+     "instrucao": "Mao no centro (~45 cm); INCLINE a palma ~60 graus para "
+                  "BAIXO na imagem; alinhe ao quadro MAGENTA; dedos para a "
+                  "DIREITA."},
 )
 
 

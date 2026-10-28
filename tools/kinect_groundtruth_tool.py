@@ -445,7 +445,7 @@ def finalizar_calibracao_geometrica(calib, fusion, participante="",
     if resolucao["n_takes"] < CALIB_GEO_MIN_TAKES + 1:
         gate = False
         motivos.append(f"takes {resolucao['n_takes']} < "
-                       f"{CALIB_GEO_MIN_TAKES + 1} (9 posicoes de mira)")
+                       f"{CALIB_GEO_MIN_TAKES + 1} (13 poses: 9 mira + 4 inclinadas)")
     if resolucao["residual_deg"] > CALIB_GEO_MAX_RESIDUO_DEG:
         gate = False
         motivos.append(f"residuo {resolucao['residual_deg']:.1f} > "
@@ -4978,10 +4978,14 @@ def main():
                         "CALIBRACAO GEOMETRICA -- MAO DIREITA PRIMEIRO "
                         "(uma mao por vez).\n"
                         "  - Deixe a OUTRA mao fora do quadro/parada;\n"
-                        "  - NOVO PROTOCOLO: 9 POSICOES DE MIRA deslocadas, "
+                        "  - NOVO PROTOCOLO: 9 POSICOES DE MIRA + 4 INCLINADAS, "
                         "SEM poses edge-on. Em TODAS aponte a PALMA para a "
                         "LENTE e desloque a mao: centro, esquerda (~25 cm), "
                         "direita, cima (~20 cm), baixo e 4 diagonais;\n"
+                        "  - DEPOIS DAS 9: 4 INCLINADAS (50 graus esq/dir, "
+                        "60 graus cima/baixo). Mao no centro; INCLINE a "
+                        "palma para o alvo do quadro MAGENTA (NAO aponte "
+                        "para a lente); dedos conforme a seta ciana;\n"
                         "  - O quadro MAGENTA e' o plano-alvo (perpendicular "
                         "a linha mao->lente) e a seta CIANO guia os dedos; "
                         "alinhe a folha/mao ao quadro;\n"

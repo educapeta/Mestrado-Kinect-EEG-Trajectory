@@ -295,3 +295,24 @@ Código envolvido: `kinect_imu_groundtruth.py` (constantes `CALIB_GEO_*`,
 (`solve_palm_alignment_pesos`), `tools/kinect_groundtruth_tool.py` (teclas
 `X`/`N`, overlay `desenhar_guia_plano_palma`,
 `finalizar_calibracao_geometrica`) e `test_calibracao_geometrica.py`.
+
+
+## ADENDO (item 141): 4 POSES GEOMÉTRICAS INCLINADAS
+
+Depois das 9 posições de mira entram **4 poses geométricas intermediárias**
+(alvos EXATOS, para o operador não precisar estimar posição):
+
+| # | Nome | Alvo (x, y, z) | Instrução |
+|---|---|---|---|
+| 10 | INCLINADA 50 DIREITA | (0,766; 0; −0,643) | mão no centro; incline a palma ~50° para a DIREITA da imagem; dedos para CIMA |
+| 11 | INCLINADA 50 ESQUERDA | (−0,766; 0; −0,643) | mão no centro; incline a palma ~50° para a ESQUERDA; dedos para CIMA |
+| 12 | INCLINADA 60 CIMA | (0; 0,866; −0,5) | mão no centro; incline a palma ~60° para CIMA na imagem; dedos para a DIREITA |
+| 13 | INCLINADA 60 BAIXO | (0; −0,866; −0,5) | mão no centro; incline a palma ~60° para BAIXO; dedos para a DIREITA |
+
+São **intermediárias**: nem paralelas ao eixo −Z nem edge-on (perpendiculares).
+O componente `z` ainda é grande (−0,64 ou −0,50), então a profundidade condiciona
+bem a normal; e os alvos exatos aumentam o espalhamento do ajuste. Nestas 4 o
+QA é o **bruto** (≤8°; `F` permite até 35° com confirmação), ao contrário das 9
+de mira que usam QA dobrado. A ordem final do X é: 9 posições (1–9) + 4
+inclinadas (10–13), depois a mão esquerda. O gate continua o mesmo (≥7 takes,
+espalhamento, resíduo, pior inclinada ≤20°, LOO ≤15°).

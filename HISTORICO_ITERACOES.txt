@@ -8555,3 +8555,43 @@ O tamanho continua ajustavel pelo parametro `tamanho_m` de
 `desenhar_guia_plano_palma`. Teste funcional do tool (static check do guia)
 continua OK; suite completa roda no commit.
 
+
+
+================================================================================
+ITEM 141 (28/10/2026) - OPCAO B: 4 POSES GEOMETRICAS INCLINADAS (50/60 graus)
+    somadas as 9 posicoes de mira (13 poses por mao)
+================================================================================
+CONTEXTO: o usuario perguntou se dava para incluir posicoes INTERMEDIARIAS,
+nem perpendiculares ao eixo do video (edge-on) nem paralelas (palma de frente).
+As 9 posicoes de mira ja' sao intermediarias (24-29 graus de deslocamento da
+normal), mas o espalhamento do conjunto e' limitado por FOV/depth do Kinect.
+Opcao escolhida: B -- adicionar 4 poses GEOMETRICAS INCLINADAS com alvos
+exatos, sem edge-on, para aumentar o espalhamento e o condicionamento.
+IMPLEMENTADO
+  - `POSES_CALIBRACAO_GEOMETRICA` passou de 9 para 13 poses (por mao):
+      1-9  posicoes de mira (centro/esq/dir/cima/baixo/4 diagonais) -- como no
+           item 139 (verdade por POSICAO, QA dobrado <= 10);
+      10   INCLINADA 50 DIREITA   alvo (0.766, 0, -0.643) -- geometrica;
+      11   INCLINADA 50 ESQUERDA  alvo (-0.766, 0, -0.643) -- geometrica;
+      12   INCLINADA 60 CIMA      alvo (0, 0.866, -0.5) -- geometrica;
+      13   INCLINADA 60 BAIXO     alvo (0, -0.866, -0.5) -- geometrica.
+    Nas 4 inclinadas o operador NAO aponta a palma para a lente: inclina a mao
+    ate o quadro MAGENTA (a seta ciana da os dedos). O QA e' BRUTO <= 8 graus
+    (ou F ate 35 com confirmacao, registrado forcado).
+  - Justificativa: |nz| = 0.643 (50 graus) e 0.5 (60 graus) mantem profundidade
+    suficiente (edge-on seria |nz| ~ 0); os alvos exatos evitam erro de verdade
+    e o espalhamento minimo do conjunto fica maior (a inclinada de 50 graus
+    dista ~21 graus da posicao de mira correspondente).
+  - Texto do X e mensagem do gate atualizados para 13 poses (9 mira + 4
+    inclinadas); o overlay ja' desenhava o quadro magenta para geometricas.
+  - Testes sinteticos: helper `alimentar_calibracao` percorre as 13 poses (9
+    posicoes + 4 alvos); checks de quantidade 13; gate/LOO/espalhamento OK;
+    finalizar piloto/parcial com 13 posicoes; suite completa roda no commit.
+  - Docs/README: tabela das 4 inclinadas, ordem das 13 e explicacao de que sao
+    intermediarias; protocolo antigo continua marcado como historico.
+PROXIMA BANCADA: X com 13 poses por mao. Fazer as 9 de mira (palma na lente,
+deslocando a mao) e depois as 4 inclinadas (mao no centro, inclinar a palma
+para o alvo do quadro, sem apontar para a lente). Se aparecer "MOVA A MAO"
+nas 9, deslocar mais; nas inclinadas, usar F se QA 8-35 e visualmente alinhado.
+O gate deve salvar o oficial ao completar; depois validar vermelho x verde.
+

@@ -83,16 +83,30 @@ deslocamentos_sinteticos = [
     (0.00, -0.20), (0.18, 0.15), (-0.18, -0.15), (-0.18, 0.15),
     (0.18, -0.15),
 ]
-agora = 0.0
-for desloc_x, desloc_y in deslocamentos_sinteticos:
-    posicao = np.array([desloc_x, desloc_y, 0.45])
-    verdade = -posicao / np.linalg.norm(posicao)
-    R = k._rotacao_a_para_b(f_verdade, T_verdade.T @ verdade)
-    for _ in range(25):
-        agora += 0.1
-        calib.amostra(agora, R, posicao, verdade)
 
-check("gravou 9 takes", len(calib.capturas) == 9, len(calib.capturas))
+
+def alimentar_calibracao(calib, agora=0.0):
+    """Preenche a calibracao sintetica: 9 posicoes de mira + 4 inclinadas."""
+    indice_pos = 0
+    for pose in calib.poses:
+        if pose["tipo"] == "posicao":
+            desloc_x, desloc_y = deslocamentos_sinteticos[indice_pos]
+            indice_pos += 1
+            posicao = np.array([desloc_x, desloc_y, 0.45])
+            verdade = -posicao / np.linalg.norm(posicao)
+        else:
+            posicao = np.array([0.10, 0.05, 0.45])
+            verdade = np.asarray(pose["alvo"], np.float64)
+            verdade = verdade / np.linalg.norm(verdade)
+        R = k._rotacao_a_para_b(f_verdade, T_verdade.T @ verdade)
+        for _ in range(25):
+            agora += 0.1
+            calib.amostra(agora, R, posicao, verdade)
+    return agora
+
+
+agora = alimentar_calibracao(calib)
+check("gravou 13 takes", len(calib.capturas) == 13, len(calib.capturas))
 check("completa", calib.completa is True)
 resultado = calib.resultado()
 check("resultado sem erro", "erro" not in resultado, resultado.get("erro"))
@@ -314,17 +328,10 @@ tool = importlib.util.module_from_spec(spec_tool)
 spec_tool.loader.exec_module(tool)
 
 calib_final = k.CalibracaoGeometrica("right", avisar=lambda *_a: None)
-agora = 0.0
-for desloc_x, desloc_y in deslocamentos_sinteticos:
-    posicao = np.array([desloc_x, desloc_y, 0.45])
-    verdade = -posicao / np.linalg.norm(posicao)
-    R = k._rotacao_a_para_b(f_verdade, T_verdade.T @ verdade)
-    for _ in range(25):
-        agora += 0.1
-        calib_final.amostra(agora, R, posicao, verdade)
+alimentar_calibracao(calib_final)
 
 check("finalizar: calibracao sintetica completa",
-      calib_final.completa and len(calib_final.capturas) == 9)
+      calib_final.completa and len(calib_final.capturas) == 13)
 
 cwd_anterior = os.getcwd()
 avisos_final = []
@@ -348,8 +355,8 @@ with tempfile.TemporaryDirectory(prefix="calib_geo_") as tmp:
         check("finalizar: oficial gravado", oficial.exists())
         if pilotos:
             piloto = json.loads(pilotos[0].read_text(encoding="utf-8"))
-            check("finalizar: piloto com 9 posicoes",
-                  len(piloto.get("posicoes", ())) == 9)
+            check("finalizar: piloto com 13 posicoes",
+                  len(piloto.get("posicoes", ())) == 13)
             check("finalizar: piloto sem NaN/Infinity",
                   "NaN" not in pilotos[0].read_text(encoding="utf-8")
                   and "Infinity" not in pilotos[0].read_text(encoding="utf-8"))
@@ -373,8 +380,8 @@ with tempfile.TemporaryDirectory(prefix="calib_geo_") as tmp:
         if _parcial is not None and _parcial.exists():
             _dados_parcial = json.loads(
                 _parcial.read_text(encoding="utf-8"))
-            check("parcial: n_takes 9",
-                  _dados_parcial.get("n_takes") == 9,
+            check("parcial: n_takes 13",
+                  _dados_parcial.get("n_takes") == 13,
                   _dados_parcial.get("n_takes"))
     finally:
         os.chdir(cwd_anterior)
