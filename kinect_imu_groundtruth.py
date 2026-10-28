@@ -358,36 +358,66 @@ class CalibracaoGeometrica:
 
     # -- amostra --------------------------------------------------------
     def amostra(self, now, rotacao, posicao_palma, normal_medida):
-        """Recebe uma amostra; devolve evento {'tipo': 'take'...} ou None."""
+        """Recebe uma amostra; devolve evento {'tipo': 'take'...} ou None.
+
+        `normal_medida` e' usada como QA apenas nas poses GEOMETRICAS. Nas
+        poses de POSICAO (palma/dorso mirando a lente, mira) a verdade vem da
+        posicao 3D da mao: o Kinect pode inverter o sentido da normal
+        (palma x dorso) e isso NAO pode bloquear o take -- o QA fica apenas
+        informativo (item 135).
+        """
         if not self.ativa or self.completa:
             return None
         pose = self.pose_atual
-        if rotacao is None or posicao_palma is None or normal_medida is None:
+        tipo_pose = pose.get("tipo", "geometrica")
+        if rotacao is None or posicao_palma is None:
             self.qa_atual = None
             self._inicio_ok = None
-            self.status = "SEM MAO/PLANO -- mostre a mao e o plano da palma"
+            self.status = "SEM MAO -- mostre a mao para o Kinect"
             return None
         rot = np.asarray(rotacao, np.float64)
         pos = np.asarray(posicao_palma, np.float64).reshape(3)
-        normal = np.asarray(normal_medida, np.float64).reshape(3)
-        norma = np.linalg.norm(normal)
         if (rot.shape != (3, 3) or not np.isfinite(rot).all()
-                or norma < 1e-9 or not np.isfinite(pos).all()):
+                or not np.isfinite(pos).all()):
             self.qa_atual = None
             self._inicio_ok = None
             return None
-        normal = normal / norma
+        normal = None
+        if normal_medida is not None:
+            try:
+                candidato = np.asarray(normal_medida, np.float64).reshape(3)
+                norma_normal = float(np.linalg.norm(candidato))
+                if np.isfinite(candidato).all() and norma_normal > 1e-9:
+                    normal = candidato / norma_normal
+            except (TypeError, ValueError):
+                normal = None
         verdade = self._verdade(pose, pos)
         if verdade is None:
             self.qa_atual = None
             self._inicio_ok = None
             return None
-        self.qa_atual = angle_between(normal, verdade)
-        if not np.isfinite(self.qa_atual) or                 self.qa_atual > CALIB_GEO_QA_MAX_DEG:
-            self._inicio_ok = None
-            self.status = (f"ALINHE o plano ao alvo (desvio "
-                           f"{self.qa_atual:.1f} > {CALIB_GEO_QA_MAX_DEG:g})")
-            return None
+        self.qa_atual = (None if normal is None
+                         else angle_between(normal, verdade))
+        if tipo_pose == "geometrica":
+            if (normal is None or self.qa_atual is None
+                    or not np.isfinite(self.qa_atual)
+                    or self.qa_atual > CALIB_GEO_QA_MAX_DEG):
+                self._inicio_ok = None
+                if normal is None:
+                    self.status = "SEM PLANO do Kinect -- mostre o dorso da mao"
+                else:
+                    self.status = (
+                        f"ALINHE o plano ao alvo (desvio "
+                        f"{self.qa_atual:.1f} > {CALIB_GEO_QA_MAX_DEG:g})")
+                return None
+        else:
+            # Pose de POSICAO: QA do Kinect so' informativo.
+            if self.qa_atual is not None and np.isfinite(self.qa_atual):
+                self.status = (f"MIRANDO (QA Kinect {self.qa_atual:.1f} -- "
+                               "nao bloqueia; verdade=posicao)")
+            else:
+                self.status = "MIRANDO (posicao; normal do Kinect indisponivel)"
+
         if self._ultima_rot is not None:
             mudou_rot = _angulo_rotacoes(rot, self._ultima_rot)
             mudou_pos = float(np.linalg.norm(pos - self._ultima_pos))
@@ -419,10 +449,12 @@ class CalibracaoGeometrica:
             "alvo": (None if pose.get("alvo") is None
                      else np.asarray(pose["alvo"], np.float64).tolist()),
             "verdade": verdade.tolist(),
-            "qa_deg": float(self.qa_atual),
+            "qa_deg": (None if self.qa_atual is None
+                       or not np.isfinite(self.qa_atual)
+                       else float(self.qa_atual)),
             "rotacao": rot.tolist(),
             "posicao": pos.tolist(),
-            "normal_medida": normal.tolist(),
+            "normal_medida": (None if normal is None else normal.tolist()),
         }
         self.capturas.append(captura)
         self.indice += 1

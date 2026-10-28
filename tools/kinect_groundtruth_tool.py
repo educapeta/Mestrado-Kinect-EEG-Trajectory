@@ -456,7 +456,10 @@ def finalizar_calibracao_geometrica(calib, fusion, participante="",
     avisar(f"takes: {resolucao['n_takes']} | residuo ponderado: "
            f"{resolucao['residual_deg']:.2f} graus")
     for linha in resolucao.get("por_pose", ()):
-        avisar(f"  {linha['pose']:<32} QA {linha['qa_deg']:5.1f} | "
+        _qa_pose = linha.get("qa_deg")
+        _qa_txt = ("  -- " if _qa_pose is None
+                   else f"{_qa_pose:5.1f}")
+        avisar(f"  {linha['pose']:<32} QA {_qa_txt} | "
                f"erro {linha['erro_deg']:5.2f} graus")
     if resolucao.get("validacao_mira"):
         val = resolucao["validacao_mira"]
@@ -4811,6 +4814,9 @@ def main():
                         "  - 6 poses geometricas (perfil/diagonais) + 3 de "
                         "POSICAO: palma e dorso mirando a lente + mira "
                         "deslocada (~20 cm a esquerda);\n"
+                        "  - Nas 3 de POSICAO a verdade e' a POSICAO 3D: se o "
+                        "Kinect inverter palma/dorso o QA fica alto mas NAO "
+                        "bloqueia -- so' fique parado 2 s;\n"
                         "  - N pula uma pose; X cancela. No fim resolve T/f "
                         "hibrido e grava o JSON piloto (o oficial so' se o "
                         "gate passar).")

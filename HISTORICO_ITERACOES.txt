@@ -8318,3 +8318,38 @@ PALMA para a lente (sem folha), pose 2 = apontar o DORSO para a lente; depois as
 6 geometricas (folha ajuda nas de perfil). Seria bom J antes para ter fallback,
 mas o J anterior nao salvou o oficial (JSON de 22/10).
 
+
+
+================================================================================
+ITEM 135 (28/10/2026) - POSES DE POSICAO NAO DEPENDEM DA NORMAL DO KINECT:
+    o Kinect "achando" dorso quando o usuario mostra a palma nao pode mais
+    bloquear o take (o QA dessas poses passa a ser so' informativo)
+================================================================================
+SINTOMA: mesmo com as poses 1/2 em verdade por POSICAO (item 134), o usuario
+continuava vendo "desvio ~170 graus" ao apontar a PALMA para a lente e o take
+nao era gravado. Ou seja, o Kinect insistia em medir a normal invertida
+(palma x dorso) e o QA bloqueava uma pose cuja verdade NAO vem da normal.
+DIAGNOSTICO: nas poses de posicao a verdade e' `-normalize(posicao)` (ou
+`+normalize` no dorso) -- a normal do Kinect serve apenas para conferir a
+execucao. Como o sinal da normal medida pode inverter (limitacao conhecida do
+plano punho+MCPs, luva, e o proprio "palma x dorso" que o usuario relatou), esse
+QA NAO pode vetar o take: estava bloqueando uma aquisicao cuja verdade e'
+independente.
+CORRECAO (item 135)
+  - `CalibracaoGeometrica.amostra`: para pose `tipo == "posicao"` a normal do
+    Kinect e' OPCIONAL e o QA e' INFORMATIVO; o take depende so' de rotacao/
+    posicao validas + 2 s parado + gate de movimento. Status mostra
+    "MIRANDO (QA Kinect ... -- nao bloqueia; verdade=posicao)".
+  - Pose GEOMETRICA continua exigindo plano valido e QA <= 8 graus (o alvo
+    exato e' a verdade; o plano e' a unica conferencia de execucao).
+  - Captura/JSON piloto aceitam `qa_deg`/`normal_medida` None nas posicoes;
+    o relatorio do `finalizar` imprime "QA --" nesses casos.
+  - Teste novo (secao 3d): pose de posicao grava com normal INVERTIDA
+    (QA ~180); pose geometrica com normal invertida continua bloqueando.
+  - Instrucoes do X avisam: nas 3 de POSICAO, se o Kinect inverter palma/dorso
+    o QA fica alto mas NAO bloqueia -- so' ficar parado 2 s.
+DOC/README: atualizados explicando o QA informativo das posicoes.
+PROXIMA BANCADA: reiniciar o tool (codigo novo) e rodar X: poses 1/2/3
+(palma/dorso mirando a lente e mira) devem gravar mesmo com QA do Kinect
+invertido; as 6 geometricas continuam com QA obrigatorio.
+

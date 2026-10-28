@@ -206,6 +206,43 @@ check("tool usa referencia_sinal no modo X",
           "tools/kinect_groundtruth_tool.py", encoding="utf-8").read())
 
 # ============================================================================
+# 3d) poses de POSICAO ignoram o QA do Kinect (item 135)
+# ============================================================================
+print("3d) pose de POSICAO grava mesmo com Kinect invertendo palma/dorso")
+pose_posicao = [pose for pose in k.POSES_CALIBRACAO_GEOMETRICA
+                if pose["tipo"] == "posicao"][0]
+verdade_pos = (-pos_mira / np.linalg.norm(pos_mira)
+               * float(pose_posicao.get("sinal", 1.0)))
+R_pos = k._rotacao_a_para_b(f_verdade, T_verdade.T @ verdade_pos)
+calib_pos = k.CalibracaoGeometrica("right", poses=[pose_posicao],
+                                  avisar=lambda *_a: None)
+agora = 0.0
+for _ in range(25):
+    agora += 0.1
+    # normal INVERTIDA (como o Kinect "achando" que a mao e' o dorso)
+    calib_pos.amostra(agora, R_pos, pos_mira, -verdade_pos)
+check("posicao: normal invertida NAO bloqueia o take",
+      len(calib_pos.capturas) == 1, len(calib_pos.capturas))
+if calib_pos.capturas:
+    cap = calib_pos.capturas[0]
+    check("posicao: QA registrado ~180 (informativo)",
+          cap["qa_deg"] is not None and cap["qa_deg"] > 150.0,
+          cap["qa_deg"])
+    check("posicao: take nao depende da normal",
+          cap["normal_medida"] is not None)
+# geometrica continua exigindo o plano certo
+calib_geo_ruim = k.CalibracaoGeometrica("right", poses=poses_geo_teste[:1],
+                                        avisar=lambda *_a: None)
+alvo_geo = np.asarray(calib_geo_ruim.pose_atual["alvo"], np.float64)
+R_geo = k._rotacao_a_para_b(f_verdade, T_verdade.T @ alvo_geo)
+agora = 0.0
+for _ in range(30):
+    agora += 0.1
+    calib_geo_ruim.amostra(agora, R_geo, pos_geometrica, -alvo_geo)
+check("geometrica: normal invertida continua bloqueando",
+      len(calib_geo_ruim.capturas) == 0, len(calib_geo_ruim.capturas))
+
+# ============================================================================
 # 3c) finalizar_calibracao_geometrica: gate, JSON piloto e oficial + .bak
 # ============================================================================
 print("3c) finalizar: gate grava piloto + oficial e preserva .bak")

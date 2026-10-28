@@ -68,9 +68,12 @@ quando a mão está fora do eixo da câmera ou com luva. Medido na bancada
 QA dava 30-45° e a normal medida era exatamente a direção **mão→lente**. Ou
 seja, o gesto natural é mirar a lente, não alinhar o plano ao plano da imagem.
 Por isso as poses 1 e 2 passaram a usar a **verdade por posição** (`−normalize`
-para palma, `+normalize` para dorso), a mesma que o J já usava com sucesso — o
-Kinect normal serve só de conferência. As 6 poses geométricas restantes
-(±X, ±Y e diagonais) continuam com alvo EXATO no referencial da câmera.
+para palma, `+normalize` para dorso), a mesma que o J já usava com sucesso. O
+QA do Kinect nessas 3 poses (palma, dorso, mira) é **apenas informativo**: se o
+Kinect inverter palma/dorso (QA ~180°) o take **não é bloqueado** — a verdade é a
+posição 3D da mão; o operador só precisa ficar parado 2 s mirando a lente
+(item 135). As 6 poses geométricas restantes (±X, ±Y e diagonais) continuam
+com alvo EXATO no referencial da câmera e QA obrigatório.
 
 ## Sinal da normal (corrigido no item 131)
 
