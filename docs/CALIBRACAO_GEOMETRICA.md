@@ -198,6 +198,19 @@ punho (seta ciana) — não entra na verdade.
   `J`/`O` — o arquivo anterior vira `imu_palm_alignment_<lado>.json.bak`.
   Falhando, o console lista os motivos e o oficial **não é tocado**.
 
+## Edge-on e estabilizador de sinal (item 138)
+
+Para as poses de perfil (mão perpendicular ao Kinect), o plano de 5 pontos
+(punho + 4 MCPs) fica mal condicionado e o vetor verde se perdia. O tool agora,
+no modo X, quando a normal base está fraca/edge-on (`|nz| < 0.5` ou spread > 5°),
+estima a normal por **PCA com os 21 landmarks 3D** (`palm_normal_edge_on.py`,
+qualidade/RMS/confiável) e passa o resultado por um **estabilizador de sinal com
+histerese** (`palm_orientacao.py`): o sinal só vira depois de 8 amostras opostas
+consecutivas, evitando flip espúrio no meio da pose. O log `[GEO]` mostra
+`nfonte=edge21(...)` quando a normal robusta foi usada; se a qualidade for ruim,
+cai na normal antiga (nada quebra). As posições continuam com QA dobrado; as
+geométricas com QA bruto/`F` até 35°.
+
 ## Análise offline
 
 `tools/analisa_calibracao_geometrica.py` relê o JSON piloto (o mais recente por

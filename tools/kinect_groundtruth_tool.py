@@ -133,6 +133,17 @@ from imu import AncoradorYawBoot  # noqa: E402
 # boot pegou a luva em movimento; reboot parado = -0,20 graus/min).
 import imu_reset  # noqa: E402
 
+# Modulos do item 138 (gerados/validados por subagente NVIDIA Nemotron Ultra):
+# normal robusta EDGE-ON com todos os 21 landmarks e estabilizador de sinal.
+try:  # pragma: no cover - o tool funciona sem eles (fallback no codigo antigo)
+    from palm_normal_edge_on import normal_mao_landmarks
+except ImportError:  # pragma: no cover
+    normal_mao_landmarks = None
+try:  # pragma: no cover
+    from palm_orientacao import EstabilizadorSinal
+except ImportError:  # pragma: no cover
+    EstabilizadorSinal = None
+
 #: Landmark do MediaPipe Hands usado como POSICAO DA MAO (9 = centro da palma,
 #: conforme a metodologia; 0 = pulso). Mesmo valor do paradigma
 #: (`eeg_motor_paradigm.HAND_TRACK_LANDMARK`), mas definido aqui: a biblioteca
@@ -2305,6 +2316,8 @@ def main():
     ultimo_aviso_mao_geo = 0.0
     #: Throttle do log de diagnostico do X (pose/alvo/normal/QA, ~1 s).
     ultimo_log_geo = 0.0
+    #: Estabilizador de sinal por lado do modo X (item 138).
+    estabilizadores_geo = {"right": None, "left": None}
     # --- NIVEL DA MESA (item 115): referencia de gravidade medida pelo depth.
     # O usuario confirmou o Kinect nivelado em relacao a mesa; medimos o
     # PLANO DA MESA e usamos a normal como referencia das poses 2/3, o que
@@ -3508,6 +3521,52 @@ def main():
                             _pos_geo = None
                     _nrm_geo = (plano_estavel if plano_estavel is not None
                                 else normal_lado)
+                    # --- NORMAL EDGE-ON (item 138, modulo do subagente) -------
+                    # Nos alvos de perfil o plano de 5 pontos (punho+MCPs) fica
+                    # mal condicionado. Quando a normal base esta' fraca/edge-on,
+                    # estima por PCA com TODOS os 21 landmarks e estabiliza o
+                    # sinal com histerese (virada real so' depois de N frames).
+                    _nrm_geo_base = _nrm_geo
+                    _fonte_norm_geo = None
+                    _edge_on = (_nrm_geo_base is None
+                                or abs(float(_nrm_geo_base[2])) < 0.5
+                                or (spread_plano is not None
+                                    and spread_plano > 5.0))
+                    if normal_mao_landmarks is not None and _edge_on:
+                        try:
+                            _pontos_geo = {}
+                            for _indice_lm in range(21):
+                                try:
+                                    _p3d = tracker._landmark_camera_point(
+                                        landmarks_lado[_indice_lm], lado)
+                                except (AttributeError, IndexError, TypeError):
+                                    _p3d = None
+                                if _p3d is not None:
+                                    _pontos_geo[str(_indice_lm)] = _p3d
+                            _rob_geo = normal_mao_landmarks(
+                                _pontos_geo, lado=lado,
+                                referencia=(None if _nrm_geo_base is None
+                                            else _nrm_geo_base))
+                            if (_rob_geo is not None
+                                    and _rob_geo.get("normal") is not None
+                                    and _rob_geo.get("confiavel")):
+                                _normal_rob = np.asarray(
+                                    _rob_geo["normal"], np.float64)
+                                if np.isfinite(_normal_rob).all():
+                                    _estab = estabilizadores_geo.get(lado)
+                                    if _estab is not None:
+                                        _normal_estab = _estab.atualizar(
+                                            _normal_rob, now)
+                                        if _normal_estab is not None:
+                                            _normal_rob = _normal_estab
+                                    _nrm_geo = _normal_rob
+                                    plano_estavel = _normal_rob
+                                    _fonte_norm_geo = (
+                                        f"edge21({_rob_geo.get('n_pontos')}"
+                                        f"/q{_rob_geo.get('qualidade', 0):.2f}"
+                                        f"/rms{_rob_geo.get('rms_m', 0):.3f})")
+                        except Exception:  # noqa: BLE001 - nunca derrubar o X
+                            _fonte_norm_geo = None
                     # O PLANO-GUIA magenta e' ancorado na mao detectada: sem
                     # landmark+depth nao ha' origem para desenhar (o usuario
                     # remoto achou que era bug; item 130). Avisa no console
@@ -3539,6 +3598,8 @@ def main():
                                 + ("--" if _prog_diag.get(
                                     "qa_efetivo_deg") is None
                                    else f"{_prog_diag['qa_efetivo_deg']:.1f}")
+                                + ("" if _fonte_norm_geo is None
+                                   else f" | nfonte={_fonte_norm_geo}")
                                 + f" | {_prog_diag['status']}")
                             print(_linha_geo, flush=True)
                             try:
@@ -4844,6 +4905,7 @@ def main():
                         avisar=print)
                     calib_geo.parar()
                     calib_geo = None
+                    estabilizadores_geo = {"right": None, "left": None}
                     print("Calibracao geometrica cancelada"
                           + (f"; takes parciais em {_parcial.name}"
                              if _parcial is not None else ""))
@@ -4858,6 +4920,11 @@ def main():
                         if not _ancora.pronto:
                             _ancora.cancelar()
                     calib_geo = CalibracaoGeometrica("right")
+                    estabilizadores_geo = {
+                        _lado_estab: (EstabilizadorSinal()
+                                      if EstabilizadorSinal is not None
+                                      else None)
+                        for _lado_estab in ("right", "left")}
                     try:
                         with open("calibracao_geometrica_diag.log", "a",
                                   encoding="utf-8") as _fh:

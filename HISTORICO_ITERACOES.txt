@@ -8434,3 +8434,58 @@ entre 8 e 35 graus e a mao estiver visualmente alinhada ao quadro, F grava
 (registra forcado); se QA>35, ajustar. Com as 6 geometricas completas + posicoes
 o gate pode salvar o oficial; o parcial fica para auditoria de qualquer forma.
 
+
+
+================================================================================
+ITEM 138 (28/10/2026) - SUBAGENTES COM NEMOTRON 3 ULTRA (API NVIDIA): modulos
+    de sinal/QA e normal edge-on + integracao no modo X
+================================================================================
+PEDIDO: tercerizar as correcoes com o modelo `nvidia/nemotron-3-ultra-550b-a55b`
+da API NVIDIA (antes o usuario tentou `nemotron-3.5-super-vl` via OpenRouter).
+EXPERIMENTO DE MODELOS
+  - `nvidia/nemotron-3.5-super-vl:free` (OpenRouter): responde chat trivial, mas
+    devolveu null em tool use, geracao de codigo e nos 3 subagentes -> inutil
+    para tarefas agenticas neste harness.
+  - `nvidia/nemotron-3-ultra-550b-a55b` (API NVIDIA direta, provider `nvidia`):
+    chat OK (2+3=5), TOOL USE OK (leu arquivo e devolveu a linha do ITEM 137),
+    revisao tecnica OK, geracao de codigo OK em TEXTO PURO. Geracao com schema
+    JSON nos dois modulos devolveu null (limite/validacao de saida), mas em texto
+    puro funcionou.
+SUBAGENTES ENTREGUES (com testes passando)
+  - `palm_orientacao.py` + `test_palm_orientacao.py`: angulo_dobrado,
+    qa_efetivo (geometrica usa bruto; posicao usa dobrado), EstabilizadorSinal
+    com histerese (8 frames opostos consecutivos; ruido de 10 graus nao troca),
+    corrigir_normal_para_referencia.
+  - `palm_normal_edge_on.py` + `test_palm_normal_edge_on.py`: condicao_plano,
+    normal_por_pontos (PCA/SVD, outlier >0.12 m, rms>0.03, sinal por referencia
+    anatomica cross(index-pinky,middle-wrist), espelho left), normal_mao_landmarks
+    (todos os 21 pontos; fallback 5 do dorso) e normal_robusta_edge_on
+    (qualidade<0.05 -> confiavel False).
+  - Correcao do Lead: o modulo edge-on espelhava para a esquerda DEPOIS de
+    alinhar a uma referencia ja' na convencao do projeto (inverteria de novo no
+    lado esquerdo). Corrigido: referencia fornecida -> alinha e NAO espelha;
+    referencia anatomica -> alinha e espelha no modo sem referencia. Teste do
+    modulo continua OK.
+INTEGRACAO NO TOOL (modo X)
+  - Import opcional de `normal_mao_landmarks` e `EstabilizadorSinal` (se faltar,
+    o tool funciona como antes).
+  - Por frame e por lado do X: se a normal base esta' fraca/edge-on
+    (|nz|<0.5, spread>5 ou ausente), monta o dict dos 21 landmarks 3D, chama
+    `normal_mao_landmarks` (mais pontos -> melhor condicionamento), exige
+    `confiavel`, passa pelo estabilizador de sinal e usa essa normal no QA/verde;
+    o log [GEO] ganha `nfonte=edge21(n/q/rms)`. Se o modulo nao der confiavel,
+    mantem a normal antiga.
+  - Estabilizadores criados ao iniciar o X (um por lado) e limpos no cancelamento.
+  - Testes: checks estaticos da integracao em test_calibracao_geometrica.py;
+    test_palm_orientacao.py e test_palm_normal_edge_on.py EXIT 0; focados
+    test_calibracao_geometrica/test_palm_alignment/test_palma_plano OK.
+SOBRE O VERMELHO (IMU) RARAMENTE PERTO DO VERDE
+  - Continua esperado: `imu_palm_alignment_*.json` sao de 22/10 (residuos
+    3.65/3.71) e o X ainda nao terminou/gravou; o vermelho usa o T/f velho +
+    reancoragem. Depois de um X que passe no gate, validar com J/V e teste de
+    mira (e/ou comparar red x green no diag log).
+PROXIMA BANCADA: reiniciar o tool, X de novo. Nas poses de perfil esperar
+`nfonte=edge21(...)`; QA deve ficar mais estavel. Se uma diagonal travar com QA
+8-35, F (forcado) apos confirmar; se QA>35, ajustar. Com o oficial salvo,
+conferir vermelho x verde.
+

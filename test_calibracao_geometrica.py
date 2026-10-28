@@ -392,6 +392,10 @@ check("tool tem tecla F (forcar take auditado)",
       'ord("f")' in fonte_tool and "forcar_take(" in fonte_tool)
 check("tool salva JSON parcial a cada take",
       "salvar_capturas_parciais(" in fonte_tool)
+check("tool integra normal edge-on de 21 landmarks (subagente)",
+      "normal_mao_landmarks" in fonte_tool)
+check("tool integra estabilizador de sinal (subagente)",
+      "EstabilizadorSinal" in fonte_tool)
 check("tool grava log de diagnostico do X",
       "calibracao_geometrica_diag.log" in fonte_tool)
 check("tool tem --log-limpo (tela limpa no X)",
