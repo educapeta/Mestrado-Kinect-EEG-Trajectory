@@ -8536,3 +8536,22 @@ mao; se aparecer "MOVA A MAO", deslocar mais antes de estabilizar. O log deve
 ficar estavel (QA dobrado pequeno) e o gate deve salvar o oficial ao completar.
 Depois comparar vermelho x verde e rodar J/V + teste de mira.
 
+
+
+================================================================================
+ITEM 140 (28/10/2026) - PLANO-GUIA MAGENTA MAIOR NA TELA (pedido da bancada)
+================================================================================
+SINTOMA: o quadro MAGENTA do X estava pequeno demais para o operador ver na
+tela do Kinect ("ta um pouco pequeno").
+MUDANCA: `desenhar_guia_plano_palma` passou do lado 0,16 m para 0,30 m
+(~1,9x), com:
+  - preenchimento translucido (alpha 0.14) para o plano aparecer sem cobrir a
+    mao/landmarks;
+  - moldura de 3 px (antes 2), cantos marcados com circulos;
+  - diagonais e cruz central de 2 px;
+  - seta da normal-alvo de 0,26 m (antes 0,16) e seta dos dedos de 0,20 m
+    (antes 0,12).
+O tamanho continua ajustavel pelo parametro `tamanho_m` de
+`desenhar_guia_plano_palma`. Teste funcional do tool (static check do guia)
+continua OK; suite completa roda no commit.
+

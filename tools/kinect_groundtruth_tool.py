@@ -176,7 +176,7 @@ def desenhar_vetor_palma_seguro(tracker, frame, landmarks, direcao, **kwargs):
                   flush=True)
 
 def desenhar_guia_plano_palma(tracker, frame, origem_camera, normal_camera,
-                               dedos_camera=None, tamanho_m=0.16,
+                               dedos_camera=None, tamanho_m=0.30,
                                cor=(255, 0, 255), cor_dedos=(255, 255, 0)):
     """Desenha o PLANO-ALVO da calibracao geometrica (tecla X) no video.
 
@@ -216,23 +216,34 @@ def desenhar_guia_plano_palma(tracker, frame, origem_camera, normal_camera,
         pixels = [tracker.camera_para_pixel_color(ponto)
                   for ponto in cantos]
         if all(pixel is not None for pixel in pixels):
-            cv2.polylines(frame, [np.array(pixels, np.int32)], True, cor, 2,
-                          cv2.LINE_AA)
-            # diagonais suaves para o usuario perceber o plano no espaco
+            # Plano maior (0,30 m): poligono preenchido bem translucido para
+            # aparecer na tela sem cobrir a mao; moldura grossa + cantos.
+            pontos_px = np.array(pixels, np.int32)
+            sombra = frame.copy()
+            cv2.fillConvexPoly(sombra, pontos_px, cor, cv2.LINE_AA)
+            cv2.addWeighted(sombra, 0.14, frame, 0.86, 0, frame)
+            cv2.polylines(frame, [pontos_px], True, cor, 3, cv2.LINE_AA)
+            for pixel in pixels:
+                cv2.circle(frame, (int(pixel[0]), int(pixel[1])), 5, cor, -1,
+                           cv2.LINE_AA)
+            # diagonais e cruz central para perceber o plano no espaco
             cv2.line(frame, tuple(int(v) for v in pixels[0]),
-                     tuple(int(v) for v in pixels[2]), cor, 1, cv2.LINE_AA)
+                     tuple(int(v) for v in pixels[2]), cor, 2, cv2.LINE_AA)
             cv2.line(frame, tuple(int(v) for v in pixels[1]),
-                     tuple(int(v) for v in pixels[3]), cor, 1, cv2.LINE_AA)
-        # seta da normal-alvo (magenta) -- direcao exata da verdade
+                     tuple(int(v) for v in pixels[3]), cor, 2, cv2.LINE_AA)
+            _centro = np.mean(pontos_px, axis=0)
+            cv2.circle(frame, (int(_centro[0]), int(_centro[1])), 4, cor, -1,
+                       cv2.LINE_AA)
+        # seta da normal-alvo (magenta) -- direcao exata da verdade, maior
         fim_normal = tracker.camera_para_pixel_color(
-            origem + 0.16 * normal)
+            origem + 0.26 * normal)
         inicio = tracker.camera_para_pixel_color(origem)
         if fim_normal is not None and inicio is not None:
             cv2.arrowedLine(frame, tuple(int(v) for v in inicio),
                             tuple(int(v) for v in fim_normal), cor, 3,
                             cv2.LINE_AA, tipLength=0.25)
         # seta de referencia dos dedos (ciano)
-        fim_dedos = tracker.camera_para_pixel_color(origem + 0.12 * dedos)
+        fim_dedos = tracker.camera_para_pixel_color(origem + 0.20 * dedos)
         if fim_dedos is not None and inicio is not None:
             cv2.arrowedLine(frame, tuple(int(v) for v in inicio),
                             tuple(int(v) for v in fim_dedos), cor_dedos, 2,

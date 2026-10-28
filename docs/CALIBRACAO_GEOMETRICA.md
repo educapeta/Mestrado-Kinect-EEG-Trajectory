@@ -48,6 +48,14 @@ A projeção usa a mesma `camera_para_pixel_color` do esqueleto.
 > eixos: o guia no vídeo é a projeção do alvo, então basta alinhar a folha ao
 > quadro e os dedos à seta.
 
+## Tamanho do guia (item 140)
+
+O plano MAGENTA tem **0,30 m de lado** (antes 0,16 m), preenchimento translúcido
+(14%), moldura de 3 px, cantos marcados e diagonais/cruz central; a seta da
+normal tem 0,26 m e a dos dedos 0,20 m. Foi aumentado por pedido da bancada
+("está pequeno demais na tela") sem cobrir a mão. Se ainda ficar pequeno no
+vídeo, o tamanho é o parâmetro `tamanho_m` de `desenhar_guia_plano_palma`.
+
 ## O guia só aparece com a mão detectada
 
 O quadro MAGENTA e as setas são desenhados **ancorados no centro da palma
