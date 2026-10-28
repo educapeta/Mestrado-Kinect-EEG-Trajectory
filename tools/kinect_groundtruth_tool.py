@@ -2236,6 +2236,8 @@ def main():
     calib_geo = None
     #: Throttle do aviso "mao/plano nao detectado" do modo geometrico (5 s).
     ultimo_aviso_mao_geo = 0.0
+    #: Throttle do log de diagnostico do X (pose/alvo/normal/QA, ~1 s).
+    ultimo_log_geo = 0.0
     # --- NIVEL DA MESA (item 115): referencia de gravidade medida pelo depth.
     # O usuario confirmou o Kinect nivelado em relacao a mesa; medimos o
     # PLANO DA MESA e usamos a normal como referencia das poses 2/3, o que
@@ -3441,6 +3443,30 @@ def main():
                     # landmark+depth nao ha' origem para desenhar (o usuario
                     # remoto achou que era bug; item 130). Avisa no console
                     # (throttle 5 s) e a tela mostra um banner.
+                    # Diagnostico do X (item 132): uma linha por segundo para
+                    # o operador copiar quando uma pose nao fecha o QA.
+                    if now - ultimo_log_geo > 1.0:
+                        ultimo_log_geo = now
+                        _prog_diag = calib_geo.progresso(now)
+                        _pose_diag = _prog_diag["pose"]
+                        _qa_diag = _prog_diag["qa_deg"]
+                        if _pose_diag is not None:
+                            _alvo_diag = ("posicao" if _pose_diag.get(
+                                "tipo") == "posicao"
+                                else _pose_diag.get("alvo"))
+                            _n_inst = (None if normal_plano_lado is None
+                                       else tuple(round(float(v), 2)
+                                                  for v in normal_plano_lado))
+                            _n_est = (None if _nrm_geo is None
+                                      else tuple(round(float(v), 2)
+                                                 for v in _nrm_geo))
+                            print(
+                                f"[GEO {lado}] {_pose_diag['nome']} | "
+                                f"alvo={_alvo_diag} | n_inst={_n_inst} | "
+                                f"n_usada={_n_est} | QA="
+                                + ("--" if _qa_diag is None
+                                   else f"{_qa_diag:.1f}")
+                                + f" | {_prog_diag['status']}", flush=True)
                     if (_pos_geo is None or _nrm_geo is None) \
                             and now - ultimo_aviso_mao_geo > 5.0:
                         ultimo_aviso_mao_geo = now
