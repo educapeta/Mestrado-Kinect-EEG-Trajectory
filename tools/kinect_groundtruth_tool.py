@@ -518,6 +518,50 @@ def finalizar_calibracao_geometrica(calib, fusion, participante="",
             "resolucao": resolucao, "arquivo_piloto": str(arquivo)}
 
 
+def salvar_capturas_parciais(calib, participante="", avisar=None):
+    """Grava JSON PARCIAL a cada take do X para nao perder a sessao (item 137).
+
+    Se o operador fechar o tool/der ESC no meio, o arquivo fica com os takes
+    ja' gravados (rotacao, posicao, verdade, QA, forcado). Nome estavel
+    `calibracao_geometrica_<lado>_parcial.json` (sobrescrito a cada take).
+    """
+    if calib is None or not getattr(calib, "capturas", None):
+        return None
+    payload = {
+        "modo": "calibracao_geometrica_parcial",
+        "lado": calib.lado,
+        "participante": participante or "",
+        "quando": time.strftime("%Y-%m-%d %H:%M:%S"),
+        "parcial": True,
+        "n_takes": len(calib.capturas),
+        "poses_total": len(calib.poses),
+        "posicoes": list(calib.capturas),
+    }
+    caminho_saida = Path(f"calibracao_geometrica_{calib.lado}_parcial.json")
+    try:
+        caminho_saida.write_text(
+            json.dumps(payload, indent=2, ensure_ascii=False),
+            encoding="utf-8")
+    except OSError as exc:
+        if avisar is not None:
+            avisar(f"AVISO: nao gravei {caminho_saida.name} ({exc})")
+        return None
+    return caminho_saida
+
+
+def finalizar_e_avancar_geo(calib, fusions, participante="", avisar=print):
+    """Finaliza o lado atual do X e, se era a direita, ja' abre a esquerda."""
+    lado = calib.lado
+    fechou = finalizar_calibracao_geometrica(
+        calib, fusions[lado], participante=participante, avisar=avisar)
+    if fechou.get("ok") and lado == "right":
+        avisar("AGORA A MAO ESQUERDA: repita as mesmas poses (o modo NAO "
+               "grava nada da mao esquerda antes de voce alinhar a pose 1).")
+        return CalibracaoGeometrica("left")
+    avisar("Calibracao geometrica encerrada.")
+    return None
+
+
 class CapturaAlinhamentoPalma:
     """Coleta amostras (atitude do IMU + normal da palma do Kinect) por lado.
 
@@ -2053,7 +2097,7 @@ def main():
     }
     print(f"IMU: direita na porta {receivers['right'].port} | esquerda na porta "
           f"{receivers['left'].port}")
-    print("TECLAS (C/B/M/O/D/G/J/K/H/L/R/V/X/N): clique ANTES em uma janela de VIDEO -- sem "
+    print("TECLAS (C/B/M/O/D/G/J/K/H/L/R/V/X/N/F): clique ANTES em uma janela de VIDEO -- sem "
           "foco no video o OpenCV nao recebe a tecla (a tecla O parece nao "
           "funcionar e o console fica mudo).")
     print("  M = MEDIR NIVEL DA MESA (plano do Kinect, compensa inclinacao)")
@@ -3485,7 +3529,7 @@ def main():
                             _n_est = (None if _nrm_geo is None
                                       else tuple(round(float(v), 2)
                                                  for v in _nrm_geo))
-                            print(
+                            _linha_geo = (
                                 f"[GEO {lado}] {_pose_diag['nome']} | "
                                 f"alvo={_alvo_diag} | n_inst={_n_inst} | "
                                 f"n_usada={_n_est} | QA="
@@ -3495,7 +3539,14 @@ def main():
                                 + ("--" if _prog_diag.get(
                                     "qa_efetivo_deg") is None
                                    else f"{_prog_diag['qa_efetivo_deg']:.1f}")
-                                + f" | {_prog_diag['status']}", flush=True)
+                                + f" | {_prog_diag['status']}")
+                            print(_linha_geo, flush=True)
+                            try:
+                                with open("calibracao_geometrica_diag.log",
+                                          "a", encoding="utf-8") as _fh:
+                                    _fh.write(_linha_geo + "\n")
+                            except OSError:
+                                pass
                     if (_pos_geo is None or _nrm_geo is None) \
                             and now - ultimo_aviso_mao_geo > 5.0:
                         ultimo_aviso_mao_geo = now
@@ -3509,32 +3560,28 @@ def main():
                     if _evento_geo is not None:
                         if _evento_geo["tipo"] == "take":
                             _cap_geo = _evento_geo["captura"]
+                            _qa_cap = _cap_geo.get("qa_deg")
                             print(
                                 f"[GEO {lado}] TAKE "
                                 f"{_cap_geo['indice'] + 1}/"
                                 f"{_evento_geo['total']} GRAVADO: "
                                 f"{_cap_geo['pose']} (QA "
-                                f"{_cap_geo['qa_deg']:.1f} graus)",
+                                + ("--" if _qa_cap is None
+                                   else f"{_qa_cap:.1f}")
+                                + " graus)"
+                                + (" [FORCADO]" if _cap_geo.get("forcado")
+                                   else ""),
                                 flush=True)
+                            salvar_capturas_parciais(
+                                calib_geo,
+                                participante=getattr(args, "participante", ""))
                         elif _evento_geo["tipo"] == "pulada":
                             print(f"[GEO {lado}] pose PULADA: "
                                   f"{_evento_geo['pose']}", flush=True)
                     if calib_geo.completa:
-                        _fechou_geo = finalizar_calibracao_geometrica(
-                            calib_geo, fusions[lado],
+                        calib_geo = finalizar_e_avancar_geo(
+                            calib_geo, fusions,
                             participante=getattr(args, "participante", ""))
-                        _lado_feito_geo = calib_geo.lado
-                        calib_geo = None
-                        if (_fechou_geo.get("ok")
-                                and _lado_feito_geo == "right"):
-                            calib_geo = CalibracaoGeometrica("left")
-                            print(
-                                "AGORA A MAO ESQUERDA: repita as mesmas poses "
-                                "(o modo NAO grava nada da mao esquerda antes "
-                                "de voce alinhar a pose 1).", flush=True)
-                        else:
-                            print("Calibracao geometrica encerrada.",
-                                  flush=True)
                 mao["palm_normal_plano"] = normal_plano_lado
                 mao["palm_plano_estavel"] = plano_estavel
                 mao["palm_plano_rms_m"] = rms_plano_lado
@@ -4791,9 +4838,15 @@ def main():
                 # no video + QA de execucao; a ultima pose ancora a direcao
                 # absoluta pela posicao da mao (mira deslocada).
                 if calib_geo is not None:
+                    _parcial = salvar_capturas_parciais(
+                        calib_geo,
+                        participante=getattr(args, "participante", ""),
+                        avisar=print)
                     calib_geo.parar()
                     calib_geo = None
-                    print("Calibracao geometrica cancelada.")
+                    print("Calibracao geometrica cancelada"
+                          + (f"; takes parciais em {_parcial.name}"
+                             if _parcial is not None else ""))
                 else:
                     poses_fisicas.parar()
                     poses_fisicas_fase_vista = None
@@ -4805,6 +4858,14 @@ def main():
                         if not _ancora.pronto:
                             _ancora.cancelar()
                     calib_geo = CalibracaoGeometrica("right")
+                    try:
+                        with open("calibracao_geometrica_diag.log", "a",
+                                  encoding="utf-8") as _fh:
+                            _fh.write(
+                                "\n=== X " + time.strftime("%Y-%m-%d %H:%M:%S")
+                                + " (direita) ===\n")
+                    except OSError:
+                        pass
                     print(
                         "CALIBRACAO GEOMETRICA -- MAO DIREITA PRIMEIRO "
                         "(uma mao por vez).\n"
@@ -4823,14 +4884,35 @@ def main():
                         "  - Nas 3 de POSICAO a verdade e' a POSICAO 3D: se o "
                         "Kinect inverter palma/dorso o QA fica alto mas NAO "
                         "bloqueia -- so' fique parado 2 s;\n"
-                        "  - N pula uma pose; X cancela. No fim resolve T/f "
-                        "hibrido e grava o JSON piloto (o oficial so' se o "
-                        "gate passar).")
+                        "  - Se o QA bruto ficar torto (Kinect confundindo "
+                        "palma/dorso) mas voce CONFIRMAR visualmente o "
+                        "alinhamento, F forca o take (QA ate "
+                        f"{CALIB_GEO_QA_FORCAR_MAX_DEG:g}; fica registrado "
+                        "'forcado'); N pula; X cancela. A cada take um JSON "
+                        "parcial e' salvo.");
             elif key == ord("n") and calib_geo is not None:
                 _ev_pular = calib_geo.pular_pose()
                 if _ev_pular is not None:
                     print(f"[GEO {calib_geo.lado}] pose pulada: "
                           f"{_ev_pular['pose']}")
+            elif key == ord("f") and calib_geo is not None:
+                _ev_forca = calib_geo.forcar_take(now)
+                if _ev_forca.get("tipo") == "take":
+                    _cap_f = _ev_forca["captura"]
+                    print(f"[GEO {calib_geo.lado}] TAKE FORCADO: "
+                          f"{_cap_f['pose']} (QA "
+                          + ("--" if _cap_f.get("qa_deg") is None
+                             else f"{_cap_f['qa_deg']:.1f}")
+                          + " graus; registrado como forcado)", flush=True)
+                    salvar_capturas_parciais(
+                        calib_geo,
+                        participante=getattr(args, "participante", ""))
+                    if calib_geo.completa:
+                        calib_geo = finalizar_e_avancar_geo(
+                            calib_geo, fusions,
+                            participante=getattr(args, "participante", ""))
+                else:
+                    print(f"[GEO] F nao forcou: {_ev_forca.get('motivo')}")
             elif key == ord("p"):
                 hand_calib_active = False
                 hand_calib_samples_aux = []
@@ -4863,6 +4945,12 @@ def main():
             elif key == 27:
                 break
     finally:
+        if calib_geo is not None:
+            _parcial_final = salvar_capturas_parciais(
+                calib_geo, participante=getattr(args, "participante", ""),
+                avisar=print)
+            if _parcial_final is not None:
+                print(f"[GEO] takes parciais salvos em {_parcial_final.name}")
         if log_palma is not None:
             log_palma.fechar()
         # DIAGNOSTICO DA PALMA: escolhemos FINALIZAR (nao cancelar) na saida --

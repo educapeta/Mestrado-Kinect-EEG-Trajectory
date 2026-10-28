@@ -8387,3 +8387,50 @@ posicao o QA bruto pode aparecer ~170 mas o efetivo deve ser pequeno e o take
 grava; se aparecer "ALINHE o plano a linha de mira" com efetivo > 10, a mao
 esta' de lado em relacao a linha (girar o punho).
 
+
+
+================================================================================
+ITEM 137 (28/10/2026) - SESSAO PARCIAL DO X: analise do log + persistencia por
+    take (JSON parcial), tecla F (forcar com confirmacao) e log de diagnostico
+================================================================================
+ANALISE DO LOG DA SESSAO PARCIAL (palma_vetor_log_20261028_122133.csv, 268 s):
+  - MAO DIREITA detectada 98% do tempo; esquerda so' 10% (normal: o X comeca
+    pela direita; a esquerda ainda nao entrou).
+  - Segmentos ESTAVEIS (spread<4, seta visivel) mostram a sequencia:
+    * ~5-24 s: normais ~(-0.4,-0.4,-0.8) -> gesto de PALMA MIRANDO A LENTE;
+    * ~32-40 s: normais ~(+0.1,+0.3,+0.9) -> DORSO MIRANDO A LENTE;
+    * ~78-180 s: +X com tentativas e, em 172-179 s, normal (+1.00,-0.01,-0.06)
+      = erro ~3 graus do alvo +X (boa);
+    * ~209-218 s: -X com (-1.00,+0.05,+0.04) = ~4 graus do alvo -X (boa);
+    * ~233-250 s: diagonais (DIAGONAL FRENTE-CIMA) com erro 11-21 graus ->
+      provavel ponto onde travou (QA>8).
+  - Em NENHUM segmento estavel o sinal da normal virou dentro da janela
+    (fracao de frames com sinal oposto = 0): o "Kinect invertendo palma/dorso"
+    nao apareceu nos trechos parados; o bloqueio das diagonais e' de EXECUCAO/
+    tolerancia, nao de sinal.
+  - O X NAO terminou a direita (sem JSON piloto e sem alinhamento novo:
+    imu_palm_alignment_*.json seguem de 22/10, residuos 3.65/3.71). Os takes
+    feitos foram PERDIDOS porque nada era salvo antes de completar o lado.
+IMPLEMENTADO (item 137)
+  - `salvar_capturas_parciais(calib, participante)` no tool: grava
+    `calibracao_geometrica_<lado>_parcial.json` a CADA take (sobrescreve), e
+    tambem no cancelamento por X e no `finally` ao fechar o tool. Assim uma
+    sessao interrompida deixa os takes (rotacao, posicao, verdade, QA,
+    forcado) para analise/continuacao.
+  - Tecla **F**: `CalibracaoGeometrica.forcar_take()` grava a pose atual
+    quando o operador CONFIRMA visualmente o alinhamento e o QA esta' entre o
+    limite normal e `CALIB_GEO_QA_FORCAR_MAX_DEG = 35`; take marcado
+    `"forcado": true` com QA bruto/efetivo registrado. QA >35 nao forca.
+    A verdade continua sendo o alvo exato/posicao; serve para as diagonais
+    (QA 11-21 medidos) quando o operador ve que a mao esta' certa.
+  - Log de diagnostico em ARQUIVO: cada linha [GEO] (pose/alvo/normal/QA/QAef)
+    vai para `calibracao_geometrica_diag.log`, com cabecalho no inicio do X —
+    nao depende mais de copiar o console (que poluia).
+  - `.gitignore`: calibracao_geometrica_diag*.log.
+TESTES: forcar_take (grava forcado com QA~20; recusa QA>35), parcial
+(n_takes=9 gravado no tmp), static checks F/parcial/log; grupo X OK.
+PROXIMA BANCADA: reiniciar o tool e refazer X. Nas diagonais, se o QA estabilizar
+entre 8 e 35 graus e a mao estiver visualmente alinhada ao quadro, F grava
+(registra forcado); se QA>35, ajustar. Com as 6 geometricas completas + posicoes
+o gate pode salvar o oficial; o parcial fica para auditoria de qualquer forma.
+

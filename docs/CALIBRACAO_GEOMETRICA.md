@@ -133,6 +133,22 @@ punho (seta ciana) — não entra na verdade.
    as 3 de posição podem ser puladas no máximo 2; se pular uma geométrica,
    a sessão só grava o JSON piloto.
 
+## Gravação parcial e tecla F (itens 137)
+
+- A cada take o tool grava `calibracao_geometrica_<lado>_parcial.json`
+  (sobrescrito): se a sessão for interrompida, os takes já feitos não são
+  perdidos. Ao cancelar com `X` ou fechar o tool, o parcial também é salvo.
+- O console (e o arquivo `calibracao_geometrica_diag.log`) registram a cada
+  ~1 s a pose/alvo/normal/QA/QAef — é o que permite analisar depois uma pose
+  que não fechou.
+- **Tecla `F`**: força o take da pose atual quando o QA do Kinect está torto
+  (entre o limite normal e 35°) mas você **confirmou visualmente** que a mão
+  está alinhada ao guia. A verdade continua sendo o alvo exato/posição; o take
+  fica marcado `"forcado": true` no JSON, com QA bruto/efetivo registrado.
+  QA > 35° não é aceito nem forçando — aí é ajustar a mão.
+- As 3 poses de posição usam QA dobrado (item 136); as 6 geométricas usam QA
+  bruto ≤ 8° (ou `F` até 35° com confirmação).
+
 ## Como o T/f é resolvido (ajuste híbrido ponderado)
 
 - Modelo: `v = T·R·f` — `R` é a atitude do IMU (corpo → mundo), `f` a direção

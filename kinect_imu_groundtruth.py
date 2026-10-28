@@ -183,6 +183,11 @@ CALIB_GEO_MAX_LOO_MEDIANA_DEG = 15.0
 #: normal; assim o gate confere o ALINHAMENTO do plano a linha de mira sem
 #: depender de palma x dorso (item 136). Geometricas NAO usam isso.
 CALIB_GEO_QA_MAX_POSICAO_DEG = 10.0
+#: Limite (graus) para o operador FORCAR um take quando o QA do Kinect esta'
+#: torto mas ele confirma visualmente que a mao esta' alinhada (tecla F).
+#: A verdade continua sendo o alvo exato/posicao; o take fica marcado
+#: `forcado: true` no JSON piloto (item 137).
+CALIB_GEO_QA_FORCAR_MAX_DEG = 35.0
 #: Pesos no ajuste hibrido: a pose de mira (verdade por posicao, independente
 #: do plano do Kinect) ancora a direcao absoluta; as poses geometricas tem
 #: verdade EXATA (alvo do referencial da camera) mas erro de execucao maior.
@@ -320,6 +325,8 @@ class CalibracaoGeometrica:
         self._pos_ref = None
         self._ultima_rot = None
         self._ultima_pos = None
+        #: ultima amostra VALIDA (rotacao/posicao/normal/QA) para `forcar_take`
+        self._ultimo = None
 
     # -- estado ---------------------------------------------------------
     @property
@@ -414,6 +421,13 @@ class CalibracaoGeometrica:
         self.qa_efetivo = (
             None if self.qa_atual is None or not np.isfinite(self.qa_atual)
             else float(min(self.qa_atual, 180.0 - self.qa_atual)))
+        self._ultimo = {
+            "rotacao": rot,
+            "posicao": pos,
+            "normal": normal,
+            "qa_deg": self.qa_atual,
+            "qa_efetivo_deg": self.qa_efetivo,
+        }
         if tipo_pose == "geometrica":
             if (normal is None or self.qa_atual is None
                     or not np.isfinite(self.qa_atual)
@@ -483,6 +497,7 @@ class CalibracaoGeometrica:
             "rotacao": rot.tolist(),
             "posicao": pos.tolist(),
             "normal_medida": (None if normal is None else normal.tolist()),
+            "forcado": False,
         }
         self.capturas.append(captura)
         self.indice += 1
@@ -506,6 +521,69 @@ class CalibracaoGeometrica:
         self.qa_efetivo = None
         self.status = "POSE PULADA"
         return {"tipo": "pulada", "pose": pose["nome"],
+                "total": len(self.poses)}
+
+    def forcar_take(self, now=None):
+        """Grava a pose ATUAL mesmo com QA torto (tecla F do tool).
+
+        A verdade e' sempre o alvo exato/posicao -- o que muda e' que o
+        operador confirma visualmente o alinhamento quando o Kinect mede um
+        QA entre o limite normal e `CALIB_GEO_QA_FORCAR_MAX_DEG`. O take fica
+        marcado `forcado: True` no piloto e o QA bruto/efetivo e' registrado.
+        Devolve {"tipo": "take"...} ou {"tipo": "recusado", "motivo": ...}.
+        """
+        if not self.ativa or self.completa:
+            return {"tipo": "recusado", "motivo": "modo inativo/completo"}
+        if self._ultimo is None:
+            return {"tipo": "recusado",
+                    "motivo": "sem amostra valida ainda (mostre a mao)"}
+        pose = self.pose_atual
+        tipo_pose = pose.get("tipo", "geometrica")
+        rot = np.asarray(self._ultimo["rotacao"], np.float64)
+        pos = np.asarray(self._ultimo["posicao"], np.float64)
+        normal = self._ultimo["normal"]
+        verdade = self._verdade(pose, pos)
+        if verdade is None:
+            return {"tipo": "recusado", "motivo": "verdade indisponivel"}
+        qa = (None if normal is None else angle_between(normal, verdade))
+        qa_efetivo = (None if qa is None or not np.isfinite(qa)
+                      else float(min(qa, 180.0 - qa)))
+        if tipo_pose == "geometrica":
+            qa_gate = qa
+        else:
+            qa_gate = qa_efetivo
+        if qa_gate is not None and qa_gate > CALIB_GEO_QA_FORCAR_MAX_DEG:
+            return {"tipo": "recusado",
+                    "motivo": (f"QA {qa_gate:.1f} > "
+                               f"{CALIB_GEO_QA_FORCAR_MAX_DEG:g}; ajuste a mao"),
+                    "qa_deg": qa, "qa_efetivo_deg": qa_efetivo}
+        if tipo_pose == "geometrica" and normal is None:
+            return {"tipo": "recusado",
+                    "motivo": "pose geometrica sem normal do Kinect"}
+        captura = {
+            "indice": self.indice,
+            "pose": pose["nome"],
+            "tipo": tipo_pose,
+            "sinal": float(pose.get("sinal", 1.0)),
+            "alvo": (None if pose.get("alvo") is None
+                     else np.asarray(pose["alvo"], np.float64).tolist()),
+            "verdade": verdade.tolist(),
+            "qa_deg": (None if qa is None or not np.isfinite(qa)
+                       else float(qa)),
+            "qa_efetivo_deg": qa_efetivo,
+            "rotacao": rot.tolist(),
+            "posicao": pos.tolist(),
+            "normal_medida": (None if normal is None else normal.tolist()),
+            "forcado": True,
+        }
+        self.capturas.append(captura)
+        self.indice += 1
+        self._inicio_ok = None
+        self._ultimo = None
+        self.qa_atual = None
+        self.qa_efetivo = None
+        self.status = "TAKE FORCADO (QA registrado)"
+        return {"tipo": "take", "captura": captura,
                 "total": len(self.poses)}
 
     # -- resultado ------------------------------------------------------

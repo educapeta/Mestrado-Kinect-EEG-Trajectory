@@ -184,6 +184,37 @@ check("rotacao NaN nao grava take", len(calib_nan.capturas) == 0,
 check("sequencia com NaN continua sem crash", calib_nan.indice == 0)
 
 # ============================================================================
+# 3e) forcar_take: operador confirma alinhamento e grava com QA ate 35 (item 137)
+# ============================================================================
+print("3e) forcar_take (tecla F): QA torto mas confirmado")
+calib_forca = k.CalibracaoGeometrica("right", poses=poses_geo_teste[:1],
+                                    avisar=lambda *_a: None)
+alvo_forca = np.asarray(calib_forca.pose_atual["alvo"], np.float64)
+R_forca = k._rotacao_a_para_b(f_verdade, T_verdade.T @ alvo_forca)
+# normal ~20 graus fora do alvo (entre 8 e 35): nao gravaria sozinho
+normal_20 = alvo_forca + np.array([0.0, 0.36, 0.0])
+normal_20 /= np.linalg.norm(normal_20)
+calib_forca.amostra(1.0, R_forca, pos_geometrica, normal_20)
+evento_forca = calib_forca.forcar_take(now=1.0)
+check("forcar: grava com QA ~20",
+      evento_forca.get("tipo") == "take", evento_forca)
+if evento_forca.get("tipo") == "take":
+    _cap_forca = evento_forca["captura"]
+    check("forcar: marcado forcado=True", _cap_forca.get("forcado") is True)
+    check("forcar: QA registrado",
+          _cap_forca.get("qa_deg") is not None and
+          _cap_forca["qa_deg"] > 8.0, _cap_forca.get("qa_deg"))
+# QA muito torto (>35) nao pode forcar
+calib_forca2 = k.CalibracaoGeometrica("right", poses=poses_geo_teste[:1],
+                                     avisar=lambda *_a: None)
+normal_60 = alvo_forca + np.array([0.0, 1.2, 0.0])
+normal_60 /= np.linalg.norm(normal_60)
+calib_forca2.amostra(1.0, R_forca, pos_geometrica, normal_60)
+evento_rec = calib_forca2.forcar_take(now=1.0)
+check("forcar: recusa QA > 35",
+      evento_rec.get("tipo") == "recusado", evento_rec)
+
+# ============================================================================
 # 3b2) normal_robusta: virada REAL de 180 graus entre poses (item 131)
 # ============================================================================
 print("3b2) normal_robusta permite virada real de 180 graus (modo X)")
@@ -329,6 +360,16 @@ with tempfile.TemporaryDirectory(prefix="calib_geo_") as tmp:
         check("finalizar: segunda vez ok", res2.get("ok") is True)
         check("finalizar: .bak do oficial criado",
               (tmp_path / "imu_palm_alignment_right.json.bak").exists())
+        _parcial = tool.salvar_capturas_parciais(
+            calib_final, participante="teste")
+        check("parcial: JSON gravado a cada take",
+              _parcial is not None and _parcial.exists())
+        if _parcial is not None and _parcial.exists():
+            _dados_parcial = json.loads(
+                _parcial.read_text(encoding="utf-8"))
+            check("parcial: n_takes 9",
+                  _dados_parcial.get("n_takes") == 9,
+                  _dados_parcial.get("n_takes"))
     finally:
         os.chdir(cwd_anterior)
 
@@ -347,6 +388,12 @@ check("tool finaliza gravando JSON/solucao",
 check("tool desenha o plano-guia",
       "desenhar_guia_plano_palma(" in fonte_tool)
 check("tool sabe pular pose", ".pular_pose()" in fonte_tool)
+check("tool tem tecla F (forcar take auditado)",
+      'ord("f")' in fonte_tool and "forcar_take(" in fonte_tool)
+check("tool salva JSON parcial a cada take",
+      "salvar_capturas_parciais(" in fonte_tool)
+check("tool grava log de diagnostico do X",
+      "calibracao_geometrica_diag.log" in fonte_tool)
 check("tool tem --log-limpo (tela limpa no X)",
       "--log-limpo" in fonte_tool and "LOG_LIMPO" in fonte_tool)
 check("tool avisa quando mao/depth nao detectados (plano ancorado na mao)",

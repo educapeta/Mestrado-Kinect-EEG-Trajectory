@@ -679,7 +679,10 @@ sempre vira `.json.bak`).
 - Folha RÍGIDA na palma ajuda nas poses de PERFIL — mas **não use na pose 1**
   (palma para a câmera: a folha bloqueia mão/landmarks); quadro MAGENTA =
   plano-alvo, seta CIANA = referência dos dedos; QA ≤ 8 graus + 2 s parado
-  gravam o take; `N` pula pose (útil nas de perfil), `X` cancela.
+  gravam o take; `N` pula pose (útil nas de perfil), `X` cancela; **`F`**
+  força um take com QA até 35° quando você confirmar o alinhamento (fica
+  marcado `forcado`). A cada take é salvo um JSON parcial
+  `calibracao_geometrica_<lado>_parcial.json`.
 - Sempre grava o JSON piloto `calibracao_geometrica_<lado>_<timestamp>.json`
   (dados brutos + solução + LOO + validação da mira) para auditoria.
 - AINDA não testado na bancada: rode `J` + `V` na mesma sessão e compare no
