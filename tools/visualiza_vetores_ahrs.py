@@ -327,6 +327,240 @@ def modo_texto(args):
     return 0
 
 
+def _opencv_camera():
+    """Bases da camera virtual (OpenCV) para projetar o mundo 3D na tela."""
+    import numpy as np
+    eye = np.array([2.8, -3.8, 2.2], dtype=float)
+    alvo = np.zeros(3, dtype=float)
+    cima = np.array([0.0, 0.0, 1.0], dtype=float)
+    frente = alvo - eye
+    frente /= np.linalg.norm(frente)
+    direita = np.cross(frente, cima)
+    direita /= np.linalg.norm(direita)
+    cima2 = np.cross(direita, frente)
+    return eye, direita, cima2, frente
+
+
+def modo_opencv(args):
+    """Janela 3D nativa via OpenCV highgui (sem matplotlib/Qt)."""
+    import cv2
+    import numpy as np
+
+    largura, altura = 1100, 700
+    foco = 900.0
+    eye, direita, cima2, frente = _opencv_camera()
+
+    def projetar(ponto):
+        d = np.asarray(ponto, dtype=float) - eye
+        z = float(d @ frente)
+        if z <= 0.15:
+            return None
+        x = float(d @ direita)
+        y = float(d @ cima2)
+        return (int(largura / 2 + foco * x / z),
+                int(altura / 2 - foco * y / z))
+
+    janela = "AHRS 2x MPU6050 -- vetores 3D (item 142, OpenCV)"
+    cv2.namedWindow(janela, cv2.WINDOW_NORMAL)
+    cv2.resizeWindow(janela, largura, altura)
+
+    leitor = None
+    porta = None
+    if not args.simular:
+        porta = escolher_porta(args.port)
+        if porta is None:
+            print("ERRO: nenhuma porta serial encontrada.")
+            return 1
+        leitor = LeitorSerial(porta, args.baud, debug=args.debug)
+        leitor.start()
+        print(f"[opencv] lendo {porta}; aguarde o boot (~6 s). "
+              "Q/ESC fecha.", flush=True)
+    inicio = time.monotonic()
+    ultimo_status = 0.0
+    sample = None
+    instante = 0.0
+    v_body = {"left": np.array([0.0, 0.0, -1.0]),
+              "right": np.array([0.0, 0.0, -1.0])}
+    zerado = False
+    snapshot_salvo = False
+    amostras = 0
+    ultimo_amostra = 0.0
+
+    origens = {"left": np.array([-0.22, 0.0, 0.12]),
+               "right": np.array([0.22, 0.0, 0.12])}
+    cores = {"left": (255, 255, 0), "right": (0, 165, 255)}  # BGR
+    nomes = {"left": "ESQUERDA 0x69", "right": "DIREITA 0x68"}
+
+    try:
+        while True:
+            agora = time.monotonic()
+            if args.duracao > 0.0 and agora - inicio > args.duracao:
+                break
+            if args.simular:
+                sample = dados_simulados(agora - inicio)
+                instante = agora
+            elif leitor is not None:
+                sample, instante = leitor.copiar()
+                if leitor.erro:
+                    print(f"[opencv] ERRO: {leitor.erro}", flush=True)
+                    break
+                if sample is None and agora - inicio > 3.0 \
+                        and agora - ultimo_status > 3.0:
+                    ultimo_status = agora
+                    d = leitor.diagnostico()
+                    print(f"[opencv] sem quadros A: linhas={d['linhas']} "
+                          f"validas={d['validas']}", flush=True)
+                    if d["linhas_luvas"]:
+                        print("[opencv] COM4 no firmware das luvas; grave "
+                              "esp32_teste_ahrs.", flush=True)
+                    elif d["firmware_ahrs"]:
+                        print("[opencv] firmware de teste detectado; "
+                              "aguardando calibracao (~6 s)...", flush=True)
+            if sample is not None and not zerado:
+                for lado in ("left", "right"):
+                    R0 = core.quat_para_matriz(*sample[lado])
+                    v_body[lado] = core.vetor_corpo_para_baixo(R0)
+                zerado = True
+                print("[opencv] dados AHRS chegando; vetores tareados em "
+                      "-Z (chao).", flush=True)
+            if sample is not None:
+                amostras += 1
+                ultimo_amostra = agora
+
+            quadro = np.zeros((altura, largura, 3), dtype=np.uint8)
+            # piso (z = -1.2) em cinza
+            for valor in np.linspace(-1.2, 1.2, 7):
+                a = projetar((valor, -1.2, -1.2))
+                b = projetar((valor, 1.2, -1.2))
+                if a is not None and b is not None:
+                    cv2.line(quadro, a, b, (55, 55, 55), 1, cv2.LINE_AA)
+                a = projetar((-1.2, valor, -1.2))
+                b = projetar((1.2, valor, -1.2))
+                if a is not None and b is not None:
+                    cv2.line(quadro, a, b, (55, 55, 55), 1, cv2.LINE_AA)
+            # eixos do mundo
+            origem_px = projetar((0.0, 0.0, 0.0))
+            if origem_px is not None:
+                for ponta, cor, rotulo in (
+                        ((0.85, 0, 0), (0, 0, 255), "X"),
+                        ((0, 0.85, 0), (0, 255, 0), "Y"),
+                        ((0, 0, 0.85), (255, 0, 0), "Z (cima)")):
+                    px = projetar(ponta)
+                    if px is not None:
+                        cv2.arrowedLine(quadro, origem_px, px, cor, 2,
+                                        cv2.LINE_AA, tipLength=0.12)
+                        cv2.putText(quadro, rotulo, (px[0] + 6, px[1]),
+                                    cv2.FONT_HERSHEY_SIMPLEX, 0.5, cor, 1,
+                                    cv2.LINE_AA)
+                cv2.circle(quadro, origem_px, 5, (220, 220, 220), -1,
+                           cv2.LINE_AA)
+                cv2.putText(quadro, "-Z = chao", (origem_px[0] - 40,
+                                                  origem_px[1] + 28),
+                            cv2.FONT_HERSHEY_SIMPLEX, 0.45,
+                            (150, 150, 150), 1, cv2.LINE_AA)
+                # vetores (um por sensor)
+                for lado in ("left", "right"):
+                    R = (core.quat_para_matriz(*sample[lado])
+                         if sample is not None else np.eye(3))
+                    vetor = core.vetor_mundo(R, v_body[lado]) \
+                        if sample is not None else np.array([0, 0, -1.0])
+                    inicio_v = origens[lado]
+                    ponta_v = inicio_v + vetor * 0.9
+                    p0 = projetar(inicio_v)
+                    p1 = projetar(ponta_v)
+                    if p0 is None or p1 is None:
+                        continue
+                    cv2.arrowedLine(quadro, p0, p1, cores[lado], 4,
+                                    cv2.LINE_AA, tipLength=0.14)
+                    cv2.circle(quadro, p1, 7, cores[lado], -1, cv2.LINE_AA)
+                    x_rotulo = (max(5, p1[0] - 165) if lado == "left"
+                                else p1[0] + 10)
+                    cv2.putText(quadro, nomes[lado],
+                                (x_rotulo, p1[1] - 8),
+                                cv2.FONT_HERSHEY_SIMPLEX, 0.5, cores[lado], 1,
+                                cv2.LINE_AA)
+            # painel de texto
+            idade = (time.monotonic() - instante) if sample is not None else None
+            linhas_texto = []
+            if sample is None:
+                linhas_texto.append("AGUARDANDO QUADROS A,... DO FIRMWARE DE "
+                                    "TESTE (boot/calibracao ~6 s)")
+                if leitor is not None:
+                    d = leitor.diagnostico()
+                    linhas_texto.append(
+                        f"serial: linhas={d['linhas']} validas={d['validas']} "
+                        f"ultima={d['ultima'][:70]!r}")
+            else:
+                linhas_texto.append(f"amostras={amostras} | ultimo quadro: "
+                                    f"{idade * 1000.0:.0f} ms")
+                for lado in ("left", "right"):
+                    R = core.quat_para_matriz(*sample[lado])
+                    vetor = core.vetor_mundo(R, v_body[lado])
+                    q = sample[lado]
+                    linhas_texto.append(
+                        f"{nomes[lado]}: v=({vetor[0]:+.3f},{vetor[1]:+.3f},"
+                        f"{vetor[2]:+.3f}) ang.chao="
+                        f"{core.angulo_com_baixo(vetor):5.1f} deg")
+                    linhas_texto.append(
+                        f"   q=({q[0]:+.3f},{q[1]:+.3f},{q[2]:+.3f},"
+                        f"{q[3]:+.3f})")
+                linhas_texto.append(
+                    f"accel L={np.round(sample['accel_left'], 2)} "
+                    f"R={np.round(sample['accel_right'], 2)}")
+            linhas_texto.append("Z=re-tarar | C=recalibrar | R=reiniciar | "
+                                "Q/ESC=sair")
+            y = 24
+            for linha in linhas_texto:
+                cor_texto = (0, 255, 255) if sample is None else (230, 230, 230)
+                cv2.putText(quadro, linha[:120], (12, y),
+                            cv2.FONT_HERSHEY_SIMPLEX, 0.5, cor_texto, 1,
+                            cv2.LINE_AA)
+                y += 20
+            if args.snapshot and not snapshot_salvo:
+                try:
+                    cv2.imwrite(args.snapshot, quadro)
+                    print(f"[opencv] primeiro quadro salvo em {args.snapshot}")
+                except Exception as exc:  # noqa: BLE001
+                    print(f"[opencv] nao salvei snapshot: {exc}")
+                snapshot_salvo = True
+            cv2.imshow(janela, quadro)
+            tecla = cv2.waitKey(25) & 0xFF
+            if tecla in (27, ord("q"), ord("Q")):
+                break
+            if tecla in (ord("z"), ord("Z")):
+                if sample is not None:
+                    for lado in ("left", "right"):
+                        R0 = core.quat_para_matriz(*sample[lado])
+                        v_body[lado] = core.vetor_corpo_para_baixo(R0)
+                    zerado = True
+                    print("[opencv] tara aplicada (vetores em -Z).")
+            elif tecla in (ord("c"), ord("C")) and leitor is not None:
+                if leitor.enviar("c"):
+                    print("[opencv] enviei 'c' ao ESP (recalibrar).")
+            elif tecla in (ord("r"), ord("R")) and leitor is not None:
+                if leitor.enviar("r"):
+                    print("[opencv] enviei 'r' ao ESP (reiniciar atitude).")
+            try:
+                if cv2.getWindowProperty(janela, cv2.WND_PROP_VISIBLE) < 1:
+                    break
+            except cv2.error:
+                break
+    except KeyboardInterrupt:
+        print("[opencv] encerrado pelo usuario (Ctrl+C).")
+    finally:
+        try:
+            cv2.destroyAllWindows()
+        except Exception:  # noqa: BLE001
+            pass
+        if leitor is not None:
+            leitor.parar = True
+            try:
+                leitor.join(timeout=1.0)
+            except KeyboardInterrupt:
+                pass
+    return 0
+
+
 def principal():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--port", default=None, help="ex.: COM4")
@@ -340,6 +574,12 @@ def principal():
                         help="mostra as linhas cruas recebidas da serial")
     parser.add_argument("--texto", action="store_true",
                         help="modo console: imprime os vetores sem abrir janela")
+    parser.add_argument("--opencv", action="store_true",
+                        help="janela 3D nativa do OpenCV (padrao)")
+    parser.add_argument("--matplotlib", action="store_true",
+                        help="usa a janela 3D antiga do matplotlib/Qt")
+    parser.add_argument("--snapshot", default=None,
+                        help="salva o primeiro quadro da janela OpenCV em PNG")
     parser.add_argument("--backend", default="auto",
                         choices=["auto", "qtagg", "tkagg", "agg"],
                         help="backend do matplotlib (se a janela nao abrir, "
@@ -355,6 +595,10 @@ def principal():
         return 0
     if args.texto:
         return modo_texto(args)
+    # OpenCV highgui e' o PADRAO: nao depende de Qt/Tcl e e' a janela que o
+    # resto do projeto ja' usa. --matplotlib mantem a versao antiga.
+    if args.opencv or not args.matplotlib:
+        return modo_opencv(args)
     porta = None
     if not args.simular:
         porta = escolher_porta(args.port)

@@ -11,7 +11,7 @@ echo ============================================================
 echo  TESTE AHRS 2x MPU6050 -- vetores 3D (item 142)
 echo ============================================================
 echo  1 - Ver vetores no CONSOLE (modo texto, sem janela)
-echo  2 - Abrir JANELA 3D
+echo  2 - Abrir JANELA 3D (OpenCV nativo)
 echo  3 - Monitor serial do firmware de teste
 echo  4 - Gravar FIRMWARE DE TESTE (precisa BOOT)
 echo  5 - Voltar ao FIRMWARE DAS LUVAS

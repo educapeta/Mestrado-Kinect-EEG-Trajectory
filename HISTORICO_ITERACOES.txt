@@ -8792,3 +8792,38 @@ sensores; a janela nao tem console para pausar. Se ainda travar, rodar
 `AHRS_texto.bat` e observar se as linhas L/R continuam mudando (isola GUI x
 hardware).
 
+
+
+================================================================================
+ITEM 148 (28/10/2026) - JANELA 3D DO AHRS TROCADA POR OPENCV NATIVO (o Qt/
+    matplotlib travava na maquina do usuario; o modo texto funcionava)
+================================================================================
+SINTOMA: opcao 1 (modo texto) funcionava, mas a janela 3D (matplotlib/Qt)
+"dava pau"/travava ao abrir, mesmo com o firmware mandando quadros. O QuickEdit
+do console ja' tinha sido descartado (o atalho sem console tambem travava).
+DIAGNOSTICO: a janela 3D era matplotlib no backend QtAgg; nessa maquina a janela
+Qt nao se comporta bem (nao e' o AHRS/serial -- o modo texto le os mesmos dados
+normalmente). A solucao robusta e' nao depender de Qt/matplotlib.
+IMPLEMENTADO
+  - `tools/visualiza_vetores_ahrs.py` ganhou `--opencv` (janela 3D NATIVA via
+    `cv2.imshow`, a mesma tecnologia das janelas do tool das luvas):
+    * projecao 3D manual (camera virtual), eixos X/Y/Z, piso em z=-1,2;
+    * dois vetores (ciano=0x69 esquerda, laranja=0x68 direita), painel com
+      vetor/angulo/quaternion/accel, tara automatica em -Z, teclas Z/C/R/Q/ESC;
+    * modo `--snapshot` para salvar um PNG do primeiro quadro;
+  - OpenCV agora e' o DEFAULT da janela (`--opencv` implicitico); a janela
+    antiga fica em `--matplotlib`;
+  - atalhos `AHRS_grafico.bat` e `AHRS_grafico_sem_console.bat` e opcoes 2/6 do
+    `AHRS_menu.bat` usam a janela OpenCV;
+  - preview gerado em `docs/ahrs_preview.png`;
+  - README do firmware atualizado (janela nativa, teclas, fallback
+    --matplotlib).
+VALIDACAO: cv2.imshow/waitKey OK nesta maquina; modo OpenCV simulado gerou o
+snapshot (1100x700) e rodou 1 s; modo OpenCV na COM4 real rodou 5 s com dados
+(dois vetores tareados em -Z), EXIT 0; modo texto continua OK. Suite 64/64 no
+commit.
+PROXIMA BANCADA: rodar `AHRS_menu.bat` -> opcao 2 (ou `AHRS_grafico.bat`), ou
+melhor `AHRS_grafico_sem_console.bat` (sem console/QuickEdit), aguardar ~6-10 s
+e girar os MPUs. Se a janela OpenCV ainda travar, rodar `AHRS_texto.bat` e
+comparar (se o texto parar tambem, e' firmware/serial, nao a GUI).
+

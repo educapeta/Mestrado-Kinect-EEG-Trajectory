@@ -86,6 +86,20 @@ indicam falha de leitura I2C de um lado.
 - **Vetor deriva devagar**: normal em AHRS 6 eixos (sem magnetômetro); é yaw
   drift. Use `Z` para re-tarar.
 
+## Janela 3D (OpenCV nativo -- padrao)
+
+A janela 3D usa **OpenCV highgui** (a mesma janela nativa que o tool das luvas
+ja' usa), sem matplotlib/Qt. E' o padrao: `--opencv` e' implicito; a opcao 2 do
+menu e o `AHRS_grafico_sem_console.bat` ja' passam essa flag.
+A janela mostra os **dois vetores** (ciano=0x69 esquerda, laranja=0x68 direita),
+eixos X/Y/Z, piso em -Z e o painel com vetor/angulo/quaternion.
+
+Teclas na janela: **Z** re-tara, **C** recalibra o ESP, **R** reinicia a atitude,
+**Q/ESC** fecha. Se quiser a janela antiga do matplotlib, use `--matplotlib`
+(nao recomendado: o Qt pode travar em algumas maquinas).
+
+Previa: `docs/ahrs_preview.png`.
+
 ## Atalhos `.bat` (evitam colar comandos e a duplicacao do Ctrl+V)
 
 Na raiz do projeto:

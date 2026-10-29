@@ -699,7 +699,10 @@ Além do firmware das luvas, existe um projeto separado de **teste de orientaç�
 dos MPUs** com visualização 3D:
 - firmware: `firmware/esp32_teste_ahrs/` (Mahony 6 eixos, um quaternion por
   MPU; sem Wi-Fi/UDP, só serial; baseado no ThatProject MahonyAHRS_ESP32);
-- visualizador: `tools/visualiza_vetores_ahrs.py` (um vetor por sensor; começa
+- visualizador: `tools/visualiza_vetores_ahrs.py` (janela 3D **OpenCV**
+  nativa; um vetor por sensor; começa em −Z/chão após a tara automática;
+  `Z` re-tara, `C` recalibra, `R` reinicia; `--matplotlib` só se quiser a
+  janela antiga do Qt);
   em −Z/chão após a tara automática; `Z` re-tara, `C` recalibra, `R` reinicia);
 - guia completo: `firmware/esp32_teste_ahrs/README.md`.
 
