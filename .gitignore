@@ -103,3 +103,7 @@ AHRS/logs/
 
 # builds do PlatformIO
 **/.pio/
+
+# backups locais dos alinhamentos (item 154)
+backups_alinhamento/
+

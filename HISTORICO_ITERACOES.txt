@@ -9015,3 +9015,24 @@ outro) e/ou movimentos nao simultaneos; o groundtruth tem T/f POR LADO para
 absorver a montagem. So' depois da recalibracao dos dois lados da' para dizer
 se ainda ha' inversao de eixo no software.
 
+
+
+================================================================================
+ITEM 154 (29/10/2026) - BACKUP FACIL DOS ALINHAMENTOS (JSONs) ANTES DE
+    RECALIBRAR; BACKUP JA' FEITO NESTA BANCADA
+================================================================================
+CONTEXTO: usuario ia recalibrar J/O/X depois da correcao do T base (item 153) e
+pediu ajuda porque nao sabia copiar os JSONs manualmente.
+FEITO
+  - backup imediato (duas copias) em
+    `backups_alinhamento/20261029_160212/` e `20261029_160220/`:
+    `imu_palm_alignment_{right,left}.json`, `.json.bak`,
+    `.json.antes_item153` + SHA256.txt;
+  - `tools/backup_alinhamento.py` + `BACKUP_ALINHAMENTO.bat` (raiz): ao rodar/
+    dar dois cliques, cria `backups_alinhamento/<YYYYmmdd_HHMMSS>/` com todos os
+    `imu_palm_alignment_*.json*` e SHA256; nao apaga nada;
+  - `.gitignore`: backups_alinhamento/ (dados locais, nao vao para o git).
+PROXIMA BANCADA: rodar `BACKUP_ALINHAMENTO.bat` (ou ja' use o backup feito),
+recalibrar J/O/X dos dois lados com o codigo novo (save nao mistura mais yaw do
+boot) e depois rodar diagnostico/mira.
+
