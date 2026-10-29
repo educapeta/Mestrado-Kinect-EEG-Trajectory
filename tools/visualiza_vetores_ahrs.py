@@ -89,7 +89,8 @@ class LeitorSerial(threading.Thread):
             linha = bruto.decode("utf-8", "replace").strip()
             self.linhas += 1
             self.ultima_bruta = linha
-            if linha.startswith("# AHRS_VETOR"):
+            if (linha.startswith("# AHRS_VETOR")
+                    or linha.startswith("[ahrs]")):
                 self.tem_firmware_ahrs = True
             if linha.startswith("1,") or linha.startswith("2,"):
                 self.tem_linhas_luvas = True
@@ -336,7 +337,11 @@ def principal():
                     print(f"[visualizador] sem quadros A: linhas="
                           f"{diag['linhas']} validas={diag['validas']} | "
                           f"ultima={diag['ultima']!r}", flush=True)
-                    if diag["linhas_luvas"]:
+                    if diag["firmware_ahrs"] and diag["validas"] == 0:
+                        print("[visualizador] firmware de teste detectado; "
+                              "aguardando boot/calibracao (~6 s) e os quadros "
+                              "A,... -- nao interrompa ainda.", flush=True)
+                    elif diag["linhas_luvas"]:
                         print("[visualizador] a COM4 esta enviando linhas do "
                               "FIRMWARE DAS LUVAS (1,.../2,...). Grave o "
                               "firmware de teste: pio run -d "
@@ -369,11 +374,19 @@ def principal():
                 cena.plt.pause(0.001)
             else:
                 cena.plt.pause(0.01)
+    except KeyboardInterrupt:
+        print("[visualizador] encerrado pelo usuario (Ctrl+C).")
     finally:
         if leitor is not None:
             leitor.parar = True
-            leitor.join(timeout=1.0)
-        cena.plt.close("all")
+            try:
+                leitor.join(timeout=1.0)
+            except KeyboardInterrupt:
+                pass
+        try:
+            cena.plt.close("all")
+        except KeyboardInterrupt:
+            pass
     return 0
 
 

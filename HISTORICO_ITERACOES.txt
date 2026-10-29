@@ -8676,3 +8676,32 @@ PROXIMA BANCADA: fechar o tool das luvas, colocar a placa em BOOT e gravar
 `[ahrs] CALIBRANDO...` e `# AHRS_VETOR v1`; depois rodar o visualizador. Se a
 janela nao aparecer, testar `--simular --duracao 5` para validar o backend.
 
+
+
+================================================================================
+ITEM 144 (28/10/2026) - VISUALIZADOR AHRS: ESPERAR O BOOT/CALIBRACAO (~6 s) E
+    CTRL+C LIMPO; CONFIRMADO NA COM4 QUE OS DOIS MPUs MANDAM QUADROS
+================================================================================
+SINTOMA: depois do upload bem-sucedido, o usuario rodou o visualizador e
+interrompeu (Ctrl+C) antes de aparecer o grafico/dados. O log do visualizador
+mostrou `[ahrs] TESTE AHRS...`, a calibracao dos MPUs 0x68/0x69 e "calibracao
+concluida"; nenhum quadro `A` tinha chegado ainda porque o firmware ainda estava
+no boot: 4 s de calibracao (1000 amostras x 2 ms por MPU) + 1,5 s de aquecimento
+do Mahony antes de publicar o cabecalho e os quadros.
+VERIFICACAO FEITA NESTA BANCADA: abrindo COM4 diretamente e lendo 10 s foram
+recebidos 184 quadros `A,...` (~18 Hz), com os DOIS quaternions e as duas
+aceleracoes (~1 g em Z), ou seja: o firmware de teste esta' funcionando e os
+dois MPUs respondem (mesmo o scan de boot tendo impresso so' o endereco 0x69).
+CORRECOES
+  - visualizador detecta `[ahrs]` como firmware de teste e, enquanto nao chegam
+    quadros A, imprime "firmware detectado; aguardando boot/calibracao (~6 s)
+    -- nao interrompa ainda";
+  - Ctrl+C agora encerra limpo (mensagem "encerrado pelo usuario"), sem
+    traceback de KeyboardInterrupt no `plt.pause`/`join`;
+  - janela 3D continua sendo criada antes da serial, com aviso para procurar
+    atras do PowerShell e testar `--simular --duracao 5`.
+  - README de troubleshooting do firmware ja' documenta o tempo de boot.
+PROXIMA BANCADA: rodar o visualizador, aguardar ~6-8 s apos o reset (ou ver
+"# AHRS_VETOR" no monitor), e entao girar as IMUs. Se a janela nao aparecer,
+testar `--simular --duracao 5` (valida matplotlib) e olhar atras do console.
+
