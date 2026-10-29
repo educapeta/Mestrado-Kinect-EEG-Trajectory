@@ -97,6 +97,13 @@ Na raiz do projeto:
 Basta dar dois cliques ou, no PowerShell, digitar `.\AHRS_menu.bat` (ou
 `.\AHRS_texto.bat`). Nao precisa colar comandos longos.
 
+- **`AHRS_grafico_sem_console.bat`** (ou opcao 6 do menu): abre a janela 3D
+  via `pythonw`, sem janela de console. Use esta se o console parecer
+  "travar": o **QuickEdit do console do Windows** suspende o processo
+  quando voce clica/seleciona texto nele (aperte **Esc** ou clique com o
+  botao direito para liberar; ou desligue em Propriedades > Opcoes >
+  "Modo de Edicao Rapida"). Sem console isso nao acontece.
+
 Por que isso existe: no PowerShell/Windows Terminal, `Ctrl+C` sem texto
 selecionado **cancela** (nao copia) e o colar de HTML/PSReadLine as vezes chega
 duplicado. O `.bat` elimina a colagem.

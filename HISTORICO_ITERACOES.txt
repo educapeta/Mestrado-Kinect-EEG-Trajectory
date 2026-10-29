@@ -8763,3 +8763,32 @@ SOLUCAO PRATICA IMPLEMENTADA
 PROXIMA BANCADA: rodar `.\AHRS_menu.bat` (ou dar dois cliques), escolher 1 para
 ver os vetores no console. Isso elimina a colagem duplicada.
 
+
+
+================================================================================
+ITEM 147 (28/10/2026) - JANELA 3D "TRAVOU" AO MEXER NOS SENSORES: QUICKEDIT DO
+    CONSOLE SUSPENDENDO O PROCESSO; ATALHO SEM CONSOLE (pythonw)
+================================================================================
+SINTOMA: com o menu .bat, opcao 2 (janela 3D), o usuario esperou a calibracao e
+"travou tudo" quando foi mexer nos sensores. Nao havia erro no console.
+CAUSA PROVAVEL: o **QuickEdit do console do Windows** (Modo de Edicao Rapida)
+suspende o processo quando o usuario clica/seleciona texto no console --
+classico em .bat que roda em console. O processo inteiro (inclusive a thread
+grafica) congela ate apertar Esc ou clicar com o botao direito. Nao tem relacao
+com a IMU; a coincidencia e' o usuario ter olhado/tocado o console.
+TESTE DE ESTABILIDADE: a GUI rodou 10 s em --simular sem travar (EXIT 0), e ja'
+havia rodado 6 s na COM4 real com dados; nao ha deadlock no visualizador.
+SOLUCAO
+  - `AHRS_grafico_sem_console.bat`: executa o visualizador com `pythonw.exe`
+    (sem janela de console), via `start`; nada de QuickEdit para suspender;
+  - opcao 6 no `AHRS_menu.bat` para a mesma janela sem console;
+  - README explica o QuickEdit e como liberar (Esc/botao direito) ou desligar
+    (Propriedades > Opcoes > "Modo de Edicao Rapida");
+  - o modo `AHRS_texto.bat` continua como teste definitivo: se o texto continuar
+    atualizando ao mexer nos sensores, o problema e' so' o console; se o texto
+    tambem parar, ai sim e' firmware/serial/hardware.
+PROXIMA BANCADA: rodar `AHRS_grafico_sem_console.bat` (ou menu 6) e mexer nos
+sensores; a janela nao tem console para pausar. Se ainda travar, rodar
+`AHRS_texto.bat` e observar se as linhas L/R continuam mudando (isola GUI x
+hardware).
+
