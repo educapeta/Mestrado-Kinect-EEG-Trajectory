@@ -86,6 +86,21 @@ indicam falha de leitura I2C de um lado.
 - **Vetor deriva devagar**: normal em AHRS 6 eixos (sem magnetômetro); é yaw
   drift. Use `Z` para re-tarar.
 
+## Atalhos `.bat` (evitam colar comandos e a duplicacao do Ctrl+V)
+
+Na raiz do projeto:
+- **`AHRS_menu.bat`** -- menu: 1=modo texto, 2=janela 3D, 3=monitor serial,
+  4=gravar firmware de teste (pede BOOT), 5=voltar as luvas, 0=sair.
+- **`AHRS_texto.bat`** -- roda direto o modo console.
+- **`AHRS_grafico.bat`** -- roda direto a janela 3D.
+
+Basta dar dois cliques ou, no PowerShell, digitar `.\AHRS_menu.bat` (ou
+`.\AHRS_texto.bat`). Nao precisa colar comandos longos.
+
+Por que isso existe: no PowerShell/Windows Terminal, `Ctrl+C` sem texto
+selecionado **cancela** (nao copia) e o colar de HTML/PSReadLine as vezes chega
+duplicado. O `.bat` elimina a colagem.
+
 ## Modo console (sem janela)
 
 Se a janela 3D nao aparecer (Qt/Tcl/ambiente grafico), use `--texto`: ele

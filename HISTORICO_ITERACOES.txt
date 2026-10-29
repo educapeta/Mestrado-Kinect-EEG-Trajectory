@@ -8732,3 +8732,34 @@ PROXIMA BANCADA: rodar o modo texto com --duracao 15, esperar a tara e girar
 cada MPU conferindo L/R; depois tentar a janela (aguardar ~8-10 s apos reset e
 procurar atras do console). Fechar o monitor serial antes do visualizador.
 
+
+
+================================================================================
+ITEM 146 (28/10/2026) - COLAGEM DUPLICADA NO POWERSHELL: CAUSA E ATALHOS .BAT
+================================================================================
+SINTOMA: os comandos chegavam ao PowerShell DUPLICADOS (`--duracao 5.\.venv...
+--simular --duracao 5`, `--port COM4cd C:\mestradopy`), quebrando argparse e
+as vezes executando duas vezes. O usuario percebeu que Ctrl+C/Ctrl+V colava o
+texto duas vezes.
+CAUSA: nao e' o programa; e' o clipboard/terminal. Causas comuns:
+  - Ctrl+C no PowerShell sem selecao = CANCELAR, nao copiar; o Ctrl+V cola o
+    clipboard antigo (que podia ja' ter o comando);
+  - copiar uma selecao que abrange mais de um bloco de codigo (varias respostas
+    mostram o mesmo comando) -> texto repetido no clipboard;
+  - bug/comportamento de bracketed paste do Windows Terminal + PSReadLine com
+    texto vindo de HTML/pagina;
+  - gerenciador de clipboard (Win+V, Ditto etc.) ou tecla Ctrl presa.
+TESTES QUE O USUARIO PODE FAZER: colar em Notepad (se vier duas vezes, o
+problema e' no clipboard/selecao); usar clique-direito/Shift+Insert para colar;
+`Get-Clipboard` para inspecionar; limpar com `Set-Clipboard ""` e copiar apenas
+uma linha.
+SOLUCAO PRATICA IMPLEMENTADA
+  - `AHRS_menu.bat` (menu: 1 texto, 2 janela, 3 monitor, 4 gravar teste,
+    5 voltar luvas, 0 sair);
+  - `AHRS_texto.bat` e `AHRS_grafico.bat` (atalhos diretos);
+  - todos fazem `cd /d "%~dp0"` e chamam o `.venv`, sem precisar colar nada;
+  - README do firmware ganhou secao "Atalhos .bat".
+  - O modo texto ja' havia confirmado na COM4 os dois vetores em -Z.
+PROXIMA BANCADA: rodar `.\AHRS_menu.bat` (ou dar dois cliques), escolher 1 para
+ver os vetores no console. Isso elimina a colagem duplicada.
+
