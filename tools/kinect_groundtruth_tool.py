@@ -2140,7 +2140,7 @@ def main():
     }
     print(f"IMU: direita na porta {receivers['right'].port} | esquerda na porta "
           f"{receivers['left'].port}")
-    print("TECLAS (C/B/M/O/D/G/J/K/H/L/R/V/X/N/F): clique ANTES em uma janela de VIDEO -- sem "
+    print("TECLAS (C/B/M/O/D/G/J/K/H/L/R/V/X/N/F/Y): clique ANTES em uma janela de VIDEO -- sem "
           "foco no video o OpenCV nao recebe a tecla (a tecla O parece nao "
           "funcionar e o console fica mudo).")
     print("  M = MEDIR NIVEL DA MESA (plano do Kinect, compensa inclinacao)")
@@ -2149,6 +2149,9 @@ def main():
               "da lente mirando a lente: centro/esquerda/"
               "direita/baixo) | V = VERIFICAR | "
               "G = log do vetor")
+    print("  Y = CALIBRACAO COMPACTA: mao PARADA num ponto (~45 cm), "
+          "gire o punho devagar ~24 s; usa o PLANO DO DORSO medido pelo "
+          "Kinect -- sem ir a cantos do quadro")
     for receiver in receivers.values():
         receiver.start()
     # --- webcams auxiliares: a ATIVA (--aux-index) + as OUTRAS (--aux-cameras) ---
@@ -4750,6 +4753,38 @@ def main():
                     fusions[lado].bias_samples.clear()
                 bias_calibration_until = time.monotonic() + 2.0
                 print("Calibrando bias do acelerometro por 2 segundos. Mantenha a mao parada.")
+            elif key == ord("y"):
+                # CALIBRACAO COMPACTA (item 155): junta a verdade do PLANO do
+                # dorso (como o J antigo) com a diversidade de ROTACAO da mao
+                # parada (como a O), SEM deslocar a mao pelos cantos do quadro.
+                if captura_palma_plano.ativa:
+                    captura_palma_plano.parar()
+                    print("Calibracao compacta cancelada (nada foi gravado).")
+                else:
+                    if calib_geo is not None:
+                        calib_geo.parar()
+                        calib_geo = None
+                        print("Calibracao geometrica cancelada pela compacta Y.")
+                    if poses_fisicas.ativa:
+                        poses_fisicas.parar()
+                        poses_fisicas_fase_vista = None
+                    captura_palma.parar()
+                    verificacao_palma.parar()
+                    for _lado_ancora, _ancora in ancoras_yaw.items():
+                        if not _ancora.pronto:
+                            _ancora.cancelar()
+                    captura_palma_plano.iniciar(now)
+                    print(
+                        "CALIBRACAO COMPACTA (Y) -- SEM MOVER A MAO PELO QUADRO.\n"
+                        "  - Mantenha a(s) mao(s) num ponto fixo a ~45 cm da "
+                        "lente, com o DORSO/PALMA visivel para o Kinect;\n"
+                        "  - Gire o PUNHO devagar por ~24 s passando por varias "
+                        "inclinacoes (nao precisa ir a cantos);\n"
+                        "  - Cada orientacao parada ~1 s entra como amostra; as "
+                        "duas maos podem ser capturadas juntas;\n"
+                        "  - No fim ele resolve T/f por lado com a normal do "
+                        "PLANO e grava (O/X/J nao precisam)."
+                    )
             elif key == ord("o"):
                 # Alinhamento IMU <-> camera da palma, POR LUVA (ver
                 # `CapturaAlinhamentoPalma`). E' o que faz o vetor da palma

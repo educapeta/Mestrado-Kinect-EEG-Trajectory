@@ -9036,3 +9036,29 @@ PROXIMA BANCADA: rodar `BACKUP_ALINHAMENTO.bat` (ou ja' use o backup feito),
 recalibrar J/O/X dos dois lados com o codigo novo (save nao mistura mais yaw do
 boot) e depois rodar diagnostico/mira.
 
+
+
+================================================================================
+ITEM 155 (29/10/2026) - CALIBRACAO COMPACTA (TECLA Y): JUNTA A VERDADE DO
+    PLANO DO DORSO COM ROTACAO DA MAO PARADA, SEM IR A CANTOS DO QUADRO
+================================================================================
+SINTOMA: o usuario nao consegue levar a mao aos cantos/posicoes exigidas pelo J
+(4 posicoes espalhadas) nem pelo X (13 poses), mas quer recalibrar depois do fix
+de save/reancoragem.
+SOLUCAO: nova tecla **Y** no groundtruth:
+  - inicia `captura_palma_plano` (classe que ja existia, sem tecla): durante
+    ~24 s coleta, por lado, a ROTACAO do IMU + a normal ROBUSTA do PLANO do
+    dorso medida pelo Kinect (`palm_plano_estavel`, com estabilidade);
+  - resolve T/f com `solve_palm_alignment` (mesmo modelo T R f), por lado, e
+    grava o JSON oficial via `save_palm_alignment` (com o fix do item 153:
+    T base, sem yaw do boot);
+  - nao exige mover a mao pelo quadro: a diversidade vem de girar o punho em
+    um ponto fixo (~45 cm), com dorso/palma visivel; as duas maos podem ser
+    capturadas juntas; Y de novo cancela.
+  - ajuda do tool e README atualizados; teste estatico da tecla Y.
+VALIDACAO: AST/test_calibracao_geometrica OK (suite raiz no commit). Falta a
+validacao de bancada (o usuario vai rodar Y).
+PROXIMA BANCADA: abrir o tool, teclar Y, manter as maos num ponto fixo, girar o
+punho devagar por ~24 s; conferir o residuo e se os JSONs foram gravados; depois
+testar o vetor vermelho girando a mao no mesmo ponto.
+

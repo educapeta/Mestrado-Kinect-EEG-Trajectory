@@ -401,6 +401,8 @@ check("tool finaliza gravando JSON/solucao",
 check("tool desenha o plano-guia",
       "desenhar_guia_plano_palma(" in fonte_tool)
 check("tool sabe pular pose", ".pular_pose()" in fonte_tool)
+check("tool tem calibracao compacta Y (plano, sem cantos)",
+      'ord("y")' in fonte_tool and "CALIBRACAO COMPACTA" in fonte_tool)
 check("tool tem tecla F (forcar take auditado)",
       'ord("f")' in fonte_tool and "forcar_take(" in fonte_tool)
 check("tool salva JSON parcial a cada take",

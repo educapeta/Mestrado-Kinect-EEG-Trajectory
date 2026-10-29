@@ -630,6 +630,16 @@ python _render_cue.py       # 9 telas do cue em PNG (arranjo LOCAL de inspeção
 
 ---
 
+## Calibração compacta da palma (item 155, tecla Y)
+
+Se não der para levar a mão aos cantos/posições do `J`/`X`, use a tecla **`Y`**:
+mantenha a(s) mão(s) **parada(s) num ponto só** (~45 cm da lente), com o dorso/
+palma visível, e **gire o punho devagar por ~24 s**. O tool coleta a **normal do
+plano do dorso medida pelo Kinect** em várias orientações e resolve T/f por lado
+(como o `J` antigo + a diversidade de rotação da `O`), sem deslocar a mão pelo
+quadro. As duas mãos podem ser capturadas juntas; no fim ele grava o JSON por
+lado. `Y` de novo cancela.
+
 ## Calibração da palma por TAKES (22/10/2026, itens 114-122)
 
 As teclas `J` (calibrar) e `V` (verificar) calibram o vetor da palma do IMU
