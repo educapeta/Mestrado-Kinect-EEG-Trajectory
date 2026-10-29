@@ -53,16 +53,23 @@ def escolher_porta(porta: str | None):
 class LeitorSerial(threading.Thread):
     """Le a serial e guarda o ultimo quadro `A,...` parseado."""
 
-    def __init__(self, porta: str, baud: int = 115200):
+    def __init__(self, porta: str, baud: int = 115200, debug: bool = False):
         super().__init__(daemon=True)
         self.porta = porta
         self.baud = baud
+        self.debug = debug
         self.parar = False
         self.erro = None
         self.lock = threading.Lock()
         self.ultimo = None
         self.ultimo_instante = 0.0
         self.serial = None
+        self.linhas = 0
+        self.linhas_validas = 0
+        self.primeiras = []
+        self.ultima_bruta = ""
+        self.tem_firmware_ahrs = False
+        self.tem_linhas_luvas = False
 
     def run(self):
         try:
@@ -79,8 +86,21 @@ class LeitorSerial(threading.Thread):
                 break
             if not bruto:
                 continue
-            dados = core.parse_linha_ahrs(bruto.decode("utf-8", "replace"))
+            linha = bruto.decode("utf-8", "replace").strip()
+            self.linhas += 1
+            self.ultima_bruta = linha
+            if linha.startswith("# AHRS_VETOR"):
+                self.tem_firmware_ahrs = True
+            if linha.startswith("1,") or linha.startswith("2,"):
+                self.tem_linhas_luvas = True
+            if self.debug or len(self.primeiras) < 6:
+                if len(self.primeiras) < 6:
+                    self.primeiras.append(linha)
+                if self.debug:
+                    print(f"[serial] {linha}", flush=True)
+            dados = core.parse_linha_ahrs(linha)
             if dados is not None:
+                self.linhas_validas += 1
                 with self.lock:
                     self.ultimo = dados
                     self.ultimo_instante = time.monotonic()
@@ -93,6 +113,17 @@ class LeitorSerial(threading.Thread):
     def copiar(self):
         with self.lock:
             return self.ultimo, self.ultimo_instante
+
+    def diagnostico(self):
+        with self.lock:
+            return {
+                "linhas": self.linhas,
+                "validas": self.linhas_validas,
+                "firmware_ahrs": self.tem_firmware_ahrs,
+                "linhas_luvas": self.tem_linhas_luvas,
+                "ultima": self.ultima_bruta,
+                "primeiras": list(self.primeiras),
+            }
 
     def enviar(self, comando: str):
         if self.serial is None:
@@ -118,7 +149,9 @@ def dados_simulados(t: float) -> dict:
 
 def texto_estado(sample, vetores, v_body, instante, origem):
     if sample is None:
-        return "AGUARDANDO DADOS do firmware (A,...)"
+        return ("AGUARDANDO QUADROS A,... DO FIRMWARE DE TESTE -- confira o "
+                "monitor serial / se gravou firmware/esp32_teste_ahrs "
+                "(com --simular a janela funciona sem hardware)")
     idade = time.monotonic() - instante
     linhas = [f"idade do ultimo quadro: {idade * 1000.0:.0f} ms"]
     for lado, nome, cor in (("left", "ESQUERDA (0x69)",
@@ -219,29 +252,44 @@ def principal():
     parser.add_argument("--listar-portas", action="store_true")
     parser.add_argument("--duracao", type=float, default=0.0,
                         help="fecha sozinho depois de N segundos (0=infinito)")
+    parser.add_argument("--debug", action="store_true",
+                        help="mostra as linhas cruas recebidas da serial")
     args = parser.parse_args()
 
     portas = listar_portas()
     if args.listar_portas:
         return 0
-    leitor = None
+    porta = None
     if not args.simular:
         porta = escolher_porta(args.port)
         if porta is None:
             print("ERRO: nenhuma porta serial encontrada. Use --port COMx "
                   "(ou --simular).")
             return 1
-        leitor = LeitorSerial(porta, args.baud)
-        leitor.start()
-        print(f"Lendo {porta} a {args.baud} baud. Firmware esperado: "
-              "firmware/esp32_teste_ahrs (linhas A,...).")
     inicio = time.monotonic()
+    import matplotlib
+    print(f"[visualizador] backend matplotlib: {matplotlib.get_backend()}",
+          flush=True)
+    print("[visualizador] abrindo a janela 3D... (se ela nao aparecer, veja "
+          "se abriu atras do PowerShell ou use --simular para testar)",
+          flush=True)
     cena = Cena()
+    try:
+        cena.plt.show(block=False)
+    except Exception as exc:  # noqa: BLE001
+        print(f"[visualizador] aviso: show(block=False): {exc}")
+    leitor = None
+    if not args.simular:
+        leitor = LeitorSerial(porta, args.baud, debug=args.debug)
+        leitor.start()
+        print(f"[visualizador] lendo {porta} a {args.baud} baud; firmware "
+              "esperado: esp32_teste_ahrs (linhas A,...).", flush=True)
     v_body = {"left": np.array([0.0, 0.0, -1.0]),
               "right": np.array([0.0, 0.0, -1.0])}
     zerado = {"left": False, "right": False}
     ultimo_t = 0.0
     ultimo_desenho = 0.0
+    ultimo_status = 0.0
     sample = None
     instante = 0.0
 
@@ -279,8 +327,30 @@ def principal():
             elif leitor is not None:
                 sample, instante = leitor.copiar()
                 if leitor.erro:
-                    print(f"[visualizador] {leitor.erro}")
+                    print(f"[visualizador] ERRO: {leitor.erro}")
                     break
+                if sample is None and agora - inicio > 3.0 \
+                        and agora - ultimo_status > 3.0:
+                    ultimo_status = agora
+                    diag = leitor.diagnostico()
+                    print(f"[visualizador] sem quadros A: linhas="
+                          f"{diag['linhas']} validas={diag['validas']} | "
+                          f"ultima={diag['ultima']!r}", flush=True)
+                    if diag["linhas_luvas"]:
+                        print("[visualizador] a COM4 esta enviando linhas do "
+                              "FIRMWARE DAS LUVAS (1,.../2,...). Grave o "
+                              "firmware de teste: pio run -d "
+                              "firmware\esp32_teste_ahrs -t upload",
+                              flush=True)
+                    elif not diag["firmware_ahrs"] and diag["linhas"] == 0:
+                        print("[visualizador] nenhum byte chegou; confira se "
+                              "o ESP esta' ligado/resetado e se a COM4 e' a "
+                              "placa certa (fechando o monitor serial).",
+                              flush=True)
+                    elif not diag["firmware_ahrs"]:
+                        print("[visualizador] recebi linhas, mas nenhuma do "
+                              "firmware AHRS; primeiras: "
+                              f"{diag['primeiras'][:3]}", flush=True)
             # tara automatica no primeiro quadro (vetor comeca em -Z/chao)
             if sample is not None and not (zerado["left"] and zerado["right"]):
                 aplicar_tara(sample)

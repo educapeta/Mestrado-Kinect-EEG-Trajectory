@@ -67,6 +67,25 @@ indicam falha de leitura I2C de um lado.
 - Se quiser medir a orientação absoluta da luva, o caminho continua sendo a
   calibração `T`/`f` com o Kinect (itens 127+), não este teste.
 
+## Troubleshooting
+
+- **A janela abre, mas fica "AGUARDANDO QUADROS A"**: a COM4 está enviando
+  linhas `1,...`/`2,...` do **firmware das luvas**, não do teste. Feche o tool
+  das luvas, grave `esp32_teste_ahrs` de novo (com BOOT) e confira com
+  `pio device monitor -d firmware/esp32_teste_ahrs`: tem de aparecer
+  `[ahrs] TESTE AHRS...`, a calibração e `# AHRS_VETOR v1`.
+- **A janela não aparece**: rode primeiro `tools\visualiza_vetores_ahrs.py
+  --simular --duracao 5` para testar o matplotlib. Se o simulado funcionar, a
+  janela real pode ter aberto atrás do PowerShell. O script agora imprime o
+  backend e as linhas cruas com `--debug`.
+- **Porta ocupada / PermissionError**: feche o tool das luvas, o `pio device
+  monitor` e qualquer outro programa na COM4; o CP210x desta bancada não
+  aceita duas aberturas.
+- **Só um vetor se mexe**: confira o endereço I2C (0x68/0x69) e a fiação; o
+  monitor mostra o par SDA/SCL encontrado e os erros `E,0,D`/`E,0,E`.
+- **Vetor deriva devagar**: normal em AHRS 6 eixos (sem magnetômetro); é yaw
+  drift. Use `Z` para re-tarar.
+
 ## Visualizador
 `tools/visualiza_vetores_ahrs.py` usa a matemática de
 `tools/ahrs_vetores_core.py` (também testada por `test_ahrs_vetores.py`).

@@ -8645,3 +8645,34 @@ paradas/deitadas no boot, rodar o visualizador com --port COM4 e girar cada
 sensor. Conferir se os dois vetores acompanham a rotacao e se um nao mexe
 quando o outro e' girado. Depois regravar `firmware/esp32_duas_imus` (luvas).
 
+
+
+================================================================================
+ITEM 143 (28/10/2026) - VISUALIZADOR AHRS: DIAGNOSTICO DE COM4 MUDA/JANELA E
+    "AGUARDANDO QUADROS A" (o firmware de teste nao estava gravado)
+================================================================================
+SINTOMA: o usuario rodou o visualizador com --port COM4; a janela nao mostrou
+nada e o programa ficou esperando. O log parava em "Lendo COM4 a 115200 baud".
+DIAGNOSTICO FEITO NESTA BANCADA (abrindo a COM4 com --debug): a porta estava
+enviando linhas `1,...` e `2,...` do FIRMWARE DAS LUVAS (com erros
+`WiFiUdp.cpp: could not send data`), NAO os quadros `A,...` do firmware de
+teste `esp32_teste_ahrs`. O visualizador nao tinha timeout nem mensagem para
+esse caso -- parecia "travado".
+CORRECOES NO VISUALIZADOR
+  - a janela 3D e' criada ANTES de abrir a serial; imprime o backend do
+    matplotlib e um aviso para procurar a janela atras do PowerShell;
+  - `--debug`: ecoa as linhas cruas recebidas da serial;
+  - a cada 3 s sem quadros `A`: imprime quantas linhas chegaram, a ultima
+    linha e, se reconhecer `1,`/`2,`, avisa explicitamente que a COM4 esta' no
+    FIRMWARE DAS LUVAS e que e' preciso gravar o de teste;
+  - se nenhum byte chegar, avisa para conferir alimentacao/COM/monitor aberto;
+  - o texto dentro do grafico tambem diz "AGUARDANDO QUADROS A..." com a dica.
+  - README do firmware ganhou secao de troubleshooting.
+OBSERVACAO: a linha `WiFiUdp.cpp: could not send data: 118` e' do firmware das
+luvas tentando mandar UDP sem hotspot/rede no momento; nao e' problema do
+visualizador.
+PROXIMA BANCADA: fechar o tool das luvas, colocar a placa em BOOT e gravar
+`esp32_teste_ahrs`; no monitor deve aparecer `[ahrs] TESTE AHRS...`,
+`[ahrs] CALIBRANDO...` e `# AHRS_VETOR v1`; depois rodar o visualizador. Se a
+janela nao aparecer, testar `--simular --duracao 5` para validar o backend.
+
