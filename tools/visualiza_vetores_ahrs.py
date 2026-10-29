@@ -14,8 +14,10 @@ Teclas: Z = re-tarar agora; C = recalibrar no ESP (IMUs paradas/deitadas);
 from __future__ import annotations
 
 import argparse
+import csv
 import math
 import sys
+from datetime import datetime
 import threading
 import time
 from pathlib import Path
@@ -327,6 +329,65 @@ def modo_texto(args):
     return 0
 
 
+class LogAHRS:
+    """Grava CSV de amostras/eventos do visualizador para analise posterior."""
+
+    CAMPOS = [
+        "t_mono", "t_us",
+        "qw_left", "qx_left", "qy_left", "qz_left",
+        "qw_right", "qx_right", "qy_right", "qz_right",
+        "ax_left", "ay_left", "az_left",
+        "ax_right", "ay_right", "az_right",
+        "vx_left", "vy_left", "vz_left", "ang_left_deg",
+        "vx_right", "vy_right", "vz_right", "ang_right_deg",
+    ]
+
+    def __init__(self, caminho, porta=None, baud=None):
+        import numpy as np  # noqa: F401 (mantem dependencia explicita)
+        self.caminho = Path(caminho)
+        self.caminho.parent.mkdir(parents=True, exist_ok=True)
+        self.arquivo = self.caminho.open("w", encoding="utf-8", newline="")
+        self.csv = csv.writer(self.arquivo)
+        self.arquivo.write("# AHRS_LOG v1\n")
+        self.arquivo.write(f"# inicio={datetime.now().isoformat(timespec='seconds')}\n")
+        if porta:
+            self.arquivo.write(f"# porta={porta} baud={baud}\n")
+        self.arquivo.write("# evento=linha comecando com #EVENT\n")
+        self.csv.writerow(self.CAMPOS)
+        self.n = 0
+
+    def evento(self, nome, **extras):
+        partes = [f"#EVENT t_mono={time.monotonic():.6f}", f"evento={nome}"]
+        for chave, valor in extras.items():
+            partes.append(f"{chave}={valor}")
+        self.arquivo.write(",".join(partes) + "\n")
+        self.arquivo.flush()
+
+    def amostra(self, sample, v_body, vetores):
+        linha = [
+            time.monotonic(), sample["t_us"],
+            *[float(v) for v in sample["left"]],
+            *[float(v) for v in sample["right"]],
+            *[float(v) for v in sample["accel_left"]],
+            *[float(v) for v in sample["accel_right"]],
+            *[float(v) for v in vetores["left"]],
+            core.angulo_com_baixo(vetores["left"]),
+            *[float(v) for v in vetores["right"]],
+            core.angulo_com_baixo(vetores["right"]),
+        ]
+        self.csv.writerow(linha)
+        self.n += 1
+        if self.n % 10 == 0:
+            self.arquivo.flush()
+
+    def fechar(self):
+        self.evento("fim", amostras=self.n)
+        try:
+            self.arquivo.close()
+        except OSError:
+            pass
+
+
 def _opencv_camera():
     """Bases da camera virtual (OpenCV) para projetar o mundo 3D na tela."""
     import numpy as np
@@ -366,6 +427,7 @@ def modo_opencv(args):
 
     leitor = None
     porta = None
+    logger = None
     if not args.simular:
         porta = escolher_porta(args.port)
         if porta is None:
@@ -375,6 +437,17 @@ def modo_opencv(args):
         leitor.start()
         print(f"[opencv] lendo {porta}; aguarde o boot (~6 s). "
               "Q/ESC fecha.", flush=True)
+    if args.log:
+        caminho_log = args.log
+        if str(caminho_log).lower() in ("auto", ""):
+            carimbo = datetime.now().strftime("%Y%m%d_%H%M%S")
+            caminho_log = Path("ahrs_logs") / f"ahrs_{carimbo}.csv"
+        try:
+            logger = LogAHRS(caminho_log, porta=porta, baud=args.baud)
+            print(f"[opencv] LOG: {logger.caminho}", flush=True)
+        except OSError as exc:
+            print(f"[opencv] nao consegui criar log: {exc}")
+            logger = None
     inicio = time.monotonic()
     ultimo_status = 0.0
     sample = None
@@ -421,11 +494,23 @@ def modo_opencv(args):
                     R0 = core.quat_para_matriz(*sample[lado])
                     v_body[lado] = core.vetor_corpo_para_baixo(R0)
                 zerado = True
+                if logger is not None:
+                    logger.evento("tara_inicial",
+                                  quat_left=tuple(round(float(v), 6) for v in sample["left"]),
+                                  quat_right=tuple(round(float(v), 6) for v in sample["right"]),
+                                  vbody_left=tuple(round(float(v), 6) for v in v_body["left"]),
+                                  vbody_right=tuple(round(float(v), 6) for v in v_body["right"]))
                 print("[opencv] dados AHRS chegando; vetores tareados em "
                       "-Z (chao).", flush=True)
+            vetores_log = {}
             if sample is not None:
                 amostras += 1
                 ultimo_amostra = agora
+                for lado in ("left", "right"):
+                    R = core.quat_para_matriz(*sample[lado])
+                    vetores_log[lado] = core.vetor_mundo(R, v_body[lado])
+                if logger is not None:
+                    logger.amostra(sample, v_body, vetores_log)
 
             quadro = np.zeros((altura, largura, 3), dtype=np.uint8)
             # piso (z = -1.2) em cinza
@@ -533,12 +618,20 @@ def modo_opencv(args):
                         R0 = core.quat_para_matriz(*sample[lado])
                         v_body[lado] = core.vetor_corpo_para_baixo(R0)
                     zerado = True
+                    if logger is not None:
+                        logger.evento("tara_Z",
+                                      quat_left=tuple(round(float(v), 6) for v in sample["left"]),
+                                      quat_right=tuple(round(float(v), 6) for v in sample["right"]))
                     print("[opencv] tara aplicada (vetores em -Z).")
             elif tecla in (ord("c"), ord("C")) and leitor is not None:
                 if leitor.enviar("c"):
+                    if logger is not None:
+                        logger.evento("comando_c")
                     print("[opencv] enviei 'c' ao ESP (recalibrar).")
             elif tecla in (ord("r"), ord("R")) and leitor is not None:
                 if leitor.enviar("r"):
+                    if logger is not None:
+                        logger.evento("comando_r")
                     print("[opencv] enviei 'r' ao ESP (reiniciar atitude).")
             try:
                 if cv2.getWindowProperty(janela, cv2.WND_PROP_VISIBLE) < 1:
@@ -558,6 +651,9 @@ def modo_opencv(args):
                 leitor.join(timeout=1.0)
             except KeyboardInterrupt:
                 pass
+        if logger is not None:
+            logger.fechar()
+            print(f"[opencv] log fechado: {logger.caminho}", flush=True)
     return 0
 
 
@@ -580,6 +676,9 @@ def principal():
                         help="usa a janela 3D antiga do matplotlib/Qt")
     parser.add_argument("--snapshot", default=None,
                         help="salva o primeiro quadro da janela OpenCV em PNG")
+    parser.add_argument("--log", nargs="?", const="auto", default=None,
+                        help="grava CSV de amostras/eventos; sem valor usa "
+                             "ahrs_logs/ahrs_<timestamp>.csv")
     parser.add_argument("--backend", default="auto",
                         choices=["auto", "qtagg", "tkagg", "agg"],
                         help="backend do matplotlib (se a janela nao abrir, "

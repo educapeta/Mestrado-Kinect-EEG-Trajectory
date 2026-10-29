@@ -102,6 +102,10 @@ if fw_main.exists():
 check("platformio do firmware existe",
       fw_ini.exists() and "[env:esp32_teste_ahrs]" in
       fw_ini.read_text(encoding="utf-8"))
+check("atalho de log existe",
+      (raiz / "AHRS_grafico_log.bat").exists())
+check("analisador de log existe",
+      (raiz / "tools" / "analisa_log_ahrs.py").exists())
 check("visualizador existe", visual.exists())
 if visual.exists():
     fonte_vis = visual.read_text(encoding="utf-8")

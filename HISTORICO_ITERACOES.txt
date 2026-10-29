@@ -8827,3 +8827,41 @@ melhor `AHRS_grafico_sem_console.bat` (sem console/QuickEdit), aguardar ~6-10 s
 e girar os MPUs. Se a janela OpenCV ainda travar, rodar `AHRS_texto.bat` e
 comparar (se o texto parar tambem, e' firmware/serial, nao a GUI).
 
+
+
+================================================================================
+ITEM 149 (29/10/2026) - LOG CSV DO VISUALIZADOR AHRS + ANALISADOR PARA VER SE
+    O VETOR VOLTA PARA -Z DEPOIS DE MEXER E RETORNAR OS SENSORES
+================================================================================
+PEDIDO: gravar o que acontece durante a janela 3D, para o usuario rodar
+(esperar calibrar, mexer nos sensores, voltar a posicao paralela a mesa) e
+verificarmos no log se o vetor final esta' alinhado com -Z.
+IMPLEMENTADO
+  - `tools/visualiza_vetores_ahrs.py`:
+      * `--log [arquivo]`: grava CSV; sem valor usa
+        `ahrs_logs/ahrs_<YYYYmmdd_HHMMSS>.csv`;
+      * colunas: t_mono,t_us, quaternions L/R, accel L/R, vetor de mundo L/R,
+        angulo com -Z L/R; eventos `#EVENT` (tara_inicial, tara_Z, comando_c,
+        comando_r, fim) com quaternions/vetor de corpo da tara;
+      * log fecha no `finally` (Q/ESC/Ctrl+C).
+  - `AHRS_grafico_log.bat` e opcao 7 do menu: janela OpenCV gravando log.
+  - `tools/analisa_log_ahrs.py`: le o log mais recente (ou caminho) e mostra
+    por sensor:
+      * vetor inicial/final (mediana das bordas), angulo com -Z em cada um;
+      * quanto o final ficou longe do inicial (se voltou a mesa, deve ser ~0);
+      * min/mediana/max do angulo com o chao durante a sessao;
+      * deriva do quaternion inicial->final (inclui yaw, que um vetor vertical
+        sozinho nao mostra);
+      * veredito com alertas (inicio/final longe de -Z, nao voltou, vetor nunca
+        saiu de -Z = sensor nao movido/leitura travada).
+  - README do firmware ganhou a secao do log; `.gitignore` ignora ahrs_logs/;
+    teste estatico em test_ahrs_vetores.py.
+VALIDACAO: log de teste na COM4 real gerou 188 amostras em 5,8 s (~32 Hz),
+com tara_inicial e fim; analisador mostrou vetores ~-Z (0.0-0.03 graus) e
+alertou corretamente que os sensores nao foram movidos; suite 64/64 no commit.
+PROXIMA BANCADA (usuario): rodar `AHRS_grafico_log.bat`, esperar calibracao,
+mexer nos dois sensores, voltar cada um a posicao inicial (face paralela a
+mesa), fechar com Q/ESC; depois avisar para o Lead ler o CSV mais recente e
+rodar `tools/analisa_log_ahrs.py`. Se o vetor final nao voltar a -Z, o log diz
+se foi deriva do quaternion/sensor ou leitura.
+

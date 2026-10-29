@@ -97,3 +97,6 @@ _*.json
 # versionados DENTRO de cada projeto, tipo firmware/esp32_luvas/.vscode)
 /firmware/.vscode/
 
+
+# logs do teste AHRS (item 149)
+ahrs_logs/

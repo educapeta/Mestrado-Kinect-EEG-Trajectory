@@ -86,6 +86,29 @@ indicam falha de leitura I2C de um lado.
 - **Vetor deriva devagar**: normal em AHRS 6 eixos (sem magnetômetro); é yaw
   drift. Use `Z` para re-tarar.
 
+## Log para analise (`AHRS_grafico_log.bat`)
+
+Para diagnostico, rode:
+```powershell
+.\AHRS_grafico_log.bat
+```
+ou menu -> opcao 7. Ele abre a janela OpenCV **gravando**
+`ahrs_logs\ahrs_<data>_<hora>.csv` com, a cada amostra:
+- quaternions L/R (`qw,qx,qy,qz`);
+- aceleracoes L/R;
+- vetor de mundo L/R e angulo com -Z (chao);
+- eventos (`tara_inicial`, `tara_Z`, `comando_c`, `comando_r`, `fim`).
+
+Roteiro: espere a calibracao (setas aparecem) -> mexa nos sensores como quiser
+-> volte cada um a posicao inicial (face paralela a mesa) -> feche a janela com
+**Q/ESC** (para o log fechar). Depois rode:
+```powershell
+.\.venv\Scripts\python.exe tools\analisa_log_ahrs.py
+```
+Ele usa o log mais recente e imprime vetor inicial/final, angulo com -Z,
+retorno ao inicial, deriva do quaternion e um veredito por sensor. Se o vetor
+final nao voltar perto de -Z, o CSV permite ver se foi deriva/giro ou leitura.
+
 ## Janela 3D (OpenCV nativo -- padrao)
 
 A janela 3D usa **OpenCV highgui** (a mesma janela nativa que o tool das luvas
