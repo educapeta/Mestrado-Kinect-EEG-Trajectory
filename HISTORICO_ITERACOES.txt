@@ -8933,3 +8933,43 @@ PROXIMA BANCADA: `AHRS\\AHRS_menu.bat` -> opcao 7; esperar calibracao; mexer os
 dois MPUs; voltar a posicao inicial; Q/ESC; analisar com
 `AHRS\\tools\\analisa_log_ahrs.py`.
 
+
+
+================================================================================
+ITEM 152 (29/10/2026) - REVISAO CRUZADA AHRS x GROUNDTRUTH (4 SUBAGENTES
+    NEMOTRON ULTRA) + RELATORIO DO QUE E' FATO X HIPOTESE
+================================================================================
+PEDIDO: revisar ambos os codigos e dizer o que esta diferente, porque o AHRS
+novo mostra orientacao confiavel e o groundtruth do Kinect nao.
+METODO: 4 subagentes independentes (provider nvidia,
+nvidia/nemotron-3-ultra-550b-a55b), read-only, escopos: convencoes matematicas,
+tool Kinect, referencia AHRS, dados/experimentos. O Lead validou numericamente
+os pontos criticos.
+VERIFICADO (FATO)
+  - q->R do log AHRS vs imu.rotation_matrix(RPY): erro max 0,000002 grau em 265
+    amostras -> convencoes compativeis; nao ha' transposicao/ordem errada.
+  - UP_AXIS=2 e' o Z do MUNDO do IMU (para cima), nao do camera space Kinect;
+    o comentario em imu.py:36 e' enganoso. NAO e' bug; nao mudar.
+  - as setas comparadas sao grandezas diferentes: AHRS = vetor fixo no corpo
+    tareado a -Z mundo; groundtruth = normal da palma na camera (T R f). Nao
+    compara-las a olho.
+  - no log ahrs_20261029_152802.csv a DIREITA variou ate 2,08 g e 179,1 graus
+    (teto, +Z), voltando a 1,8 graus; a ESQUERDA variou so' ~0,1 g e 4,8 graus.
+    Isso e' leitura/hardware do lado 0x69, nao convencao de software.
+HIPOTESES/FIXES CANDIDATOS (revisao)
+  - `AncoradorYawBoot` seta fusion.imu_to_camera com T reancorado e
+    `save_palm_alignment` grava o estado atual; o docstring diz que o salvo
+    fica intocado. Se salvar (O/J/X) depois da ancoragem, o delta daquele boot
+    pode ir para o JSON; corrigir mantendo T original + delta separado.
+  - bootstrap de 1 amostra (`calibrate_palm_direction` com T=I) so' vale na
+    pose; sem alinhamento salvo, a seta vermelha deveria ser avisada/bloqueada.
+  - firmware da luva envia Euler; em pitch +-90 (teto) ha' gimbal lock. AHRS
+    novo usa quaternion. Considerar adicionar qw,qx,qy,qz ao UDP e usar q.
+  - normal do Kinect: padronizar sinal anatomico; `palm_normal_camera` com
+    nz<0 so' vale na pose palma-para-lente; QA deve usar plano estabilizado.
+  - T/f salvos sao de 22/10; recalibrar depois.
+RELATORIO: AHRS/relatorios/revisao_groundtruth_vs_ahrs_20261029.md.
+PROXIMO PASSO: autorizado pelo usuario, atacar P0 (lado esquerdo), depois P1
+(save/reancoragem, bootstrap, quaternion) com testes sinteticos, e so' entao
+recalibrar/validar. Nao aplicar os falsos positivos UP_AXIS/rotation_matrix.
+
