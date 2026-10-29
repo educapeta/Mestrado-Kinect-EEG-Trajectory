@@ -8595,3 +8595,53 @@ para o alvo do quadro, sem apontar para a lente). Se aparecer "MOVA A MAO"
 nas 9, deslocar mais; nas inclinadas, usar F se QA 8-35 e visualmente alinhado.
 O gate deve salvar o oficial ao completar; depois validar vermelho x verde.
 
+
+
+================================================================================
+ITEM 142 (28/10/2026) - TESTE AHRS DOS DOIS MPU6050 COM VETORES 3D EM TEMPO
+    REAL (base ThatProject/MahonyAHRS_ESP32) + VISUALIZADOR NO PC
+================================================================================
+PEDIDO: usar como base o projeto ThatProject MahonyAHRS_ESP32 (que desenha um
+dado 3D) para fazer o mesmo tipo de teste, mas com DOIS vetores (um por MPU6050
+conectado ao ESP32): ao calibrar com o sensor deitado (face paralela a mesa) o
+vetor comeca apontando em -Z (chao) e deve girar junto com o sensor.
+ENTREGUE
+  - Firmware NOVO e separado: `firmware/esp32_teste_ahrs/`
+      * mesmo hardware do firmware das luvas: dois MPU6050 no mesmo I2C
+        (0x68=direita, 0x69=esquerda; varredura robusta de GPIOs);
+      * calibracao de boot (bias de giroscopio + offsets de accel, item 124)
+        com as IMUs paradas/deitadas, aquecimento de 1,5 s do Mahony;
+      * classe AttitudeMahony (6 eixos) copiada do firmware das luvas (item 83)
+        + getter de quaternion; um estado independente por sensor;
+      * serial 115200 a 50 Hz:
+          `# AHRS_VETOR v1 ...`
+          `# A,t_us,qwL,qxL,qyL,qzL,qwR,qxR,qyR,qzR,axL,ayL,azL,axR,ayR,azR`
+        (`L`=0x69 esquerda, `R`=0x68 direita); comandos 'c' recalibra e 'r'
+        reinicia atitude;
+      * NAO usa Wi-Fi/UDP (teste de bancada puro via USB/serial).
+  - Visualizador PC: `tools/visualiza_vetores_ahrs.py` + nucleo puro
+    `tools/ahrs_vetores_core.py`
+      * le a serial, converte quaternion->matriz corpo->mundo, desenha DOIS
+        vetores (ciano=esquerda, laranja=direita) num espaco 3D com eixos,
+        piso em z=-1,05 e texto com vetor/angulo/quaternion;
+      * TARA AUTOMATICA no primeiro quadro: v_corpo = R0^T * (0,0,-1), entao
+        cada vetor COMECA em -Z (chao) independentemente da montagem do sensor;
+      * teclas: Z re-tara, C recalibra no ESP, R reinicia atitude, Q/ESC sai;
+      * modo `--simular` (sem hardware) e `--duracao`;
+  - Testes: `test_ahrs_vetores.py` (parser do protocolo, quaternion->matriz,
+    tara -Z, rotacao 90 em X leva o vetor para +Y, angulo com o chao,
+    simulacao, checks estaticos dos arquivos).
+  - Documentacao: `firmware/esp32_teste_ahrs/README.md` (fiacao, gravacao com
+    BOOT, execucao, protocolo, limitacoes) + secao no README raiz.
+VALIDACAO: `pio run -d firmware/esp32_teste_ahrs` compilou (SUCCESS; RAM 6,7%,
+Flash 22,7%); `test_ahrs_vetores.py` OK; visualizador rodou em `--simular
+--duracao 1.5` (backend Agg, sem erro); `--listar-portas` achou COM4 (CP210x).
+INTERPRETACAO/LIMITACOES: AHRS 6 eixos sem magnetometro -> yaw deriva (normal);
+um vetor no eixo vertical nao muda ao girar em torno do proprio eixo vertical
+(fisica); gire nos outros eixos para ver a rotacao 3D. O vetor e' fixo no corpo
+(como seta pintada no sensor), nao uma direcao de gravidade sempre para baixo.
+PROXIMA BANCADA: gravar o firmware de teste com BOOT, deixar as DUAS IMUs
+paradas/deitadas no boot, rodar o visualizador com --port COM4 e girar cada
+sensor. Conferir se os dois vetores acompanham a rotacao e se um nao mexe
+quando o outro e' girado. Depois regravar `firmware/esp32_duas_imus` (luvas).
+

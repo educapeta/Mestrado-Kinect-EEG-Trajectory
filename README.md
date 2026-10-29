@@ -691,3 +691,19 @@ estabilizador de sinal (item 138); o log `[GEO]` mostra `nfonte=edge21(...)`.
 - Passo a passo, convenção de eixos (X = direita, Y = cima, Z para dentro da
   cena; a lente fica em −Z) e tabela das 9 poses:
   **[docs/CALIBRACAO_GEOMETRICA.md](docs/CALIBRACAO_GEOMETRICA.md)**.
+
+
+## Teste AHRS dos dois MPU6050 (item 142)
+
+Além do firmware das luvas, existe um projeto separado de **teste de orientação
+dos MPUs** com visualização 3D:
+- firmware: `firmware/esp32_teste_ahrs/` (Mahony 6 eixos, um quaternion por
+  MPU; sem Wi-Fi/UDP, só serial; baseado no ThatProject MahonyAHRS_ESP32);
+- visualizador: `tools/visualiza_vetores_ahrs.py` (um vetor por sensor; começa
+  em −Z/chão após a tara automática; `Z` re-tara, `C` recalibra, `R` reinicia);
+- guia completo: `firmware/esp32_teste_ahrs/README.md`.
+
+Para usar: gravar o firmware com BOOT, deixar as IMUs paradas e deitadas no
+boot, e rodar
+`.venv\Scripts\python.exe tools\visualiza_vetores_ahrs.py --port COM4`.
+Depois, regravar `firmware/esp32_duas_imus` para voltar às luvas.
