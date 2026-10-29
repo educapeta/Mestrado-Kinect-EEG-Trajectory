@@ -8973,3 +8973,45 @@ PROXIMO PASSO: autorizado pelo usuario, atacar P0 (lado esquerdo), depois P1
 (save/reancoragem, bootstrap, quaternion) com testes sinteticos, e so' entao
 recalibrar/validar. Nao aplicar os falsos positivos UP_AXIS/rotation_matrix.
 
+
+
+================================================================================
+ITEM 153 (29/10/2026) - GROUNDTRUTH: CORRIGIDO T BASE x YAW DO BOOT NO SAVE
+    (AncoradorYawBoot contaminava o JSON) + TESTE
+================================================================================
+CONTEXTO: revisao cruzada (item 152) apontou que `AncoradorYawBoot` chama
+`fusion.set_palm_alignment(t_novo,...)`, que atualizava `fusion.imu_to_camera`;
+`save_palm_alignment` gravava `palm_alignment_state()` = T ATUAL. O docstring
+dizia que o T reancorado valia so' para o boot e o JSON ficava intocado -- mas
+se o usuario salvasse (O/J/X) depois da ancoragem, o delta de yaw daquele boot
+ia para o arquivo e contaminava os boots seguintes.
+CORRECAO (imu.py + tool)
+  - `PositionFusion`: novos campos `imu_to_camera_base`, `yaw_boot_delta_deg`,
+    `palm_alignment_source`; `reset` limpa.
+  - `set_palm_alignment(..., base=True)`: calibracao/arquivo guarda o T base;
+    o `AncoradorYawBoot` chama com `base=False` (altera so' o T em memoria) e
+    registra `yaw_boot_delta_deg`.
+  - `apply_palm_alignment` passa base=True via `set_palm_alignment`.
+  - `palm_alignment_state(original=True)`: devolve o T BASE (se existir) e
+    inclui `yaw_boot_delta_deg`/`source`.
+  - `calibrate_palm_direction` marca `palm_alignment_source="bootstrap"`.
+  - `save_palm_alignment` grava `palm_alignment_state(original=True)`; o JSON
+    fica com o T que vale para qualquer boot + metadados do yaw do boot.
+  - `load_palm_alignment` passa base=True.
+TESTE NOVO: test_reancoragem_alinhamento.py
+  - T base preservado apos reancoragem; Ancorador so' altera T em memoria;
+  - save grava T ORIGINAL e delta de yaw separado; load repoe T e base.
+RESULTADO: teste OK; suite da raiz roda no commit. Nao mexi em UP_AXIS
+(falso positivo), rotation_matrix (convencoes compativeis) nem no sinal da
+normal (o codigo ja passa `lado`; o tool avisa quando nao ha' alinhamento salvo).
+PROXIMA BANCADA: com esta correcao, recalibrar J/O/X (o save agora nao mistura
+yaw do boot). Guardar os JSON atuais; o save faz .bak automatico. Depois rodar
+o diagnostico/mira e comparar vermelho x verde.
+OBSERVACAO SOBRE A INVERSAO DOS MPUs NO TESTE AHRS: o visualizador usa
+exatamente a mesma matematica para os dois lados; o log novo mostra os dois se
+movendo, mas a relacao entre os quaternions varia ate ~148 graus. Isso e'
+compativel com montagens fisicas diferentes (um modulo girado em relacao ao
+outro) e/ou movimentos nao simultaneos; o groundtruth tem T/f POR LADO para
+absorver a montagem. So' depois da recalibracao dos dois lados da' para dizer
+se ainda ha' inversao de eixo no software.
+

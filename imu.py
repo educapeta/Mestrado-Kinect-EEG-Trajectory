@@ -465,12 +465,14 @@ class AncoradorYawBoot:
                 t_novo, delta, erro, n = resolvido
                 if self.fusion.set_palm_alignment(
                         t_novo, self.fusion.palm_reference_body,
-                        self.fusion.palm_alignment_residual_deg) is False:
+                        self.fusion.palm_alignment_residual_deg,
+                        base=False) is False:
                     self.falhou = True
                     return None
                 self.delta_deg = float(delta)
                 self.erro_deg = float(erro)
                 self.n = int(n)
+                self.fusion.yaw_boot_delta_deg = float(delta)
                 self.avisar(
                     f"IMU {self.lado}: yaw do BOOT reancorado por "
                     f"{delta:+.1f} graus ({n} amostras, erro {erro:.1f} "
@@ -518,6 +520,13 @@ class PositionFusion:
         # o que NAO e' verdade em geral -- calibre com `apply_palm_alignment`).
         self.palm_reference_body: Optional[np.ndarray] = None
         self.imu_to_camera = np.eye(3)
+        #: T ORIGINAL do arquivo/calibracao (sem o delta de yaw deste boot).
+        #: `save_palm_alignment` usa este T, nunca o reancorado no runtime.
+        self.imu_to_camera_base: Optional[np.ndarray] = None
+        #: Delta de yaw aplicado pelo AncoradorYawBoot neste boot.
+        self.yaw_boot_delta_deg = 0.0
+        #: "nenhum" | "bootstrap" | "calibrado".
+        self.palm_alignment_source = "nenhum"
         #: Residuo (graus) do ultimo alinhamento resolvido (None = identidade).
         self.palm_alignment_residual_deg: Optional[float] = None
         # Compatibilidade: referencia antiga (pose + direcao no referencial da
@@ -536,6 +545,10 @@ class PositionFusion:
         self.origin = None
         self.last_timestamp_us = None
         self.palm_reference_body = None
+        self.imu_to_camera = np.eye(3)
+        self.imu_to_camera_base = None
+        self.yaw_boot_delta_deg = 0.0
+        self.palm_alignment_source = "nenhum"
         self.palm_alignment_residual_deg = None
         self.imu_reference_rotation = None
         self.palm_reference_direction = None
@@ -574,6 +587,9 @@ class PositionFusion:
         self.palm_reference_body = corpo / norma
         self.imu_reference_rotation = referencia
         self.palm_reference_direction = valor.copy()
+        # Bootstrap de UMA amostra: vale naquela pose; nao e' alinhamento
+        # calibrado (o tool avisa se nao ha' arquivo salvo).
+        self.palm_alignment_source = "bootstrap"
         return True
 
     def apply_palm_alignment(self, rotations, palm_directions):
@@ -593,19 +609,20 @@ class PositionFusion:
         if resolvido is None:
             return None
         alinhamento, corpo, residuo = resolvido
-        self.imu_to_camera = np.asarray(alinhamento, np.float64)
-        self.palm_reference_body = np.asarray(corpo, np.float64)
-        self.palm_alignment_residual_deg = float(residuo)
+        self.set_palm_alignment(alinhamento, corpo, residuo, base=True)
         return alinhamento, self.palm_reference_body, float(residuo)
 
     def set_palm_alignment(self, alignment, body_direction=None,
-                           residual_deg=None):
+                           residual_deg=None, base=True):
         """Aplica um alinhamento JA' resolvido (ex.: carregado de arquivo).
 
         Args:
             alignment: (3, 3) mundo do IMU -> referencial da camera.
             body_direction: (3,) direcao da palma no corpo; None = mantem a atual.
             residual_deg: residuo do ajuste, para diagnostico.
+            base: se True (calibracao/arquivo), guarda tambem o T ORIGINAL
+                  (`imu_to_camera_base`); se False (correcao de yaw do boot),
+                  altera so' o T em memoria e nao contamina o save.
 
         Returns:
             True se aplicou (matriz valida e direcao disponivel).
@@ -623,20 +640,32 @@ class PositionFusion:
         if not np.isfinite(corpo).all() or norma < 1e-9:
             return False
         self.imu_to_camera = matriz
+        if base:
+            self.imu_to_camera_base = matriz.copy()
+            self.palm_alignment_source = "calibrado"
         self.palm_reference_body = corpo / norma
         self.palm_alignment_residual_deg = (None if residual_deg is None
                                             else float(residual_deg))
         return True
 
-    def palm_alignment_state(self):
-        """Alinhamento atual em tipos serializaveis (JSON) ou None."""
+    def palm_alignment_state(self, original=False):
+        """Alinhamento em tipos serializaveis (JSON) ou None.
+
+        `original=True` devolve o T BASE (sem o delta de yaw do boot atual);
+        e' o que `save_palm_alignment` deve gravar para o arquivo valer em
+        qualquer boot.
+        """
         if self.palm_reference_body is None:
             return None
+        matriz = self.imu_to_camera
+        if original and self.imu_to_camera_base is not None:
+            matriz = self.imu_to_camera_base
         return {
-            "rotation": np.asarray(self.imu_to_camera,
-                                   np.float64).tolist(),
+            "rotation": np.asarray(matriz, np.float64).tolist(),
             "body": np.asarray(self.palm_reference_body, np.float64).tolist(),
             "residual_deg": self.palm_alignment_residual_deg,
+            "yaw_boot_delta_deg": float(self.yaw_boot_delta_deg),
+            "source": self.palm_alignment_source,
         }
 
     def palm_direction(self, sample):

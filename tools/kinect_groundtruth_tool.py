@@ -375,7 +375,8 @@ def load_palm_alignment(fusion, lado, avisar=print):
     try:
         dados = json.loads(caminho.read_text(encoding="utf-8"))
         aplicado = fusion.set_palm_alignment(
-            dados["rotation"], dados.get("body"), dados.get("residual_deg"))
+            dados["rotation"], dados.get("body"), dados.get("residual_deg"),
+            base=True)
     except (OSError, KeyError, TypeError, ValueError) as exc:
         avisar(f"IMU {lado}: alinhamento em {caminho.name} ilegivel ({exc}); "
                "rode a tecla O de novo")
@@ -397,7 +398,10 @@ def save_palm_alignment(fusion, lado, avisar=print):
     `save_palm_alignment` nao fazia nenhum. Com o backup aqui, NENHUMA captura da
     O apaga um refit validado (e o aviso mostra o residuo anterior x o novo).
     """
-    estado = fusion.palm_alignment_state()
+    # IMPORTANTE: grava o T ORIGINAL (sem o delta de yaw deste boot). O
+    # AncoradorYawBoot altera so' `fusion.imu_to_camera` em memoria; o arquivo
+    # tem de continuar valendo para qualquer boot.
+    estado = fusion.palm_alignment_state(original=True)
     if estado is None:
         return False
     caminho = palm_alignment_path(lado)
