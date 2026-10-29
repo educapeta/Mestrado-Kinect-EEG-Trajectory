@@ -40,6 +40,25 @@ def quat_para_matriz(qw: float, qx: float, qy: float, qz: float) -> np.ndarray:
     ], dtype=float)
 
 
+def extrair_linhas(buffer: bytes):
+    """Separa linhas completas (terminadas em \n) de um buffer cru.
+
+    Usado no lugar de `readline()`: no Windows/CP210x o readline entrega uma
+    linha por vez com latencia ~47 ms enquanto o ESP manda a cada 27 ms,
+    criando uma fila de 10+ segundos. Lendo em bloco, todas as linhas
+    disponiveis sao drenadas de uma vez.
+    Retorna (lista_de_linhas_decodificadas, resto_do_buffer).
+    """
+    if not isinstance(buffer, (bytes, bytearray)):
+        return [], b""
+    resto = bytes(buffer)
+    linhas = []
+    while b"\n" in resto:
+        bruta, resto = resto.split(b"\n", 1)
+        linhas.append(bruta.decode("utf-8", "replace").strip())
+    return linhas, resto
+
+
 def parse_linha_ahrs(linha: str) -> Optional[dict]:
     """Interpreta uma linha `A,...` do firmware; devolve dict ou None.
 

@@ -72,6 +72,8 @@ class LeitorSerial(threading.Thread):
         self.ultima_bruta = ""
         self.tem_firmware_ahrs = False
         self.tem_linhas_luvas = False
+        self.seq = 0
+        self.resto = b""
 
     def run(self):
         try:
@@ -82,31 +84,35 @@ class LeitorSerial(threading.Thread):
             return
         while not self.parar:
             try:
-                bruto = self.serial.readline()
+                bruto = self.serial.read(4096)
             except Exception as exc:  # noqa: BLE001
                 self.erro = f"erro de leitura serial: {exc}"
                 break
             if not bruto:
                 continue
-            linha = bruto.decode("utf-8", "replace").strip()
-            self.linhas += 1
-            self.ultima_bruta = linha
-            if (linha.startswith("# AHRS_VETOR")
-                    or linha.startswith("[ahrs]")):
-                self.tem_firmware_ahrs = True
-            if linha.startswith("1,") or linha.startswith("2,"):
-                self.tem_linhas_luvas = True
-            if self.debug or len(self.primeiras) < 6:
-                if len(self.primeiras) < 6:
-                    self.primeiras.append(linha)
-                if self.debug:
-                    print(f"[serial] {linha}", flush=True)
-            dados = core.parse_linha_ahrs(linha)
-            if dados is not None:
-                self.linhas_validas += 1
-                with self.lock:
-                    self.ultimo = dados
-                    self.ultimo_instante = time.monotonic()
+            self.resto += bruto
+            linhas, self.resto = core.extrair_linhas(self.resto)
+            for linha in linhas:
+                self.linhas += 1
+                self.ultima_bruta = linha
+                if (linha.startswith("# AHRS_VETOR")
+                        or linha.startswith("[ahrs]")):
+                    self.tem_firmware_ahrs = True
+                if linha.startswith("1,") or linha.startswith("2,"):
+                    self.tem_linhas_luvas = True
+                if self.debug or len(self.primeiras) < 6:
+                    if len(self.primeiras) < 6:
+                        self.primeiras.append(linha)
+                    if self.debug:
+                        print(f"[serial] {linha}", flush=True)
+                dados = core.parse_linha_ahrs(linha)
+                if dados is not None:
+                    self.linhas_validas += 1
+                    self.seq += 1
+                    dados["_seq"] = self.seq
+                    with self.lock:
+                        self.ultimo = dados
+                        self.ultimo_instante = time.monotonic()
         try:
             if self.serial is not None:
                 self.serial.close()
@@ -458,6 +464,7 @@ def modo_opencv(args):
     snapshot_salvo = False
     amostras = 0
     ultimo_amostra = 0.0
+    ultimo_seq_log = -1
 
     origens = {"left": np.array([-0.22, 0.0, 0.12]),
                "right": np.array([0.22, 0.0, 0.12])}
@@ -509,8 +516,10 @@ def modo_opencv(args):
                 for lado in ("left", "right"):
                     R = core.quat_para_matriz(*sample[lado])
                     vetores_log[lado] = core.vetor_mundo(R, v_body[lado])
-                if logger is not None:
+                _seq = sample.get("_seq")
+                if logger is not None and _seq != ultimo_seq_log:
                     logger.amostra(sample, v_body, vetores_log)
+                    ultimo_seq_log = _seq
 
             quadro = np.zeros((altura, largura, 3), dtype=np.uint8)
             # piso (z = -1.2) em cinza

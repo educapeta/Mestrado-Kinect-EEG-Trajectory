@@ -69,6 +69,12 @@ indicam falha de leitura I2C de um lado.
 
 ## Troubleshooting
 
+- **Atraso de ~10 s entre mexer e a tela/log**: era o `readline()` do
+  pyserial no Windows/CP210x entregando uma linha a cada ~47 ms enquanto
+  o ESP gera a cada 27 ms (fila). O visualizador agora le em bloco
+  (`read(4096)` + split por `\n`) e grava cada amostra uma vez; medido
+  depois: atraso PC-ESP ~0,03 s. Se ainda houver atraso, feche o monitor
+  serial (COM4 exclusiva).
 - **A janela abre, mas fica "AGUARDANDO QUADROS A"**: a COM4 está enviando
   linhas `1,...`/`2,...` do **firmware das luvas**, não do teste. Feche o tool
   das luvas, grave `esp32_teste_ahrs` de novo (com BOOT) e confira com

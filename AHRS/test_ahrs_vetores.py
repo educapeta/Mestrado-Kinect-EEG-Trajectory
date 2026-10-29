@@ -84,6 +84,16 @@ check("matrizes ortogonais",
       np.allclose(core.quat_para_matriz(*q_esq).T @
                   core.quat_para_matriz(*q_esq), np.eye(3), atol=1e-9))
 
+print("4b) extrair linhas de buffer fragmentado")
+linhas, resto = core.extrair_linhas(b"A,1,1,0,0,0,1,0,0,0,1,0,0,1,0,0\nA,2,1")
+check("uma linha completa + resto",
+      linhas == ["A,1,1,0,0,0,1,0,0,0,1,0,0,1,0,0"] and resto == b"A,2,1")
+linhas2, resto2 = core.extrair_linhas(resto + b"0,0,0,0,0,0,0,0,0,1,0,0\n")
+check("completa a segunda linha",
+      len(linhas2) == 1 and linhas2[0].startswith("A,2") and resto2 == b"")
+linhas3, resto3 = core.extrair_linhas(b"")
+check("buffer vazio", linhas3 == [] and resto3 == b"")
+
 print("5) arquivos/integracao")
 raiz = Path(__file__).resolve().parent
 fw_main = raiz / "firmware" / "esp32_teste_ahrs" / "src" / "main.cpp"

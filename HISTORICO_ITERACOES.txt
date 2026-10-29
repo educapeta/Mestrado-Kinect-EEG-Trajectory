@@ -8899,3 +8899,37 @@ exatamente esses; se a aceleracao nao mudar, investigar I2C/alimentacao/MPU.
 TESTES: rodar a suite da raiz + AHRS/test_ahrs_vetores.py; build do firmware em
 AHRS/firmware/esp32_teste_ahrs.
 
+
+
+================================================================================
+ITEM 151 (29/10/2026) - ATRASO DE 10-17 s NO VISUALIZADOR: READLINE DO PYSERIAL
+    NO WINDOWS/CP210x (FILA) -> LEITURA EM BLOCO E LOG SEM DUPLICATAS
+================================================================================
+SINTOMA: usuario contou ~10 s de atraso entre mexer o MPU e a tela/log; no log
+mais recente o PC recebeu 33,8 s de linhas enquanto o ESP gerou apenas 16,5 s
+(atraso relativo final 17,3 s), com backlog crescendo ~2,5 s a cada 5 s.
+DIAGNOSTICO MEDIDO (sem janela):
+  - `porta.readline()` com timeout 0.2 entregava UMA linha a cada 47 ms, mas o
+    ESP gera uma a cada 27 ms (tamanho de linha 129 chars; 37 Hz = 4,8 kB/s,
+    dentro dos 11,5 kB/s de 115200) -> fila no driver/buffer do CP210x.
+  - `porta.read(4096)` + split por '\n' recebeu 185 amostras em 5 s com
+    `t_us span = 4,96 s` (sem fila). Era o readline (latencia por linha), nao o
+    firmware/sensor.
+CORRECAO
+  - `AHRS/tools/ahrs_vetores_core.py`: `extrair_linhas(buffer)` separa linhas de
+    um buffer cru e devolve o resto (testado com buffer fragmentado);
+  - `LeitorSerial`: usa `read(4096)` + `extrair_linhas` (drena o bloco inteiro),
+    guarda `_seq` por amostra valida;
+  - OpenCV grava no log so quando `_seq` muda (antes o loop gravava a mesma
+    amostra 2x, inflando o CSV);
+  - `AHRS/test_ahrs_vetores.py` cobre `extrair_linhas`.
+VALIDACAO NA COM4 REAL (sem mover): log novo com n=37, PC span 7,48 s vs ESP
+7,51 s, atraso final -0,03 s (era 17 s); o README do firmware ganhou a nota do
+atraso. Suite raiz 63/63 + AHRS OK no commit.
+OBSERVACAO: o log anterior (ahrs_20261029_150627.csv) mostrava aceleracao/
+quaternion quase constantes porque os dados exibidos eram de ~10-17 s antes; a
+movimentacao ficava presa na fila. Reexecutar o teste de log agora.
+PROXIMA BANCADA: `AHRS\\AHRS_menu.bat` -> opcao 7; esperar calibracao; mexer os
+dois MPUs; voltar a posicao inicial; Q/ESC; analisar com
+`AHRS\\tools\\analisa_log_ahrs.py`.
+
