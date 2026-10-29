@@ -244,6 +244,89 @@ class Cena:
         self.texto.set_text(texto)
 
 
+def modo_texto(args):
+    """Fallback sem janela: imprime os vetores no console."""
+    leitor = None
+    if not args.simular:
+        porta = escolher_porta(args.port)
+        if porta is None:
+            print("ERRO: nenhuma porta serial encontrada.")
+            return 1
+        leitor = LeitorSerial(porta, args.baud, debug=args.debug)
+        leitor.start()
+        print(f"[texto] lendo {porta}; aguarde o boot (~6 s). "
+              "Ctrl+C encerra.")
+    inicio = time.monotonic()
+    sample = None
+    instante = 0.0
+    v_body = {"left": np.array([0.0, 0.0, -1.0]),
+              "right": np.array([0.0, 0.0, -1.0])}
+    zerado = False
+    ultimo_print = 0.0
+    ultimo_status = 0.0
+    try:
+        while True:
+            agora = time.monotonic()
+            if args.duracao > 0.0 and agora - inicio > args.duracao:
+                break
+            if args.simular:
+                sample = dados_simulados(agora - inicio)
+                instante = agora
+            elif leitor is not None:
+                sample, instante = leitor.copiar()
+                if leitor.erro:
+                    print(f"[texto] ERRO: {leitor.erro}")
+                    break
+                if sample is None and agora - inicio > 3.0 \
+                        and agora - ultimo_status > 3.0:
+                    ultimo_status = agora
+                    d = leitor.diagnostico()
+                    print(f"[texto] sem quadros A ainda: linhas={d['linhas']} "
+                          f"validas={d['validas']} ultima={d['ultima']!r}",
+                          flush=True)
+                    if d["linhas_luvas"]:
+                        print("[texto] COM4 esta' no firmware das luvas; "
+                              "grave esp32_teste_ahrs.", flush=True)
+                    elif d["firmware_ahrs"]:
+                        print("[texto] firmware de teste detectado; "
+                              "aguardando boot/calibracao (~6 s)...",
+                              flush=True)
+            if sample is None:
+                time.sleep(0.05)
+                continue
+            if not zerado:
+                for lado in ("left", "right"):
+                    R0 = core.quat_para_matriz(*sample[lado])
+                    v_body[lado] = core.vetor_corpo_para_baixo(R0)
+                zerado = True
+                print("[texto] tara aplicada: vetores comecam em -Z (chao).")
+            if agora - ultimo_print >= 0.25:
+                ultimo_print = agora
+                vetores = {}
+                for lado in ("left", "right"):
+                    R = core.quat_para_matriz(*sample[lado])
+                    vetores[lado] = core.vetor_mundo(R, v_body[lado])
+                print(
+                    "L=({:+.3f},{:+.3f},{:+.3f}) ang={:5.1f} | "
+                    "R=({:+.3f},{:+.3f},{:+.3f}) ang={:5.1f} | "
+                    "qL=({:+.3f},{:+.3f},{:+.3f},{:+.3f}) | "
+                    "qR=({:+.3f},{:+.3f},{:+.3f},{:+.3f})".format(
+                        *vetores["left"], core.angulo_com_baixo(vetores["left"]),
+                        *vetores["right"], core.angulo_com_baixo(vetores["right"]),
+                        *sample["left"], *sample["right"]), flush=True)
+            time.sleep(0.05)
+    except KeyboardInterrupt:
+        print("\n[texto] encerrado pelo usuario (Ctrl+C).")
+    finally:
+        if leitor is not None:
+            leitor.parar = True
+            try:
+                leitor.join(timeout=1.0)
+            except KeyboardInterrupt:
+                pass
+    return 0
+
+
 def principal():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--port", default=None, help="ex.: COM4")
@@ -255,11 +338,23 @@ def principal():
                         help="fecha sozinho depois de N segundos (0=infinito)")
     parser.add_argument("--debug", action="store_true",
                         help="mostra as linhas cruas recebidas da serial")
+    parser.add_argument("--texto", action="store_true",
+                        help="modo console: imprime os vetores sem abrir janela")
+    parser.add_argument("--backend", default="auto",
+                        choices=["auto", "qtagg", "tkagg", "agg"],
+                        help="backend do matplotlib (se a janela nao abrir, "
+                             "tente tkagg)")
     args = parser.parse_args()
 
+    if args.backend != "auto":
+        import matplotlib
+        matplotlib.use(args.backend, force=True)
+        print(f"[visualizador] backend forcado: {args.backend}")
     portas = listar_portas()
     if args.listar_portas:
         return 0
+    if args.texto:
+        return modo_texto(args)
     porta = None
     if not args.simular:
         porta = escolher_porta(args.port)
@@ -359,6 +454,8 @@ def principal():
             # tara automatica no primeiro quadro (vetor comeca em -Z/chao)
             if sample is not None and not (zerado["left"] and zerado["right"]):
                 aplicar_tara(sample)
+                print("[visualizador] dados AHRS chegando: dois vetores "
+                      "tareados em -Z (chao).", flush=True)
             vetores = {"left": np.array([0.0, 0.0, -1.0]),
                        "right": np.array([0.0, 0.0, -1.0])}
             if sample is not None:

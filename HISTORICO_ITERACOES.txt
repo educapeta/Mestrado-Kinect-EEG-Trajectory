@@ -8705,3 +8705,30 @@ PROXIMA BANCADA: rodar o visualizador, aguardar ~6-8 s apos o reset (ou ver
 "# AHRS_VETOR" no monitor), e entao girar as IMUs. Se a janela nao aparecer,
 testar `--simular --duracao 5` (valida matplotlib) e olhar atras do console.
 
+
+
+================================================================================
+ITEM 145 (28/10/2026) - VISUALIZADOR AHRS: MODO --texto (SEM JANELA) E
+    DIAGNOSTICO DO BOOT; CONFIRMADOS OS DOIS VETORES NA COM4
+================================================================================
+SINTOMA: o usuario nao via a janela 3D e interrompia durante o boot; os
+comandos tambem estavam sendo colados grudados (`--port COM4cd C:\mestradopy`,
+`--duracao 5.\.venv...`), o que quebrava o argparse/PowerShell.
+VERIFICACAO: na COM4 real, o firmware de teste esta' mandando quadros `A,...`
+(~18 Hz) com os DOIS quaternions e as duas aceleracoes. O modo --texto
+imprimiu os dois vetores em -Z (angulo 0 grau com o chao), ou seja, tudo OK.
+IMPLEMENTADO
+  - `--texto`: modo console sem matplotlib/serial GUI; imprime a cada 0,25 s
+    `L=(x,y,z) ang=... | R=(...) | qL=... | qR=...`, tara automatica no
+    primeiro quadro e mensagens de boot/calibracao; Ctrl+C limpo.
+  - `--backend {auto,qtagg,tkagg,agg}` para diagnosticar matplotlib; observado
+    que `tkagg` falha nesta venv (Tcl nao instalado), entao o padrao e' Qt.
+  - modo grafico anuncia "dados AHRS chegando" no primeiro quadro.
+  - README do firmware ganhou secao "Modo console (sem janela)".
+  - Causa dos erros de comando do usuario: colagem de varias linhas no
+    PowerShell, nao bug do script; os comandos devem ser colados UM por vez,
+    sem `cd` (ele ja' esta' em C:\mestradopy).
+PROXIMA BANCADA: rodar o modo texto com --duracao 15, esperar a tara e girar
+cada MPU conferindo L/R; depois tentar a janela (aguardar ~8-10 s apos reset e
+procurar atras do console). Fechar o monitor serial antes do visualizador.
+

@@ -86,6 +86,23 @@ indicam falha de leitura I2C de um lado.
 - **Vetor deriva devagar**: normal em AHRS 6 eixos (sem magnetômetro); é yaw
   drift. Use `Z` para re-tarar.
 
+## Modo console (sem janela)
+
+Se a janela 3D nao aparecer (Qt/Tcl/ambiente grafico), use `--texto`: ele
+imprime os dois vetores no console a cada 0,25 s, sem matplotlib:
+```powershell
+.\.venv\Scripts\python.exe tools\visualiza_vetores_ahrs.py --port COM4 --texto --duracao 15
+```
+A primeira linha `[texto] tara aplicada...` aparece quando a calibracao termina;
+depois cada linha mostra `L=(x,y,z) ang=... | R=(...) | qL=... | qR=...`.
+Gire cada MPU e veja os valores mudarem. Ctrl+C encerra.
+Depois tente de novo a janela:
+```powershell
+.\.venv\Scripts\python.exe tools\visualiza_vetores_ahrs.py --port COM4
+```
+(aguarde ~8-10 s apos o reset; o boot calibra antes dos quadros `A`).
+Se `--backend tkagg` falhar com erro de Tcl, use o modo janela padrao (Qt).
+
 ## Visualizador
 `tools/visualiza_vetores_ahrs.py` usa a matemática de
 `tools/ahrs_vetores_core.py` (também testada por `test_ahrs_vetores.py`).
