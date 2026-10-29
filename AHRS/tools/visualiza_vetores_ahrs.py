@@ -441,7 +441,7 @@ def modo_opencv(args):
         caminho_log = args.log
         if str(caminho_log).lower() in ("auto", ""):
             carimbo = datetime.now().strftime("%Y%m%d_%H%M%S")
-            caminho_log = Path("ahrs_logs") / f"ahrs_{carimbo}.csv"
+            caminho_log = Path(__file__).resolve().parent.parent / "logs" / f"ahrs_{carimbo}.csv"
         try:
             logger = LogAHRS(caminho_log, porta=porta, baud=args.baud)
             print(f"[opencv] LOG: {logger.caminho}", flush=True)
@@ -678,7 +678,7 @@ def principal():
                         help="salva o primeiro quadro da janela OpenCV em PNG")
     parser.add_argument("--log", nargs="?", const="auto", default=None,
                         help="grava CSV de amostras/eventos; sem valor usa "
-                             "ahrs_logs/ahrs_<timestamp>.csv")
+                             "AHRS/logs/ahrs_<timestamp>.csv")
     parser.add_argument("--backend", default="auto",
                         choices=["auto", "qtagg", "tkagg", "agg"],
                         help="backend do matplotlib (se a janela nao abrir, "

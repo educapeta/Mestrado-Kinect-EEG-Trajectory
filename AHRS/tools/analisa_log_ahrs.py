@@ -9,7 +9,7 @@ Le `ahrs_logs/ahrs_*.csv` (ou o caminho passado) e diz, por sensor:
 
 Uso:
   .venv\Scripts\python.exe tools\analisa_log_ahrs.py
-  .venv\Scripts\python.exe tools\analisa_log_ahrs.py ahrs_logs\ahrs_....csv
+  .venv\Scripts\python.exe tools\analisa_log_ahrs.py AHRS\\logs\\ahrs_....csv
 """
 from __future__ import annotations
 
@@ -190,9 +190,10 @@ def principal():
     if args.arquivo:
         caminho = Path(args.arquivo)
     else:
-        logs = sorted(Path("ahrs_logs").glob("ahrs_*.csv"))
+        pasta_logs = Path(__file__).resolve().parent.parent / "logs"
+        logs = sorted(pasta_logs.glob("ahrs_*.csv"))
         if not logs:
-            print("Nenhum log em ahrs_logs/. Rode AHRS_grafico_log.bat antes.")
+            print(f"Nenhum log em {pasta_logs}/. Rode AHRS_grafico_log.bat antes.")
             return 1
         caminho = logs[-1]
         print(f"(usando o log mais recente: {caminho})")

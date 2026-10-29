@@ -693,20 +693,17 @@ estabilizador de sinal (item 138); o log `[GEO]` mostra `nfonte=edge21(...)`.
   **[docs/CALIBRACAO_GEOMETRICA.md](docs/CALIBRACAO_GEOMETRICA.md)**.
 
 
-## Teste AHRS dos dois MPU6050 (item 142)
+## Teste AHRS dos dois MPU6050 (itens 142-150)
 
-Além do firmware das luvas, existe um projeto separado de **teste de orientação
-dos MPUs** com visualização 3D:
-- firmware: `firmware/esp32_teste_ahrs/` (Mahony 6 eixos, um quaternion por
-  MPU; sem Wi-Fi/UDP, só serial; baseado no ThatProject MahonyAHRS_ESP32);
-- visualizador: `tools/visualiza_vetores_ahrs.py` (janela 3D **OpenCV**
-  nativa; um vetor por sensor; começa em −Z/chão após a tara automática;
-  `Z` re-tara, `C` recalibra, `R` reinicia; `--matplotlib` só se quiser a
-  janela antiga do Qt);
-  em −Z/chão após a tara automática; `Z` re-tara, `C` recalibra, `R` reinicia);
-- guia completo: `firmware/esp32_teste_ahrs/README.md`.
+O projeto de teste de orientação dos MPUs agora fica **todo** em `AHRS/`:
+- firmwares/ferramentas/atalhos/logs/testes dentro de `AHRS/`;
+- guia rápido: [`AHRS/README.md`](AHRS/README.md);
+- firmware: [`AHRS/firmware/esp32_teste_ahrs/README.md`](AHRS/firmware/esp32_teste_ahrs/README.md);
+- para usar, abra **`AHRS\AHRS_menu.bat`** (opção 2 = janela 3D OpenCV,
+  opção 7 = janela gravando log) ou dê dois cliques em
+  `AHRS\AHRS_grafico_sem_console.bat`;
+- logs em `AHRS/logs/ahrs_*.csv`; análise com
+  `.venv\Scripts\python.exe AHRS\tools\analisa_log_ahrs.py`.
 
-Para usar: gravar o firmware com BOOT, deixar as IMUs paradas e deitadas no
-boot, e rodar
-`.venv\Scripts\python.exe tools\visualiza_vetores_ahrs.py --port COM4`.
-Depois, regravar `firmware/esp32_duas_imus` para voltar às luvas.
+Depois de testar, regrave o firmware das luvas com
+`pio run -d firmware\esp32_duas_imus -t upload`.

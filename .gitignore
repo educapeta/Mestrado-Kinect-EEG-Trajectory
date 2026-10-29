@@ -99,4 +99,7 @@ _*.json
 
 
 # logs do teste AHRS (item 149)
-ahrs_logs/
+AHRS/logs/
+
+# builds do PlatformIO
+**/.pio/

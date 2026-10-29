@@ -22,7 +22,7 @@ Feche qualquer programa que use a COM4. Coloque a placa em download mode
 (segure **BOOT**, aperte/solte **EN**, solte BOOT) e rode:
 ```powershell
 cd C:\mestradopy
-C:\Users\Usuario\.platformio\penv\Scripts\pio.exe run -d firmware\esp32_teste_ahrs -t upload
+C:\Users\Usuario\.platformio\penv\Scripts\pio.exe run -d AHRS\firmware\esp32_teste_ahrs -t upload
 ```
 Depois de testar, volte ao firmware das luvas:
 ```powershell
@@ -36,7 +36,7 @@ C:\Users\Usuario\.platformio\penv\Scripts\pio.exe run -d firmware\esp32_duas_imu
 2. Abra o visualizador:
 ```powershell
 cd C:\mestradopy
-.\.venv\Scripts\python.exe tools\visualiza_vetores_ahrs.py --port COM4
+.\.venv\Scripts\python.exe AHRS\tools\visualiza_vetores_ahrs.py --port COM4
 ```
    (ou `--simular` para ver a demonstração sem hardware; `--listar-portas`
    lista as portas.)
@@ -72,9 +72,9 @@ indicam falha de leitura I2C de um lado.
 - **A janela abre, mas fica "AGUARDANDO QUADROS A"**: a COM4 está enviando
   linhas `1,...`/`2,...` do **firmware das luvas**, não do teste. Feche o tool
   das luvas, grave `esp32_teste_ahrs` de novo (com BOOT) e confira com
-  `pio device monitor -d firmware/esp32_teste_ahrs`: tem de aparecer
+  `pio device monitor -d AHRS/firmware/esp32_teste_ahrs`: tem de aparecer
   `[ahrs] TESTE AHRS...`, a calibração e `# AHRS_VETOR v1`.
-- **A janela não aparece**: rode primeiro `tools\visualiza_vetores_ahrs.py
+- **A janela não aparece**: rode primeiro `AHRS\tools\visualiza_vetores_ahrs.py
   --simular --duracao 5` para testar o matplotlib. Se o simulado funcionar, a
   janela real pode ter aberto atrás do PowerShell. O script agora imprime o
   backend e as linhas cruas com `--debug`.
@@ -86,14 +86,14 @@ indicam falha de leitura I2C de um lado.
 - **Vetor deriva devagar**: normal em AHRS 6 eixos (sem magnetômetro); é yaw
   drift. Use `Z` para re-tarar.
 
-## Log para analise (`AHRS_grafico_log.bat`)
+## Log para analise (`AHRS\AHRS_grafico_log.bat`)
 
 Para diagnostico, rode:
 ```powershell
-.\AHRS_grafico_log.bat
+.\AHRS\AHRS_grafico_log.bat
 ```
 ou menu -> opcao 7. Ele abre a janela OpenCV **gravando**
-`ahrs_logs\ahrs_<data>_<hora>.csv` com, a cada amostra:
+`AHRS\logs\ahrs_<data>_<hora>.csv` com, a cada amostra:
 - quaternions L/R (`qw,qx,qy,qz`);
 - aceleracoes L/R;
 - vetor de mundo L/R e angulo com -Z (chao);
@@ -103,7 +103,7 @@ Roteiro: espere a calibracao (setas aparecem) -> mexa nos sensores como quiser
 -> volte cada um a posicao inicial (face paralela a mesa) -> feche a janela com
 **Q/ESC** (para o log fechar). Depois rode:
 ```powershell
-.\.venv\Scripts\python.exe tools\analisa_log_ahrs.py
+.\.venv\Scripts\python.exe AHRS\tools\analisa_log_ahrs.py
 ```
 Ele usa o log mais recente e imprime vetor inicial/final, angulo com -Z,
 retorno ao inicial, deriva do quaternion e um veredito por sensor. Se o vetor
@@ -113,7 +113,7 @@ final nao voltar perto de -Z, o CSV permite ver se foi deriva/giro ou leitura.
 
 A janela 3D usa **OpenCV highgui** (a mesma janela nativa que o tool das luvas
 ja' usa), sem matplotlib/Qt. E' o padrao: `--opencv` e' implicito; a opcao 2 do
-menu e o `AHRS_grafico_sem_console.bat` ja' passam essa flag.
+menu e o `AHRS\AHRS_grafico_sem_console.bat` ja' passam essa flag.
 A janela mostra os **dois vetores** (ciano=0x69 esquerda, laranja=0x68 direita),
 eixos X/Y/Z, piso em -Z e o painel com vetor/angulo/quaternion.
 
@@ -121,20 +121,20 @@ Teclas na janela: **Z** re-tara, **C** recalibra o ESP, **R** reinicia a atitude
 **Q/ESC** fecha. Se quiser a janela antiga do matplotlib, use `--matplotlib`
 (nao recomendado: o Qt pode travar em algumas maquinas).
 
-Previa: `docs/ahrs_preview.png`.
+Previa: `AHRS/preview.png`.
 
 ## Atalhos `.bat` (evitam colar comandos e a duplicacao do Ctrl+V)
 
 Na raiz do projeto:
-- **`AHRS_menu.bat`** -- menu: 1=modo texto, 2=janela 3D, 3=monitor serial,
+- **`AHRS\AHRS_menu.bat`** -- menu: 1=modo texto, 2=janela 3D, 3=monitor serial,
   4=gravar firmware de teste (pede BOOT), 5=voltar as luvas, 0=sair.
-- **`AHRS_texto.bat`** -- roda direto o modo console.
-- **`AHRS_grafico.bat`** -- roda direto a janela 3D.
+- **`AHRS\AHRS_texto.bat`** -- roda direto o modo console.
+- **`AHRS\AHRS_grafico.bat`** -- roda direto a janela 3D.
 
-Basta dar dois cliques ou, no PowerShell, digitar `.\AHRS_menu.bat` (ou
-`.\AHRS_texto.bat`). Nao precisa colar comandos longos.
+Basta dar dois cliques ou, no PowerShell, digitar `.\AHRS\AHRS_menu.bat` (ou
+`.\AHRS\AHRS_texto.bat`). Nao precisa colar comandos longos.
 
-- **`AHRS_grafico_sem_console.bat`** (ou opcao 6 do menu): abre a janela 3D
+- **`AHRS\AHRS_grafico_sem_console.bat`** (ou opcao 6 do menu): abre a janela 3D
   via `pythonw`, sem janela de console. Use esta se o console parecer
   "travar": o **QuickEdit do console do Windows** suspende o processo
   quando voce clica/seleciona texto nele (aperte **Esc** ou clique com o
@@ -150,20 +150,20 @@ duplicado. O `.bat` elimina a colagem.
 Se a janela 3D nao aparecer (Qt/Tcl/ambiente grafico), use `--texto`: ele
 imprime os dois vetores no console a cada 0,25 s, sem matplotlib:
 ```powershell
-.\.venv\Scripts\python.exe tools\visualiza_vetores_ahrs.py --port COM4 --texto --duracao 15
+.\.venv\Scripts\python.exe AHRS\tools\visualiza_vetores_ahrs.py --port COM4 --texto --duracao 15
 ```
 A primeira linha `[texto] tara aplicada...` aparece quando a calibracao termina;
 depois cada linha mostra `L=(x,y,z) ang=... | R=(...) | qL=... | qR=...`.
 Gire cada MPU e veja os valores mudarem. Ctrl+C encerra.
 Depois tente de novo a janela:
 ```powershell
-.\.venv\Scripts\python.exe tools\visualiza_vetores_ahrs.py --port COM4
+.\.venv\Scripts\python.exe AHRS\tools\visualiza_vetores_ahrs.py --port COM4
 ```
 (aguarde ~8-10 s apos o reset; o boot calibra antes dos quadros `A`).
 Se `--backend tkagg` falhar com erro de Tcl, use o modo janela padrao (Qt).
 
 ## Visualizador
-`tools/visualiza_vetores_ahrs.py` usa a matemática de
+`AHRS/tools/visualiza_vetores_ahrs.py` usa a matemática de
 `tools/ahrs_vetores_core.py` (também testada por `test_ahrs_vetores.py`).
 O eixo Z do mundo aponta para dentro da cena; **-Z = chão**. O piso cinza em
 z=-1,05 serve de referência.

@@ -8865,3 +8865,37 @@ mesa), fechar com Q/ESC; depois avisar para o Lead ler o CSV mais recente e
 rodar `tools/analisa_log_ahrs.py`. Se o vetor final nao voltar a -Z, o log diz
 se foi deriva do quaternion/sensor ou leitura.
 
+
+
+================================================================================
+ITEM 150 (29/10/2026) - REORGANIZACAO: TODO O TESTE AHRS FOI PARA A PASTA AHRS/
+================================================================================
+PEDIDO: a raiz C:\mestradopy estava virando "garagem" de arquivos; mover tudo
+relacionado ao teste AHRS para uma pasta AHRS/ (inclusive os logs).
+MOVIMENTADO (git mv, preservando historico)
+  - firmware/esp32_teste_ahrs/ -> AHRS/firmware/esp32_teste_ahrs/;
+  - tools/visualiza_vetores_ahrs.py, tools/ahrs_vetores_core.py,
+    tools/analisa_log_ahrs.py -> AHRS/tools/;
+  - test_ahrs_vetores.py -> AHRS/test_ahrs_vetores.py;
+  - AHRS_menu.bat, AHRS_texto.bat, AHRS_grafico.bat,
+    AHRS_grafico_sem_console.bat, AHRS_grafico_log.bat -> AHRS/;
+  - ahrs_logs/ -> AHRS/logs/;
+  - docs/ahrs_preview.png -> AHRS/preview.png.
+AJUSTES DE CAMINHO
+  - atalhos .bat calculam a raiz do projeto com `%~dp0..` e usam
+    `.venv\Scripts\python.exe`/`pythonw.exe` de C:\mestradopy;
+  - menu grava/le firmware em AHRS\firmware\esp32_teste_ahrs e o firmware das
+    luvas continua em firmware\esp32_duas_imus (raiz);
+  - visualizador e analisador usam AHRS/logs como pasta padrao de logs;
+  - README raiz e README do firmware atualizados; novo AHRS/README.md;
+  - .gitignore: AHRS/logs/ e **/.pio/.
+DIAGNOSTICO DO ULTIMO LOG (ahrs_20261029_150627.csv): 807 amostras em 27 s,
+MAS aceleracoes e quaternions ficaram praticamente CONSTANTES (ex.: esquerda
+az 0.983..1.005 g; quaternion variacao ~0.001), vetor sempre em -Z. Ou seja: o
+software NAO recebeu movimento nenhum -- ou os MPUs fisicamente movidos nao sao
+os que estao nesse barramento I2C, ou a leitura do MPU esta' travada. Proximo
+teste: abrir o log, identificar os dois modulos ligados ao ESP do teste e girar
+exatamente esses; se a aceleracao nao mudar, investigar I2C/alimentacao/MPU.
+TESTES: rodar a suite da raiz + AHRS/test_ahrs_vetores.py; build do firmware em
+AHRS/firmware/esp32_teste_ahrs.
+
