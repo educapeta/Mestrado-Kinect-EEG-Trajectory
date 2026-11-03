@@ -222,7 +222,8 @@ class LiveFusionApp:
         kinect_source: Optional[Any] = None,
         imu_source: Optional[Any] = None,
         config: Optional[LiveConfig] = None,
-        visualizer: Optional[Any] = None
+        visualizer: Optional[Any] = None,
+        logger: Optional[Any] = None,
     ):
         """
         Initialize live fusion app.
@@ -239,6 +240,7 @@ class LiveFusionApp:
         self.imu_source = imu_source
         self.config = config if config is not None else LiveConfig()
         self.visualizer = visualizer
+        self.logger = logger
 
         # Statistics
         self._frame_count = 0
@@ -271,6 +273,12 @@ class LiveFusionApp:
         self._last_print = self._start_time
         self._frame_count = 0
         self._state_count = 0
+        if self.logger is not None:
+            try:
+                self.logger.open()
+            except Exception as exc:
+                print(f"[AVISO] log CSV nao abriu: {exc}", flush=True)
+                self.logger = None
 
         try:
             while True:
@@ -304,6 +312,18 @@ class LiveFusionApp:
                 now = time.monotonic()
                 fused_states = self.engine.update(now, kinect_obs, imu_samples)
                 self._state_count += len(fused_states)
+
+                if self.logger is not None:
+                    for hand, state in fused_states.items():
+                        try:
+                            self.logger.write_state(
+                                now, hand, state,
+                                kinect_obs.get(hand),
+                                imu_samples.get(hand),
+                                self.engine.calibration(hand),
+                            )
+                        except Exception:
+                            pass
 
                 # Visualize if frame available (visualizer always called, window only if show=True)
                 if frame_bgr is not None and frame_bgr.size > 0:
@@ -419,6 +439,13 @@ class LiveFusionApp:
                 cv2.destroyAllWindows()
             except Exception:
                 pass
+
+            if self.logger is not None:
+                try:
+                    self.logger.flush()
+                    self.logger.close()
+                except Exception:
+                    pass
 
         elapsed = time.monotonic() - self._start_time
         return {

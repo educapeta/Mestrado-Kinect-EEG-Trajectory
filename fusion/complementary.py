@@ -29,6 +29,14 @@ class ComplementaryConfig:
     gravity_cam: np.ndarray = field(
         default_factory=lambda: np.array([0.0, 0.0, -1.0], dtype=np.float64)
     )  # Gravity vector in camera frame
+    # New: use IMU attitude (converted by T_cam_world) as prior each frame,
+    # skipping gyro integration. Tests hypothesis (a): gyro axis/sign mismatch.
+    use_imu_attitude_prior: bool = False
+    # New: when vision error > max_yaw_error but confidence is high,
+    # snap to vision normal (align_to_normal) instead of gating out.
+    # Tests hypothesis (b): yaw gate blocks correction on target change.
+    snap_on_large_yaw_error: bool = True
+    snap_confidence_threshold: float = 0.7  # Minimum vision confidence for snap
 
 
 class QuaternionComplementaryFilter:
@@ -210,6 +218,13 @@ class QuaternionComplementaryFilter:
 
         # Gate on error magnitude
         if error_mag > self.config.max_yaw_error:
+            # Snap behavior: if confidence is high, align to normal directly
+            # instead of gating out. This handles target changes where the
+            # filter has drifted beyond the gate but vision is reliable.
+            if (self.config.snap_on_large_yaw_error
+                    and confidence >= self.config.snap_confidence_threshold):
+                # Use align_to_normal for immediate snap
+                return self.align_to_normal(n_vis)
             return False
 
         # Correction applied on LEFT: q <- exp_so3(kp_yaw * conf * e * dt) ⊗ q
@@ -219,6 +234,32 @@ class QuaternionComplementaryFilter:
         self._q = normalize(self._q)
 
         return True
+
+    def apply_imu_attitude_prior(self, imu: ImuSample) -> bool:
+        """
+        Apply IMU attitude as prior: q = T_cam_world * R_imu(body->world).
+        
+        This bypasses gyro integration entirely, using the IMU's current
+        orientation estimate (from its onboard Mahony filter) converted to
+        camera frame via the hand-eye calibration. Useful for testing whether
+        gyro integration axis/sign convention mismatch is causing drift.
+        
+        Args:
+            imu: Valid IMU sample with roll/pitch/yaw
+            
+        Returns:
+            True if prior applied, False if no calibration or invalid IMU
+        """
+        if self.calibration is None:
+            return False
+        if imu is None or not imu.valid:
+            return False
+        try:
+            q0 = self.calibration.q_body_cam_from_imu(imu)
+            self._q = normalize(q0)
+            return True
+        except Exception:
+            return False
 
     def step(
         self,
@@ -243,12 +284,17 @@ class QuaternionComplementaryFilter:
         if not (dt > 0.0 and np.isfinite(dt)) or dt > self.config.max_dt:
             return self.state
 
-        # Predict from gyro
-        if imu is not None and imu.valid:
-            self.predict(imu.gyro_dps, dt)
-
-            # Gravity correction from accelerometer
+        # Mode A: Use IMU attitude prior (no gyro integration)
+        if self.config.use_imu_attitude_prior and imu is not None and imu.valid:
+            self.apply_imu_attitude_prior(imu)
+            # Still apply gravity correction for tilt stability
             self.update_gravity(imu.accel_g, dt)
+        else:
+            # Standard mode: predict from gyro
+            if imu is not None and imu.valid:
+                self.predict(imu.gyro_dps, dt)
+                # Gravity correction from accelerometer
+                self.update_gravity(imu.accel_g, dt)
 
         # Yaw correction from vision
         if normal_cam is not None:

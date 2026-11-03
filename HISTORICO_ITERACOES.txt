@@ -9497,3 +9497,41 @@ PROXIMO: usuario roda `fusion_live --ponte-serial COM4 ...` (ou sem a flag se
 a ponte ja' estiver aberta), com a mao visivel, e manda as linhas com
 erro_vis/erro_cal; decidir entre repetir Y ou corrigir boot yaw/anchor.
 
+
+
+================================================================================
+ITEM 168 (05/11/2026) - PENDENCIAS FASE 4/5: LOG CSV+METRICAS, DIAGNOSTICO
+    DE ORIENTACAO E SCAFFOLD FUSED_* DO EEG (AGENTES NVIDIA + LEAD)
+================================================================================
+CONTEXTO: usuario encerrou a bancada; pediu para finalizar e encaminhar o
+resto da Fase 4 e a Fase 5. 3 subagentes NVIDIA foram disparados; o workflow
+retornou null no final, mas os arquivos foram criados. Lead resgatou, revisou,
+corrigiu e integrou.
+ENTREGAS:
+  - fusion/logging.py: FusionCsvLogger (CSV por mao/frame; q, n, dir, vis_n,
+    erros fused-visao/cal-visao, IMU, idade, latencia).
+  - fusion/metrics.py: summarize_fusion_log + print_summary (fontes, % fused,
+    erro medio/RMSE/p95, latencia, idade IMU por lado).
+  - tools/fusion_live.py: --log-csv ARQUIVO, escrita por estado e resumo final.
+  - fusion/complementary.py: modo opcional use_imu_attitude_prior e
+    snap_on_large_yaw_error (diagnostico dos erros de orientacao; ainda nao
+    ativado por padrao).
+  - tools/diag_fusion_alignment.py + test_fusion_alignment.py (8 testes):
+    n_vis, n_cal, n_fus, angulos, rpy/gyro; sem janela.
+  - fusion/eeg_export.py + test_fusion_eeg_export.py (26 testes):
+    FUSED_COLUMNS v1 = 18 colunas (q4+n3+dir3+angulos4+conf+latency+source+
+    schema), fused_row/append/validate, FUSION_ENABLED=False.
+  - docs/INTEGRACAO_EEG_FUSED.md: patch minimo futuro no EEG, sem ativar.
+  - test_fusion_logging.py/test_fusion_metrics.py: criados pelo Lead.
+CORRECAO DO LEAD: o agente A3 escreveu 19 no teste, mas o schema tem 18
+colunas; testes ajustados para 18. Logger integrado ao LiveFusionApp/CLI.
+VALIDACAO:
+  - CLI sintetico com --log-csv gerou 390 linhas e resumo de metricas;
+  - test_fusion_alignment 8/8, test_fusion_eeg_export 26/26, logging/metrics
+    OK;
+  - suite raiz final no commit (74 + 4 suites = 78/78 esperado).
+PENDENCIA REAL: o vetor FUSED x Kinect ainda nao foi validado na bancada. O
+diagnostico separa erro_cal (T R f x Kinect) de erro_vis (fused x Kinect);
+rodar com a mao visivel, parada, e decidir entre repetir Y (esquerda p90 26.4)
+ou usar o modo IMU-attitude-prior/snap. Fase 5 fica scaffoldada, nao ativada.
+

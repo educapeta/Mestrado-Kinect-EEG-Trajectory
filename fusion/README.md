@@ -75,6 +75,23 @@ duas mãos detectadas, ~35 FPS com calibrações reais carregadas, modo
 `vision_only` quando não há amostras IMU. A janela OpenCV é opcional
 (`--sem-janela`); a lógica fica em `fusion/live.py`.
 
+## Log e métricas (Fase 4a)
+
+```powershell
+.\.venv\Scripts\python.exe tools\fusion_live.py --ponte-serial COM4 --log-csv fusao.csv --duracao 20
+```
+
+O CSV tem uma linha por mão/frame: `FUSED_*`, normal da visão, IMU, erros
+`fused x visão` e `calibração x visão`, idade do IMU e latência. Ao final o CLI
+imprime o resumo (`fusion/metrics.py`). Use o log parado e em movimento para
+decidir repetir o `Y` ou ajustar o filtro.
+
+Diagnóstico específico de orientação:
+
+```powershell
+.\.venv\Scripts\python.exe tools\diag_fusion_alignment.py --duracao 10
+```
+
 ## O que falta para bancada
 
 - Adaptadores reais: `KinectHandTracker`, MediaPipe, `ImuReceiver` -> contratos.

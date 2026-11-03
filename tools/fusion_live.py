@@ -82,6 +82,11 @@ def build_parser() -> argparse.ArgumentParser:
         help='Se informado (ex.: COM4), inicia tools/imu_serial_bridge em '
              'background e encaminha a serial do ESP32 para UDP 4210/4211'
     )
+    parser.add_argument(
+        '--log-csv', type=str, default=None, metavar='ARQUIVO',
+        help='Grava um CSV por mao/frame com FUSED_*, visao, IMU, erros e '
+             'latencia; ao final imprime o resumo das metricas'
+    )
     return parser
 
 
@@ -200,6 +205,16 @@ def run_fusion(
         Dict com estatísticas de resumo
     """
     from fusion.live import FusionEngine, LiveFusionApp, LiveConfig
+    from fusion.logging import FusionCsvLogger
+
+    logger = None
+    if getattr(args, 'log_csv', None):
+        try:
+            logger = FusionCsvLogger(args.log_csv)
+        except Exception as exc:
+            print(f"[AVISO] Nao foi possivel criar o log CSV: {exc}",
+                  file=sys.stderr)
+            logger = None
 
     # Cria engine de fusão
     engine = FusionEngine(calibrations)
@@ -239,7 +254,8 @@ def run_fusion(
         engine=engine,
         kinect_source=kinect_source,
         imu_source=effective_imu_source,
-        config=config
+        config=config,
+        logger=logger,
     )
 
     print(f"[INFO] Iniciando fusão V1 por {args.duracao:.1f}s...")
@@ -322,6 +338,15 @@ def main(argv: Optional[list[str]] = None) -> int:
 
     # Imprime resumo
     print_summary(summary, calibrations)
+
+    if getattr(args, 'log_csv', None):
+        try:
+            from fusion.metrics import print_summary as print_metrics
+            from fusion.metrics import summarize_fusion_log
+            print_metrics(summarize_fusion_log(args.log_csv))
+        except Exception as exc:
+            print(f"[AVISO] Nao foi possivel resumir o log: {exc}",
+                  file=sys.stderr)
 
     return 0
 
