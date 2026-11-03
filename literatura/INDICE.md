@@ -16,14 +16,20 @@ e **não são versionados** (direitos autorais).
 | `applsci-15-10527.pdf` | Kusunose et al. (2025). Estimation of Forearm Pronation-Supination Angles Using MediaPipe and IMU Sensors. Appl. Sci. 15, 10527. | 10.3390/app151910527 | MediaPipe + IMU para pronação/supinação |
 | `Xefteris_2025_Multimodal_IMU_RGB_pose.pdf` | Xefteris et al. Multimodal fusion of inertial sensors and single RGB camera data for 3D human pose estimation. Internet of Things (Elsevier). | (conferir DOI no PDF) | fusão IMU+RGB, arquitetura de fusão |
 
-## Ainda faltando (tentar acesso institucional/CAPES)
+## PDFs adicionados depois (Fase 0)
 
-| Referência | DOI/URL | Observação |
-|---|---|---|
-| Jaruchokphuriwaj & Varagul (2024), Accurate Hand Pose Estimation Using Depth Camera and IMU, IJMPE 12(7), 20-23. | http://ijmpe.iraj.in/paperdetails/21035 | PDF não tem link direto; **usa Intel RealSense D435 + Witmotion JY61P**, não Kinect v2. |
-| Real-time Joint Angle Estimation using Mediapipe Framework and Inertial Sensors. IEEE BIBE 2022. | https://www.computer.org/csdl/proceedings-article/bibe/2022/848700a128/1J6hJGkP4nS | Paywalled. |
-| The Virtual Kinect. ACM. | https://doi.org/10.1145/3488162.3488215 | PDF ACM retorna 403; conferir se é o paper citado. |
-| Tese Polytechnique Montréal "calibration framework for hand pose estimation". | (confirmar autor/título) | Ainda não localizei a tese exata. |
+| Arquivo | Referência | DOI/URL | Observação |
+|---|---|---|---|
+| `2-1016-172898355720-23.pdf` | Jaruchokphuriwaj & Varagul (2024). Accurate Hand Pose Estimation Using Depth Camera and IMU. IJMPE 12(7), 20-23. | http://ijmpe.iraj.in/paperdetails/21035 | PDF completo. Setup: RealSense D435 + Witmotion JY61P (não Kinect v2). |
+| `Real-time_Joint_Angle_Estimation_using_Mediapipe_Framework_and_Inertial_Sensors.pdf` | Palani & Panigrahi (2022). Real-time Joint Angle Estimation using Mediapipe Framework and Inertial Sensors. IEEE BIBE. | https://www.computer.org/csdl/proceedings-article/bibe/2022/848700a128/1J6hJGkP4nS | PDF completo. |
+| `3488162.3488215.pdf` | Lafayette et al. The Virtual Kinect. ACM. | https://doi.org/10.1145/3488162.3488215 | PDF completo; mapeamento Kinect <-> MediaPipe. |
+
+## Ainda faltando / atenção
+
+| Item | Status |
+|---|---|
+| Tese Polytechnique Montréal "calibration framework for hand pose estimation" | **Não é** o `2022_MarkAsmar.pdf`: esse PDF é "A Computer Vision-Based Automatic Transcription of Guitar Music from RGBD Videos" (PolyPublie 10470), sem relação. A tese exata continua não confirmada. |
+| Qualquer referência sem PDF | usar somente abstract/DOI; não pedir ao agente para "ler" o que não está na pasta. |
 
 ## Observações críticas
 
