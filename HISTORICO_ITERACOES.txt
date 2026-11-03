@@ -9062,3 +9062,49 @@ PROXIMA BANCADA: abrir o tool, teclar Y, manter as maos num ponto fixo, girar o
 punho devagar por ~24 s; conferir o residuo e se os JSONs foram gravados; depois
 testar o vetor vermelho girando a mao no mesmo ponto.
 
+
+
+================================================================================
+ITEM 156 (05/11/2026) - FASE 0 DO PLANO DE FUSAO: DECISOES, LITERATURA E
+    DEFINICAO DE JIG
+================================================================================
+DECISOES DO USUARIO
+  - alvo: WINDOWS (nao Ubuntu como no plano original), prototipo de PESQUISA;
+  - Kinect 2.0 funcionando, boa iluminacao; confiabilidade da orientacao de
+    junta do Kinect sera medida, nao assumida;
+  - sem jig existente; objetivos de erro do artigo nao sao meta (prototipo
+    funcional e contribuicao metodologica);
+  - PDFs das referencias ainda nao estavam salvos; criar `literatura/`.
+FEITO
+  - pasta `literatura/` com `INDICE.md`, `referencias.bib` e PDFs abertos:
+    Markley (Quaternion Averaging, NASA), Xefteris et al. (fusao IMU+RGB,
+    Zenodo), Zhang et al. (MediaPipe Hands, arXiv 2006.10214);
+  - .gitignore ignora `literatura/*.pdf` (direitos autorais; ficam locais);
+  - referencias confirmadas mas paywalled: Tian 2015 (Neurocomputing,
+    DOI 10.1016/j.neucom.2015.01.071), Acharya 2022 (Manipal), BIBE 2022,
+    "The Virtual Kinect" (ACM DOI 10.1145/3488162.3488215), Mahony 2008
+    (DOI 10.1109/TAC.2008.923738; HAL bloqueia bot);
+  - artigo principal IJMPE confirmado, mas o PDF nao tem link direto e o setup
+    e' Intel RealSense D435 + Witmotion JY61P -- NAO Kinect v2. Numeros do
+    artigo (2,33 mm; 0,057 grau yaw; 0,45/0,34 grau roll/pitch) nao sao metas
+    do nosso prototipo;
+  - Kusunose 2025 e a tese Polytechnique exacta NAO foram confirmadas; nao usar
+    como referencia ate ter DOI/PDF.
+JIG (explicacao para a proxima conversa): fixture fisica com angulos/posicoes
+conhecidos (ex.: base impressa em 3D com transferidor, suporte com faces a 0,
+15, 30, ..., 90 graus; ou caixa/mesa com marcadores). Nao e' obrigatorio no
+inicio: a primeira validacao pode ser sintetica + repetibilidade + Kinect como
+referencia; jig entra para validacao independente depois.
+DUVIDAS ABERTAS PARA O USUARIO
+  1) prototipo standalone ou precisa entrar no eeg_motor_paradigm ja'? (recomendo
+     standalone primeiro; colunas FUSED_* depois, versionadas);
+  2) estereo entra na primeira vertical slice ou fica para fallback posterior?
+     (recomendo Kinect+MediaPipe+IMU primeiro; estereo depois);
+  3) o usuario consegue baixar os paywalled pelo acesso institucional/CAPES?
+  4) podemos rodar um diagnostico de bancada no pykinect2 para ver JointOrientation
+     (disponibilidade, unidades, ruido) antes de decidir a fusao?
+  5) validacao independente: topa um jig simples (impresso/transferidor) ou
+     aceita primeiro validacao sintetica + repetibilidade?
+PROXIMO PASSO: com as respostas, congelar contratos da Fase 2 e montar o workflow
+de agentes (NVIDIA Nemotron Ultra) com escopos disjuntos.
+

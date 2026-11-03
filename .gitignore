@@ -107,3 +107,7 @@ AHRS/logs/
 # backups locais dos alinhamentos (item 154)
 backups_alinhamento/
 
+
+# PDFs locais de literatura (nao versionar por direitos autorais)
+literatura/*.pdf
+
