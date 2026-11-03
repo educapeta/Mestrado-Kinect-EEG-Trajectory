@@ -9144,3 +9144,43 @@ ARQUITETURA/EXECUCAO (a fechar na Fase 2)
 PROXIMO PASSO: Fase 1 (agentes de leitura NVIDIA Ultra) usando os 7 PDFs;
 depois Fase 2 (contratos) e so' entao Fase 3 (codigo).
 
+
+
+================================================================================
+ITEM 158 (05/11/2026) - FASE 1 DISPARADA: 2 AGENTES NVIDIA ULTRA LERAM OS PDFS
+    E PRODUZIRAM RELATORIOS (COM RESSALVA DE CITACOES ALUCINADAS)
+================================================================================
+LITERATURA: usuario adicionou IJMPE, BIBE e Virtual Kinect; o PDF
+`2022_MarkAsmar.pdf` e' uma tese de transcricao de guitarra (PolyPublie 10470),
+NAO a tese de calibracao citada -- registrado no INDICE. Faltam apenas a tese
+exata de Polytechnique (nao confirmada).
+FASE 1: 2 subagentes `nvidia/nemotron-3-ultra-550b-a55b` (provider nvidia),
+read-only, leram os PDFs e gravaram:
+  - literatura/relatorios/FASE1_A1_fusao_calibracao.md;
+  - literatura/relatorios/FASE1_A2_visao_mediapipe.md;
+  - literatura/relatorios/README.md (aviso de citacoes nao verificadas).
+CONCEITOS APROVEITADOS:
+  - Mahony 6 eixos: yaw deriva; visao deve fornecer referencia de yaw;
+  - Markley: media de quaternions com pesos/sinal/outliers;
+  - Tian: UKF com estado posicao/velocidade/quaternion e medidas Kinect;
+  - Acharya: IMU bom em tempo/relativo; Kinect bom em posicao absoluta;
+  - MediaPipe: 21 landmarks 2.5D; z_rel nao metrico; usar depth do Kinect;
+  - Kusunose: features normalizadas/ML para pronacao-supinacao (nao palma);
+  - BIBE: Kalman simples [angulo, taxa] + sincronizacao visao x IMU;
+  - Virtual Kinect: mapeamento de corpo, NAO de mao; nao reutilizar para 21.
+RESSALVA CRITICA: os agentes alucinaram paginas/equacoes/autores. Ex.: MediaPipe
+(PDF 5 paginas) citado p.117-125; IJMPE (4 paginas) p.144-175; Xefteris (13
+paginas) p.407; Markley com autores extras; titulo do Mahony trocado. Portanto
+os relatorios servem como sintese conceitual, NAO como fonte final de citacao.
+Fase 1.5 obrigatoria: auditoria de cada afirmacao/numero no PDF, corrigindo
+paginas/autores antes da Fase 2.
+JOINT ORIENTATION: o diagnostico `tools/diag_kinect_joint_orientation.py` abriu
+o runtime (com kinect_compat), mas em 10 s NENHUM corpo foi rastreado
+(`corpos=0`); nao deu para avaliar a orientacao das juntas. Repetir com o
+usuario em frente ao Kinect, mao visivel.
+VIDEOS DIY (para o usuario):
+  - https://www.youtube.com/watch?v=K_Kmpjtk2E8 (angle-jig reusando transferidor)
+  - https://www.youtube.com/watch?v=O35IQoBRUTE (calibracao de 6 lados DIY trackers)
+  - https://www.youtube.com/watch?v=hMU1FNeGgtM (IMU calibration project)
+  - designs: github.com/xioTechnologies/Calibration-Cube, github.com/glompos21/calibration_jig
+
