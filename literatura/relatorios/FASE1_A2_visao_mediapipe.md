@@ -1,3 +1,5 @@
+> **AVISO (Fase 1.5):** as páginas/equações deste relatório bruto NÃO foram verificadas e contêm erros. Use como síntese conceitual e confira `FASE1_5_AUDITORIA.md` antes de citar.
+
 # FASE1_A2 — Visão (MediaPipe/Kinect), Yaw e Fusão RGB+IMU
 
 **Data:** 2025-11-03  

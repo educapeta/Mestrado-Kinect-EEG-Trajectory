@@ -4,6 +4,8 @@ Pasta local para os PDFs e metadados do plano de fusão
 **Kinect v2 + MediaPipe + IMU (MPU6050/Mahony)**. Os PDFs são para estudo local
 e **não são versionados** (direitos autorais).
 
+> **Fase 1.5:** metadados e afirmações centrais auditados em `relatorios/FASE1_5_AUDITORIA.md`; páginas/equações dos relatórios brutos não são confiáveis.
+
 ## PDFs baixados e verificados
 
 | Arquivo | Referência | DOI/URL | Uso no projeto |

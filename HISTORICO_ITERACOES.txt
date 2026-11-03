@@ -9204,3 +9204,38 @@ ARQUIVO: docs/DIAGNOSTICO_KINECT_BODY.md + docs/kinect_body_view.png.
 PROXIMO: Fase 1.5 (auditar citacoes/paginas dos relatorios A1/A2) e Fase 2
 (contratos de arquitetura), sem bloquear no JointOrientation.
 
+
+
+================================================================================
+ITEM 160 (05/11/2026) - FASE 1.5: AUDITORIA DAS CITACOES DOS RELATORIOS A1/A2
+================================================================================
+METODO: pypdf direto nos PDFs; conferencia de metadados, paginas e termos-
+chave; paginas 1-based do PDF.
+PRINCIPAIS CORRECOES:
+  - Mahony: titulo real "Nonlinear Complementary Filters on the Special
+    Orthogonal Group" (A1 usou "Complementary Filter Design on SO(3)").
+  - Markley: ano correto 2007 (A1/plano diziam 2002); autores confirmados
+    (Markley, Cheng, Crassidis, Oshman).
+  - IJMPE: PDF tem 4 paginas (20-23), nao 144-175; 2,33 mm e' media do eixo Z
+    (Tabela 1), nao erro 3D global; artigo usa RealSense D435+Witmotion, nao
+    Kinect v2; referencia O 1-17/0-9, yaw 2D e eixos X/Z confirmados p.2-3.
+  - MediaPipe: PDF 5 paginas, nao 117-125; palm detector/2.5D e depth relativa
+    sintetica confirmados p.1-2; "21 landmarks" e' convencao do modelo, nao
+    frase explicita do paper.
+  - Kusunose: 22 landmarks selecionados p.5, features p.6, SHAP triangulo
+    palmar p.1; ">35%" NAO encontrado -> removido.
+  - Xefteris: latencia 81,41 ms / 12,28 fps confirmada p.12 (nao pp.509-512).
+  - BIBE: Kalman sequencial e RMSE 6,30/7,70/6,18 confirmados p.1/p.4; estado
+    [angulo, taxa] e matriz F NAO confirmados -> tratar como adaptacao nossa.
+  - Virtual Kinect: 25 juntas Kinect x 33 MediaPipe, corpo (nao mao); SVR 2021
+    (nao SBGames).
+  - Paginas/equacoes dos relatorios A1/A2 sao nao confiaveis; relatorios brutos
+    receberam aviso no topo e README aponta para a auditoria.
+ARQUIVO: literatura/relatorios/FASE1_5_AUDITORIA.md
+BIBTEX: literatura/referencias.bib corrigido (Markley 2007, Mahony, Xefteris
+vol.29/2025, Acharya DOI, BIBE DOI, Virtual Kinect SVR 2021).
+JIG: usuario vai fazer A4 com angulos + papelao + nivel para yaw em varias
+inclinacoes; v1 comeca com testes sinteticos, jig depois.
+PROXIMO: Fase 2 (contratos de arquitetura) com base apenas nas afirmacoes
+seguras da auditoria; depois Fase 3.
+

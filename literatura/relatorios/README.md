@@ -18,6 +18,10 @@ Os relatórios são úteis como **síntese conceitual**, mas os agentes
 conferir no PDF original e corrigir a referência. A Fase 1.5 do projeto é
 justamente essa auditoria.
 
+## Auditoria
+
+- `FASE1_5_AUDITORIA.md` -- conferência dos metadados e das afirmações centrais contra os PDFs. Use este documento, não as páginas dos relatórios brutos.
+
 ## Arquivos
 - `FASE1_A1_fusao_calibracao.md` — atitude/fusão/calibração.
 - `FASE1_A2_visao_mediapipe.md` — MediaPipe/yaw/fusão visão+IMU.

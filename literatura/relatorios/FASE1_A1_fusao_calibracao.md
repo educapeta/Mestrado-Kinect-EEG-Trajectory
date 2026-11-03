@@ -1,3 +1,5 @@
+> **AVISO (Fase 1.5):** as páginas/equações deste relatório bruto NÃO foram verificadas e contêm erros. Use como síntese conceitual e confira `FASE1_5_AUDITORIA.md` antes de citar.
+
 # FASE 1 — Relatório A1: Atitude, Fusão e Calibração
 
 **Data:** 2026-11-03  
