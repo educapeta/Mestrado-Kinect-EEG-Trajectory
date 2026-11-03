@@ -10,6 +10,7 @@ Provides:
 from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Optional, Dict, Any, List
+import math
 import time
 import numpy as np
 
@@ -60,6 +61,10 @@ class FusionEngine:
         self._filters: Dict[str, QuaternionComplementaryFilter] = {}
         self._sensor_managers: Dict[str, SensorManager] = {}
         self._last_update: Dict[str, float] = {}
+        #: Inicializacao unica de q com a atitude do IMU + calibracao.
+        self._inicializados: Dict[str, bool] = {}
+        #: Primeira visao valida usada para alinhar a normal (yaw do boot).
+        self._visao_alinhada: Dict[str, bool] = {}
 
         for hand, cal in calibrations.items():
             if not cal.validate():
@@ -87,6 +92,13 @@ class FusionEngine:
             self._sensor_managers[hand] = SensorManager()
 
             self._last_update[hand] = 0.0
+            self._inicializados[hand] = False
+            self._visao_alinhada[hand] = False
+
+    def calibration(self, hand: str) -> Optional[Calibration]:
+        """Calibracao ativa do lado (para diagnostico)."""
+        filtro = self._filters.get(hand)
+        return None if filtro is None else filtro.calibration
 
     def update(
         self,
@@ -134,6 +146,32 @@ class FusionEngine:
                     vision_confidence = obs.confidence
                     vision_valid = True
                     dir_cam = obs.palm_dir_cam
+
+            # 1) Inicializacao de ATITUDE COMPLETA com IMU + calibracao:
+            # q = T_cam_world * R_imu(body->world). Nao basta alinhar so' a
+            # normal (fica rolando em torno dela e o gyro deriva o vetor).
+            if (not self._inicializados.get(hand, False)
+                    and imu is not None and imu.valid):
+                try:
+                    q0 = filter_obj.calibration.q_body_cam_from_imu(imu)
+                    filter_obj.reset(q0)
+                    self._inicializados[hand] = True
+                    # Estado completo novo: alinhar a normal ainda e' util
+                    # para corrigir o yaw do boot.
+                    self._visao_alinhada[hand] = False
+                except Exception:
+                    pass
+
+            # 2) Primeira normal valida da visao: corrige yaw do boot/residuo
+            # de T/f SEM perder a atitude completa do IMU.
+            if (vision_normal is not None
+                    and not self._visao_alinhada.get(hand, False)):
+                try:
+                    if filter_obj.align_to_normal(vision_normal):
+                        self._visao_alinhada[hand] = True
+                        self._inicializados[hand] = True
+                except Exception:
+                    pass
 
             # Run filter step
             q_updated = filter_obj.step(
@@ -334,7 +372,30 @@ class LiveFusionApp:
                         amostra = imu_samples.get(hand)
                         idade = ("sem IMU" if amostra is None
                                  else f"imu {max(0.0, (now - amostra.timestamp) * 1000.0):.0f}ms")
-                        fontes.append(f"{hand}:{state.source}({idade})")
+                        obs = kinect_obs.get(hand)
+                        extra = ""
+                        if obs is not None and obs.valid:
+                            n_vis = np.asarray(obs.palm_normal_cam, float)
+                            n_fus = np.asarray(state.normal_cam, float)
+                            nv = np.linalg.norm(n_vis); nf = np.linalg.norm(n_fus)
+                            if nv > 1e-9 and nf > 1e-9:
+                                dot = float(np.clip(np.dot(n_vis / nv, n_fus / nf), -1, 1))
+                                extra = f" erro_vis={math.degrees(math.acos(dot)):.1f}deg"
+                            cal_diag = self.engine.calibration(hand)
+                            if (cal_diag is not None and amostra is not None
+                                    and amostra.valid):
+                                try:
+                                    n_cal = np.asarray(
+                                        cal_diag.normal_cam_from_imu(amostra), float)
+                                    nc = np.linalg.norm(n_cal)
+                                    if nc > 1e-9:
+                                        dot2 = float(np.clip(
+                                            np.dot(n_vis / nv, n_cal / nc), -1, 1))
+                                        extra += (f" erro_cal="
+                                                  f"{math.degrees(math.acos(dot2)):.1f}deg")
+                                except Exception:
+                                    pass
+                        fontes.append(f"{hand}:{state.source}({idade}{extra})")
                     print(f"[Fusion] t={elapsed:.1f}s frames={self._frame_count} "
                           f"states={self._state_count} fps={fps:.1f} "
                           f"fontes={fontes}")

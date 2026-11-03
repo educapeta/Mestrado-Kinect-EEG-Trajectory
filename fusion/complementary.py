@@ -12,7 +12,7 @@ import numpy as np
 
 from .contracts import ImuSample, Calibration, FusedState
 from .quaternion import (
-    normalize, multiply, conjugate, rotate_vector, exp_so3, angle_between_deg
+    normalize, multiply, conjugate, rotate_vector, exp_so3, angle_between_deg, quat_from_two_vectors
 )
 
 
@@ -68,6 +68,28 @@ class QuaternionComplementaryFilter:
     def state(self) -> np.ndarray:
         """Return copy of current state quaternion (w, x, y, z)."""
         return self._q.copy()
+
+    def align_to_normal(self, normal_cam: np.ndarray) -> bool:
+        """Alinha a normal prevista `q (x) f_body` a uma medida da visao.
+
+        Usado UMA vez, na primeira observacao valida, para tirar o filtro da
+        identidade e corrigir o yaw do boot de forma imediata. Nao substitui
+        a calibracao: usa `f_body`/T ja' calibrados.
+        """
+        if self.calibration is None:
+            return False
+        n_vis = np.asarray(normal_cam, dtype=np.float64).reshape(3)
+        nv = np.linalg.norm(n_vis)
+        if not np.isfinite(nv) or nv < 1e-9:
+            return False
+        n_vis = n_vis / nv
+        n_pred = self.calibration.normal_cam_from_q(self._q)
+        npred = np.linalg.norm(n_pred)
+        if not np.isfinite(npred) or npred < 1e-9:
+            return False
+        dq = quat_from_two_vectors(n_pred / npred, n_vis)
+        self._q = normalize(multiply(dq, self._q))
+        return True
 
     def predict(self, gyro_dps: np.ndarray, dt: float) -> None:
         """

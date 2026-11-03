@@ -9462,3 +9462,38 @@ PROXIMO: usuario testar com a palma paralela ao eixo optico e conferir z~0;
 se z ficar grande/instavel, repetir Y ou investigar montagem; depois Fase 4
 (log CSV/metricas/jig).
 
+
+
+================================================================================
+ITEM 167 (05/11/2026) - CALIBRACAO VISUAL: NORMAL DE PLANO NO ADAPTER,
+    INICIALIZACAO COMPLETA DO FILTRO E DIAGNOSTICO erro_cal/erro_vis
+================================================================================
+SINTOMA: usuario rodou Y de novo (direita residuo 8.52/mediana 5.6/p90 17.9;
+esquerda 12.67/10.8/26.4), o live ficou responsivo mas o vetor roxo (FUSED)
+ainda nao batia com a palma. `--ponte-serial COM4` deu PermissionError porque
+ja' havia uma ponte aberta em outro terminal (dados chegaram; nao era o bug).
+DIAGNOSTICO:
+  - o adapter usava `palm_orientation_camera` (normal de 3 pontos) enquanto o
+    Y calibra com `palm_plane_camera` (plano medio de 5 pontos). Em um frame
+    real a normal de 3 pontos dava ~109 graus de erro contra T R f; verde e
+    roxo estavam sendo guiados por uma normal pior que a verdade da calibracao.
+  - o filtro era inicializado apenas com a primeira normal (deixava a rotacao
+    em torno da normal indefinida); com o gyro, o vetor derivava/errava.
+CORRECOES:
+  - adapter: `palm_plane_camera` como fonte PRIMARIA da normal; normal de 3
+    pontos so' fallback (direcao dos dedos continua vindo de orientation);
+  - live: inicializa ATITUDE COMPLETA q = T_cam_world * R_imu quando chega o
+    primeiro IMU valido e SO' DEPOIS alinha a normal da visao (corrige yaw de
+    boot); se nao houver IMU, alinha so' a normal;
+  - log periodico ganhou erro_vis (fused x Kinect) e erro_cal
+    (T R f x Kinect) por lado;
+  - visual: seta maior com contorno, n/z junto da palma, triade afastada da
+    borda e legenda magenta=FUSED verde=KINECT ciano=dir.
+STATUS: testes fusion OK (suite 74/74 antes das ultimas mudancas; rodar de
+novo no commit). Falta validar com a mao visivel: ideal erro_vis < 5 graus
+estavel e erro_cal baixo. Se erro_cal continuar alto, a calibracao/boot yaw
+ainda esta' errada; repetir Y (principalmente esquerda, p90 26.4).
+PROXIMO: usuario roda `fusion_live --ponte-serial COM4 ...` (ou sem a flag se
+a ponte ja' estiver aberta), com a mao visivel, e manda as linhas com
+erro_vis/erro_cal; decidir entre repetir Y ou corrigir boot yaw/anchor.
+

@@ -11,7 +11,7 @@ from typing import Optional, Any
 import numpy as np
 
 from .quaternion import (
-    normalize, rotate_vector, from_euler_zyx_deg, to_matrix
+    normalize, rotate_vector, from_euler_zyx_deg, to_matrix, from_matrix
 )
 
 
@@ -208,6 +208,14 @@ class Calibration:
             Palm normal in camera frame (3,) unit vector
         """
         return rotate_vector(q_body_cam, self.f_body)
+
+    def q_body_cam_from_imu(self, sample: ImuSample):
+        """Quaternion corpo->camera a partir da atitude atual do IMU + T."""
+        from .quaternion import from_euler_zyx_deg, to_matrix, from_matrix
+        q_imu = from_euler_zyx_deg(sample.roll_deg, sample.pitch_deg,
+                                   sample.yaw_deg)
+        R_cam_body = self.T_cam_world @ to_matrix(q_imu)
+        return from_matrix(R_cam_body)
 
     def normal_cam_from_imu(self, sample: ImuSample) -> np.ndarray:
         """

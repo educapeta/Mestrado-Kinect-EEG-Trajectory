@@ -145,24 +145,28 @@ class KinectMediaPipeSource:
                 if landmarks is None or position is None:
                     continue
 
-                # Try palm_orientation_camera first (uses landmarks)
+                # A calibracao Y usa o PLANO MEDIO do dorso (5 pontos).
+                # Usar primeiro essa mesma verdade evita comparar macas com
+                # laranjas (normal de 3 pontos e' bem mais ruidosa).
                 normal = None
                 direction = None
                 try:
-                    normal, direction = self._tracker.palm_orientation_camera(landmarks, side)
+                    normal, _rms = self._tracker.palm_plane_camera(
+                        landmarks, side)
                 except Exception:
                     normal = None
-                    direction = None
-
-                # Fallback to palm_plane_camera if normal is None
-                if normal is None:
-                    try:
-                        # palm_plane_camera devolve (normal, rms_m), nao direcao.
-                        normal, _rms = self._tracker.palm_plane_camera(
+                # Fallback: normal de 3 pontos + direcao dos dedos.
+                try:
+                    if normal is None:
+                        normal, direction = self._tracker.palm_orientation_camera(
                             landmarks, side)
-                    except Exception:
+                    else:
+                        _n3, direction = self._tracker.palm_orientation_camera(
+                            landmarks, side)
+                except Exception:
+                    if normal is None:
                         normal = None
-                    direction = None
+                        direction = None
 
                 # Posicao 2D da palma (landmark 9) para ancorar o overlay.
                 palm_px = None
