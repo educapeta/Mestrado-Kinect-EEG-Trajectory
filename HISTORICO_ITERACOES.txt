@@ -9428,3 +9428,37 @@ TESTES: suite raiz 74/74 OK; test_imu_serial_bridge 27 assercoes OK.
 PROXIMO: recalibrar Y apos montagem no dorso; testar janela visual; comparar
 com groundtruth. Wi-Fi/UDP continua opcional (serial bridge e' o caminho atual).
 
+
+
+================================================================================
+ITEM 166 (05/11/2026) - OVERLAY ANCORADO NA PALMA + TRIADE X/Y/Z + Z DO EIXO
+    OPTICO; CALIBRACAO Y CONFERIDA VISUALMENTE
+================================================================================
+PEDIDO DO USUARIO: vetor rosa no centro confundia; queria o vetor na palma e
+uma referencia X/Y/Z; com a palma paralela ao eixo optico do Kinect, espera
+z ~ 0 para julgar a calibracao.
+IMPLEMENTADO:
+  - contracts: KinectObservation.palm_px e FusedState.palm_px (posicao 2D do
+    landmark 9 da palma; None se nao houver);
+  - adapters: calcula palm_px a partir dos landmarks normalizados;
+  - complementary/live: propagam palm_px para o FusedState;
+  - visualization.py reescrita:
+    * seta magenta (normal FUNDIDA) e verde (normal KINECT) ancoradas na palma;
+    * textos n=(nx,ny,nz) e z=... ao lado da palma;
+    * aviso "z~0: palma PARALELA ao eixo optico" x "z!=0: inclinada";
+    * se a normal e' quase paralela ao eixo optico (|z| dominante), desenha
+      circulo/cruz -Z(frente)/+Z(fundo) em vez de seta 2D achatada;
+    * triade da camera no canto: X vermelho (direita), Y verde (cima na cena),
+      Z azul (circulo/dot = para dentro/fundo);
+    * legenda magenta=FUSED verde=KINECT ciano=dir; painel separado por mao;
+  - painel mostra confianca/validade/latencia/status e z.
+VALIDACAO:
+  - preview real salvo em _fusion_overlay_preview2.png (Kinect, mao direita;
+    seta na palma, triade no canto; n=(-0.46,-0.27,+0.85) -> z=+0.85);
+  - live real: `fusion_live.py --ponte-serial COM4 --duracao 3` -> exit 0,
+    68 frames/3.4 s, ~20 FPS, right:fused e left:fused com IMU ~16 ms;
+  - suite raiz 74/74 OK.
+PROXIMO: usuario testar com a palma paralela ao eixo optico e conferir z~0;
+se z ficar grande/instavel, repetir Y ou investigar montagem; depois Fase 4
+(log CSV/metricas/jig).
+

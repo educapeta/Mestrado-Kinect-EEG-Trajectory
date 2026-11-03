@@ -160,7 +160,8 @@ class FusionEngine:
                 source=decision.source,
                 latency_ms=((now - obs.timestamp) * 1000.0
                             if obs is not None else 0.0),
-                dir_cam=dir_cam if dir_cam is not None and np.linalg.norm(dir_cam) > 1e-6 else None
+                dir_cam=dir_cam if dir_cam is not None and np.linalg.norm(dir_cam) > 1e-6 else None,
+                palm_px=(obs.palm_px if obs is not None else None),
             )
 
             # Only return states for hands with valid calibration
@@ -269,7 +270,8 @@ class LiveFusionApp:
                 # Visualize if frame available (visualizer always called, window only if show=True)
                 if frame_bgr is not None and frame_bgr.size > 0:
                     # Draw overlay for each fused state
-                    for hand, state in fused_states.items():
+                    for indice_mao, (hand, state) in enumerate(
+                            fused_states.items()):
                         # Build source statuses for visualization
                         statuses: List[SourceStatus] = []
 
@@ -301,7 +303,12 @@ class LiveFusionApp:
                         if self.visualizer is not None and hasattr(self.visualizer, 'draw_overlay'):
                             self.visualizer.draw_overlay(frame_bgr, state, statuses)
                         else:
-                            draw_overlay(frame_bgr, state, statuses)
+                            draw_overlay(
+                                frame_bgr, state, statuses,
+                                vision_normal_cam=(obs.palm_normal_cam
+                                                   if obs is not None else None),
+                                panel_origin=(10, 30 + indice_mao * 235),
+                            )
 
                     # Show window only if show=True
                     if self.config.show:

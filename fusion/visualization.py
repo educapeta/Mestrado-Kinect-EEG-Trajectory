@@ -1,25 +1,122 @@
 """
-Visualization utilities for sensor fusion overlay.
+Visualizacao OpenCV leve da fusao.
 
-Draws fusion state and source status on OpenCV frames.
+Convencao visual:
+- a imagem tem x para a direita e y para BAIXO;
+- o frame da camera do Kinect tem X para a direita, Y para CIMA e Z para
+  DENTRO da cena (eixo optico);
+- a normal da palma e' ancorada no landmark 9 (palma) de cada mao;
+- magenta = normal fundida; verde = normal medida pelo Kinect (visao);
+- no canto superior direito fica a triade da camera (X vermelho, Y verde,
+  Z azul: circulo cheio = +Z/fundo, cruz = -Z/frente).
 """
 
 from __future__ import annotations
-from typing import Optional, List
-import numpy as np
+from typing import Optional, List, Tuple
 import cv2
+import numpy as np
 
 from .contracts import FusedState, SourceStatus, Calibration
 
+COLOR_FUSED = (255, 0, 255)    # magenta
+COLOR_VISION = (0, 255, 0)     # verde
+COLOR_IMU = (0, 255, 255)      # amarelo
+COLOR_TEXT = (255, 255, 255)   # branco
+COLOR_BG = (0, 0, 0)
+COLOR_VALID = (0, 255, 0)
+COLOR_INVALID = (0, 0, 255)
+COLOR_X = (0, 0, 255)          # X vermelho (BGR)
+COLOR_Y = (0, 255, 0)          # Y verde
+COLOR_Z = (255, 128, 0)        # Z azul
+COLOR_TANGENT = (255, 255, 0)  # ciano
+FONT = cv2.FONT_HERSHEY_SIMPLEX
 
-# Color constants (BGR format for OpenCV)
-COLOR_FUSED = (255, 0, 255)    # Magenta
-COLOR_VISION = (0, 255, 0)     # Green
-COLOR_IMU = (0, 255, 255)      # Yellow
-COLOR_TEXT = (255, 255, 255)   # White
-COLOR_BG = (0, 0, 0)           # Black
-COLOR_VALID = (0, 255, 0)      # Green
-COLOR_INVALID = (0, 0, 255)    # Red
+
+def _unit(v: Optional[np.ndarray]) -> Optional[np.ndarray]:
+    if v is None:
+        return None
+    v = np.asarray(v, dtype=np.float64).reshape(3)
+    n = float(np.linalg.norm(v))
+    if not np.isfinite(n) or n < 1e-9:
+        return None
+    return v / n
+
+
+def _origem_palma(state: FusedState, width: int, height: int) -> Tuple[int, int]:
+    """Ponto 2D da palma, ou centro (fallback)."""
+    px = None if state.palm_px is None else np.asarray(state.palm_px, float).reshape(-1)
+    if px is not None and px.size >= 2 and np.isfinite(px[:2]).all():
+        x = int(np.clip(px[0], 0, width - 1))
+        y = int(np.clip(px[1], 0, height - 1))
+        return x, y
+    return width // 2, height // 2
+
+
+def _seta_normal(frame, origem, normal, cor, rotulo, comprimento=110):
+    """Desenha a normal no plano da imagem.
+
+    Se a normal estiver quase no eixo optico (|z| dominante), nao da' para
+    desenhar uma seta 2D: desenha circulo cheio (-Z/frente) ou cruz (+Z/fundo).
+    """
+    n = _unit(normal)
+    if n is None:
+        return
+    x, y = int(origem[0]), int(origem[1])
+    sx, sy = float(n[0]), float(-n[1])  # camera Y para cima -> imagem Y para baixo
+    paralelo = float(np.hypot(sx, sy))
+
+    if paralelo < 0.22:
+        raio = int(max(9, min(28, 14 + 18 * abs(float(n[2])))))
+        if n[2] < 0:
+            # -Z: apontando para a lente/frente do Kinect
+            cv2.circle(frame, (x, y), raio, cor, -1)
+            cv2.circle(frame, (x, y), max(3, raio // 3), COLOR_BG, -1)
+            txt = f"{rotulo} -Z (frente)"
+        else:
+            # +Z: apontando para o fundo da cena
+            cv2.circle(frame, (x, y), raio, cor, 2)
+            cv2.line(frame, (x - raio // 2, y - raio // 2),
+                     (x + raio // 2, y + raio // 2), cor, 2)
+            cv2.line(frame, (x + raio // 2, y - raio // 2),
+                     (x - raio // 2, y + raio // 2), cor, 2)
+            txt = f"{rotulo} +Z (fundo)"
+        cv2.putText(frame, txt, (x + raio + 6, y + 5),
+                    FONT, 0.42, cor, 1, cv2.LINE_AA)
+    else:
+        fim = (int(x + sx * comprimento), int(y + sy * comprimento))
+        # contorno escuro para a seta aparecer sobre a luva/pele
+        cv2.arrowedLine(frame, (x, y), fim, (0, 0, 0), 6, tipLength=0.25)
+        cv2.arrowedLine(frame, (x, y), fim, cor, 3, tipLength=0.25)
+        cv2.putText(frame, rotulo, (fim[0] + 5, fim[1] + 4),
+                    FONT, 0.45, cor, 1, cv2.LINE_AA)
+
+
+def draw_camera_axes(frame_bgr: np.ndarray,
+                     origem: Optional[Tuple[int, int]] = None,
+                     tamanho: int = 70) -> np.ndarray:
+    """Triade da camera: X direita, Y para cima na cena, Z para dentro."""
+    if frame_bgr is None or frame_bgr.size == 0:
+        return frame_bgr
+    h, w = frame_bgr.shape[:2]
+    if origem is None:
+        origem = (w - 330, 95)
+    x0, y0 = int(origem[0]), int(origem[1])
+    fim_x = (x0 + tamanho, y0)
+    fim_y = (x0, y0 - tamanho)
+    cv2.arrowedLine(frame_bgr, (x0, y0), fim_x, COLOR_X, 2, tipLength=0.25)
+    cv2.arrowedLine(frame_bgr, (x0, y0), fim_y, COLOR_Y, 2, tipLength=0.25)
+    cv2.putText(frame_bgr, "X", (fim_x[0] + 5, fim_x[1] + 4), FONT, 0.5,
+                COLOR_X, 1, cv2.LINE_AA)
+    cv2.putText(frame_bgr, "Y", (fim_y[0] + 5, fim_y[1] + 4), FONT, 0.5,
+                COLOR_Y, 1, cv2.LINE_AA)
+    zx, zy = x0 + tamanho, y0 + 26
+    cv2.circle(frame_bgr, (zx, zy), 9, COLOR_Z, 2)
+    cv2.circle(frame_bgr, (zx, zy), 3, COLOR_Z, -1)
+    cv2.putText(frame_bgr, "Z+ (fundo)", (zx + 14, zy + 5), FONT, 0.42,
+                COLOR_Z, 1, cv2.LINE_AA)
+    cv2.putText(frame_bgr, "camera", (x0 - 10, y0 + tamanho // 2 + 30),
+                FONT, 0.42, COLOR_TEXT, 1, cv2.LINE_AA)
+    return frame_bgr
 
 
 def draw_overlay(
@@ -27,206 +124,119 @@ def draw_overlay(
     state: FusedState,
     statuses: List[SourceStatus],
     calibration: Optional[Calibration] = None,
-    source_text: Optional[str] = None
+    source_text: Optional[str] = None,
+    vision_normal_cam: Optional[np.ndarray] = None,
+    panel_origin: Optional[Tuple[int, int]] = None,
 ) -> np.ndarray:
-    """
-    Draw fusion overlay on frame.
-
-    Args:
-        frame_bgr: Input BGR frame (modified in place and returned)
-        state: Fused state estimate
-        statuses: List of source statuses
-        calibration: Optional calibration for additional info
-        source_text: Optional custom source text
-
-    Returns:
-        Frame with overlay drawn (same array as input)
-    """
+    """Desenha a fusao ancorada na palma + painel + triade da camera."""
     if frame_bgr is None or frame_bgr.size == 0:
         return frame_bgr
-
     h, w = frame_bgr.shape[:2]
+    if panel_origin is None:
+        panel_origin = (10, 30)
+    painel_x, painel_y = int(panel_origin[0]), int(panel_origin[1])
 
-    # Draw text panel in top-left corner
-    panel_x = 10
-    panel_y = 30
-    line_height = 22
-    font = cv2.FONT_HERSHEY_SIMPLEX
-    font_scale = 0.55
-    thickness = 1
+    normal = _unit(state.normal_cam)
+    origem_palma = _origem_palma(state, w, h)
 
-    # Background rectangle for text panel
-    panel_lines = 5 + len(statuses)
-    panel_height = panel_lines * line_height + 10
-    panel_width = 320
-    cv2.rectangle(
-        frame_bgr,
-        (panel_x - 5, panel_y - 25),
-        (panel_x + panel_width, panel_y + panel_height),
-        COLOR_BG,
-        -1
-    )
-    cv2.rectangle(
-        frame_bgr,
-        (panel_x - 5, panel_y - 25),
-        (panel_x + panel_width, panel_y + panel_height),
-        COLOR_FUSED,
-        1
-    )
-
-    # Title
-    title = f"Fusion: {state.source if state.source else 'unknown'}"
-    if source_text:
-        title += f" ({source_text})"
-    cv2.putText(
-        frame_bgr, title,
-        (panel_x, panel_y),
-        font, font_scale, COLOR_FUSED, thickness, cv2.LINE_AA
-    )
-    panel_y += line_height
-
-    # Confidence
-    conf_color = COLOR_VALID if state.confidence > 0.5 else COLOR_INVALID
-    cv2.putText(
-        frame_bgr,
-        f"Confidence: {state.confidence:.2f}",
-        (panel_x, panel_y),
-        font, font_scale, conf_color, thickness, cv2.LINE_AA
-    )
-    panel_y += line_height
-
-    # Validity
-    valid_color = COLOR_VALID if state.valid else COLOR_INVALID
-    cv2.putText(
-        frame_bgr,
-        f"Valid: {'YES' if state.valid else 'NO'}",
-        (panel_x, panel_y),
-        font, font_scale, valid_color, thickness, cv2.LINE_AA
-    )
-    panel_y += line_height
-
-    # Latency
-    cv2.putText(
-        frame_bgr,
-        f"Latency: {state.latency_ms:.1f} ms",
-        (panel_x, panel_y),
-        font, font_scale, COLOR_TEXT, thickness, cv2.LINE_AA
-    )
-    panel_y += line_height
-
-    # Quaternion (compact)
-    q = state.q_body_cam
-    cv2.putText(
-        frame_bgr,
-        f"q: [{q[0]:.3f}, {q[1]:.3f}, {q[2]:.3f}, {q[3]:.3f}]",
-        (panel_x, panel_y),
-        font, font_scale, COLOR_TEXT, thickness, cv2.LINE_AA
-    )
-    panel_y += line_height
-
-    # Source statuses
+    # Painel de status (uma mao por chamada; o live passa panel_origin).
+    linhas = 10 + len(statuses)
+    altura_painel = linhas * 21 + 10
+    largura_painel = 560
+    cv2.rectangle(frame_bgr,
+                  (painel_x - 5, painel_y - 25),
+                  (painel_x + largura_painel, painel_y + altura_painel),
+                  COLOR_BG, -1)
+    cv2.rectangle(frame_bgr,
+                  (painel_x - 5, painel_y - 25),
+                  (painel_x + largura_painel, painel_y + altura_painel),
+                  COLOR_FUSED, 1)
+    cv2.putText(frame_bgr, f"Fusion: {state.hand} | {state.source or '?'}",
+                (painel_x, painel_y), FONT, 0.55, COLOR_FUSED, 1, cv2.LINE_AA)
+    painel_y += 21
+    conf_color = COLOR_VALID if state.confidence >= 0.5 else COLOR_INVALID
+    cv2.putText(frame_bgr, f"conf={state.confidence:.2f} valid={int(state.valid)} "
+                f"lat={state.latency_ms:.1f}ms",
+                (painel_x, painel_y), FONT, 0.5, conf_color, 1, cv2.LINE_AA)
+    painel_y += 21
+    if normal is not None:
+        cv2.putText(frame_bgr,
+                    f"n=({normal[0]:+.2f},{normal[1]:+.2f},{normal[2]:+.2f}) "
+                    f"z={normal[2]:+.2f}",
+                    (painel_x, painel_y), FONT, 0.5, COLOR_FUSED, 1, cv2.LINE_AA)
+        painel_y += 21
+        aviso_z = "z~0: palma PARALELA ao eixo optico" if abs(normal[2]) < 0.15 \
+            else "z!=0: palma inclinada em relacao ao eixo optico"
+        cv2.putText(frame_bgr, aviso_z, (painel_x, painel_y), FONT, 0.45,
+                    COLOR_TEXT, 1, cv2.LINE_AA)
+        painel_y += 21
+    cv2.putText(frame_bgr, "magenta=FUSED  verde=KINECT  ciano=dir",
+                (painel_x, painel_y), FONT, 0.42, COLOR_TEXT, 1, cv2.LINE_AA)
+    painel_y += 21
+    if calibration is not None:
+        cv2.putText(frame_bgr,
+                    f"cal={calibration.source or '?'} resid="
+                    f"{calibration.residual_deg if calibration.residual_deg is not None else '?'}",
+                    (painel_x, painel_y), FONT, 0.45, COLOR_TEXT, 1, cv2.LINE_AA)
+        painel_y += 21
     for status in statuses:
-        age_str = f"{status.age_ms:.0f}ms" if status.age_ms < 1000 else f"{status.age_ms/1000:.1f}s"
-        conf_str = f"{status.confidence:.2f}"
-        valid_str = "OK" if status.valid else "FAIL"
-        color = COLOR_VALID if status.valid else COLOR_INVALID
-        text = f"{status.source}: age={age_str} conf={conf_str} {valid_str}"
+        age = f"{status.age_ms:.0f}ms" if status.age_ms < 1000 else f"{status.age_ms/1000:.1f}s"
+        cor = COLOR_VALID if status.valid else COLOR_INVALID
+        txt = f"{status.source}: age={age} conf={status.confidence:.2f} " \
+              f"{'OK' if status.valid else 'FAIL'}"
         if status.reason:
-            text += f" ({status.reason})"
-        cv2.putText(
-            frame_bgr, text,
-            (panel_x, panel_y),
-            font, font_scale, color, thickness, cv2.LINE_AA
-        )
-        panel_y += line_height
+            txt += f" ({status.reason})"
+        cv2.putText(frame_bgr, txt, (painel_x, painel_y), FONT, 0.42, cor, 1,
+                    cv2.LINE_AA)
+        painel_y += 21
 
-    # Draw 2D arrow of projected normal at center
-    center = (w // 2, h // 2)
-    arrow_length = min(w, h) // 4
+    # Cruz no ponto da palma.
+    cv2.drawMarker(frame_bgr, origem_palma, (255, 255, 255),
+                   cv2.MARKER_CROSS, 14, 1, cv2.LINE_AA)
+    cv2.putText(frame_bgr, f"palma {state.hand}", (origem_palma[0] + 10,
+                origem_palma[1] + 18), FONT, 0.42, COLOR_TEXT, 1, cv2.LINE_AA)
+    if normal is not None:
+        texto_n = (f"n=({normal[0]:+.2f},{normal[1]:+.2f},{normal[2]:+.2f}) "
+                   f"z={normal[2]:+.2f}")
+        cv2.putText(frame_bgr, texto_n, (origem_palma[0] + 10,
+                    origem_palma[1] - 12), FONT, 0.42, COLOR_FUSED, 1,
+                    cv2.LINE_AA)
 
-    # Fused normal (magenta)
-    if state.valid and np.linalg.norm(state.normal_cam) > 1e-6:
-        n = state.normal_cam
-        # Project to 2D (ignore Z, flip Y for image coordinates)
-        end_pt = (
-            int(center[0] + n[0] * arrow_length),
-            int(center[1] - n[1] * arrow_length)  # Flip Y
-        )
-        cv2.arrowedLine(
-            frame_bgr, center, end_pt,
-            COLOR_FUSED, 3, tipLength=0.3
-        )
-        cv2.putText(
-            frame_bgr, "FUSED",
-            (end_pt[0] + 5, end_pt[1]),
-            font, 0.45, COLOR_FUSED, 1, cv2.LINE_AA
-        )
+    # Normal fundida (magenta) e verdade do Kinect (verde) no MESMO ponto.
+    _seta_normal(frame_bgr, origem_palma, normal, COLOR_FUSED, "FUSED")
+    if vision_normal_cam is not None:
+        _seta_normal(frame_bgr, origem_palma, vision_normal_cam, COLOR_VISION, "KINECT")
 
-    # Vision normal (green) - if available in statuses
-    for status in statuses:
-        if status.source.lower() in ("kinect", "mediapipe", "vision") and status.valid:
-            # We don't have the actual normal here, but we can indicate vision is active
-            # Draw a small indicator
-            cv2.circle(frame_bgr, (center[0] + arrow_length + 20, center[1]), 8, COLOR_VISION, -1)
-            cv2.putText(
-                frame_bgr, "VIS",
-                (center[0] + arrow_length + 30, center[1] + 4),
-                font, 0.4, COLOR_VISION, 1, cv2.LINE_AA
-            )
-            break
+    # Direcao dos dedos, se a visao forneceu.
+    dirv = _unit(state.dir_cam)
+    if dirv is not None:
+        x, y = origem_palma
+        sx, sy = float(dirv[0]), float(-dirv[1])
+        fim = (int(x + sx * 70), int(y + sy * 70))
+        cv2.arrowedLine(frame_bgr, origem_palma, fim, COLOR_TANGENT, 2,
+                        tipLength=0.25)
+        cv2.putText(frame_bgr, "dir", (fim[0] + 5, fim[1] + 4), FONT, 0.42,
+                    COLOR_TANGENT, 1, cv2.LINE_AA)
 
-    # IMU indicator (yellow)
-    for status in statuses:
-        if status.source.lower() in ("imu", "imu_udp") and status.valid:
-            cv2.circle(frame_bgr, (center[0] - arrow_length - 20, center[1]), 8, COLOR_IMU, -1)
-            cv2.putText(
-                frame_bgr, "IMU",
-                (center[0] - arrow_length - 50, center[1] + 4),
-                font, 0.4, COLOR_IMU, 1, cv2.LINE_AA
-            )
-            break
-
+    # Triade da camera no canto.
+    draw_camera_axes(frame_bgr, (w - 120, 80), 60)
     return frame_bgr
 
 
-def draw_calibration_overlay(
-    frame_bgr: np.ndarray,
-    calibration: Calibration,
-    position: tuple = (10, 10)
-) -> np.ndarray:
-    """
-    Draw calibration info overlay.
-
-    Args:
-        frame_bgr: Input BGR frame
-        calibration: Calibration data
-        position: Top-left position for text
-
-    Returns:
-        Frame with overlay
-    """
+def draw_calibration_overlay(frame_bgr: np.ndarray, calibration: Calibration,
+                             position: tuple = (10, 10)) -> np.ndarray:
     if frame_bgr is None or frame_bgr.size == 0:
         return frame_bgr
-
     x, y = position
-    font = cv2.FONT_HERSHEY_SIMPLEX
-    font_scale = 0.5
-    thickness = 1
-    line_height = 20
-
-    lines = [
+    linhas = [
         f"Calibration: {calibration.source}",
         f"Hand: {calibration.hand}",
-        f"Residual: {calibration.residual_deg:.2f} deg" if calibration.residual_deg else "Residual: N/A",
+        ("Residual: %.2f deg" % calibration.residual_deg
+         if calibration.residual_deg is not None else "Residual: N/A"),
         f"Yaw boot delta: {calibration.yaw_boot_delta_deg:.2f} deg",
-        f"f_body: [{calibration.f_body[0]:.3f}, {calibration.f_body[1]:.3f}, {calibration.f_body[2]:.3f}]"
+        "f_body: [%.3f, %.3f, %.3f]" % tuple(calibration.f_body),
     ]
-
-    for i, line in enumerate(lines):
-        cv2.putText(
-            frame_bgr, line,
-            (x, y + i * line_height),
-            font, font_scale, COLOR_TEXT, thickness, cv2.LINE_AA
-        )
-
+    for i, linha in enumerate(linhas):
+        cv2.putText(frame_bgr, linha, (x, y + i * 20), FONT, 0.5,
+                    COLOR_TEXT, 1, cv2.LINE_AA)
     return frame_bgr

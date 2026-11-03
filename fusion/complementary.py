@@ -253,6 +253,7 @@ class QuaternionComplementaryFilter:
         source: str = "complementary",
         latency_ms: float = 0.0,
         dir_cam: Optional[np.ndarray] = None,
+        palm_px: Optional[np.ndarray] = None,
     ) -> FusedState:
         """
         Create FusedState from current filter state.
@@ -294,5 +295,7 @@ class QuaternionComplementaryFilter:
             confidence=confidence,
             source=source,
             latency_ms=latency_ms,
-            valid=bool(valid)
+            valid=bool(valid),
+            palm_px=(None if palm_px is None
+                      else np.asarray(palm_px, float).reshape(2)),
         )

@@ -63,6 +63,8 @@ class KinectObservation:
     confidence: float = 0.0
     valid: bool = False
     source: str = "kinect_depth"
+    #: Posicao da palma em pixels da imagem color (x,y); None se indisponivel.
+    palm_px: Optional[np.ndarray] = None
 
     def __post_init__(self):
         # Convert None to zero arrays for consistent handling
@@ -294,6 +296,8 @@ class FusedState:
     latency_ms: float = 0.0
     valid: bool = False
     schema_ver: int = 1
+    #: Posicao da palma em pixels da imagem color (x,y); None se indisponivel.
+    palm_px: Optional[np.ndarray] = None
 
     def to_dict(self) -> dict[str, Any]:
         """
@@ -313,6 +317,8 @@ class FusedState:
             "latency_ms": float(self.latency_ms),
             "valid": bool(self.valid),
             "schema_ver": int(self.schema_ver),
+            "palm_px": (None if self.palm_px is None
+                        else self.palm_px.tolist()),
         }
 
 

@@ -164,6 +164,17 @@ class KinectMediaPipeSource:
                         normal = None
                     direction = None
 
+                # Posicao 2D da palma (landmark 9) para ancorar o overlay.
+                palm_px = None
+                try:
+                    lm = landmarks[9]
+                    h_img, w_img = color_bgra.shape[:2]
+                    palm_px = np.array([float(lm.x) * w_img,
+                                        float(lm.y) * h_img],
+                                       dtype=np.float64)
+                except (IndexError, AttributeError, TypeError, ValueError):
+                    palm_px = None
+
                 # Create observation
                 valid = normal is not None and np.all(np.isfinite(normal))
                 confidence = 0.85 if valid else 0.3
@@ -176,7 +187,8 @@ class KinectMediaPipeSource:
                     palm_dir_cam=np.asarray(direction, dtype=np.float64).reshape(3) if direction is not None else np.zeros(3),
                     confidence=confidence,
                     valid=bool(valid),
-                    source='kinect_depth'
+                    source='kinect_depth',
+                    palm_px=palm_px,
                 )
                 observations[side] = obs
                 seen_sides.add(side)
