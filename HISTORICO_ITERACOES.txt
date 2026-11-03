@@ -9108,3 +9108,39 @@ DUVIDAS ABERTAS PARA O USUARIO
 PROXIMO PASSO: com as respostas, congelar contratos da Fase 2 e montar o workflow
 de agentes (NVIDIA Nemotron Ultra) com escopos disjuntos.
 
+
+
+================================================================================
+ITEM 157 (05/11/2026) - FASE 0: LITERATURA COMPLETA (PDFs DO USUARIO) E
+    DECISOES DE ARQUITETURA/SAIDA VISUAL
+================================================================================
+DECISOES CONFIRMADAS
+  - prototipo SEPARADO primeiro, mas com destino final DENTRO do EEG;
+  - estereo = fallback na SEGUNDA etapa;
+  - incluir diagnostico de JointOrientation do pykinect2;
+  - visual leve baseada no kinect_groundtruth_tool (OpenCV), nao matplotlib;
+  - jig: usuario nao conhecia; explicado que e' fixture fisica com angulos
+    conhecidos; nao obrigatorio na v1 (validacao sintetica + repetibilidade);
+  - literatura: usuario adicionou PDFs que faltavam.
+LITERATURA ATUALIZADA (7 PDFs validos em literatura/)
+  - Markley 2002 (quaternion averaging);
+  - MediaPipe Hands 2020;
+  - Mahony 2008 (IEEE TAC);
+  - Tian 2015 (Neurocomputing);
+  - Acharya 2022 (AECE);
+  - Kusunose 2025 (Appl. Sci. 15:10527, pronacao/supinacao com MediaPipe+IMU);
+  - Xefteris 2025 (Internet of Things, fusao IMU+RGB).
+  Ainda faltam: PDF do artigo IJMPE (RealSense+Witmotion; nao Kinect v2),
+  BIBE 2022, Virtual Kinect (ACM) e a tese exata de Polytechnique Montreal.
+  INDICE.md e referencias.bib atualizados.
+ARQUITETURA/EXECUCAO (a fechar na Fase 2)
+  - protótipo em pacote novo (`fusion/` + adapters) sem quebrar o tool/EEG;
+  - v1: Kinect + MediaPipe + IMU; filtro complementar em quaternion; estéreo
+    depois; visual OpenCV com painel de fontes/erro/latencia;
+  - integracao EEG na fase final, com colunas FUSED_* versionadas (sem
+    substituir PALM_*/IMU_*);
+  - jogador de validacao: sintetico + repetibilidade + Kinect; jig simples
+    (transferidor impresso + base) como validacao independente posterior.
+PROXIMO PASSO: Fase 1 (agentes de leitura NVIDIA Ultra) usando os 7 PDFs;
+depois Fase 2 (contratos) e so' entao Fase 3 (codigo).
+
