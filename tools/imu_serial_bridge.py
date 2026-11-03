@@ -79,7 +79,11 @@ class ImuSerialReceiver:
     def _run(self) -> None:
         assert self.serial is not None
         while self.running:
-            line = self.serial.readline()
+            try:
+                line = self.serial.readline()
+            except Exception:
+                # A serial pode ser fechada por stop() enquanto a thread le.
+                break
             if not line:
                 continue
             try:

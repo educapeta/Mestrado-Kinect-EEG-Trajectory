@@ -62,6 +62,9 @@ q = filtro.step(imu, normal_cam, dt, vision_confidence=0.9)
 # Kinect real (sem janela; Ctrl+C limpo)
 .\.venv\Scripts\python.exe tools\fusion_live.py --sem-janela --duracao 10
 
+# Kinect + IMU com ESP32 na USB (ponte serial -> UDP automatica)
+.\.venv\Scripts\python.exe tools\fusion_live.py --ponte-serial COM4 --sem-janela --duracao 10
+
 # Apenas Kinect / apenas IMU
 .\.venv\Scripts\python.exe tools\fusion_live.py --sem-imu --sem-janela --duracao 10
 .\.venv\Scripts\python.exe tools\fusion_live.py --sem-kinect --sem-janela --duracao 10

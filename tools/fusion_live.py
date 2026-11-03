@@ -77,6 +77,11 @@ def build_parser() -> argparse.ArgumentParser:
         '--sem-calibracao', action='store_true',
         help='Usa identidade/f=z para smoke; avisa que não é calibrado'
     )
+    parser.add_argument(
+        '--ponte-serial', type=str, default=None, metavar='PORTA',
+        help='Se informado (ex.: COM4), inicia tools/imu_serial_bridge em '
+             'background e encaminha a serial do ESP32 para UDP 4210/4211'
+    )
     return parser
 
 
@@ -288,12 +293,32 @@ def main(argv: Optional[list[str]] = None) -> int:
         print("       Verifique --sem-kinect, --sem-imu, --synthetic", file=sys.stderr)
         return 1
 
+    # Ponte serial opcional (ESP32 USB -> UDP 4210/4211)
+    bridge = None
+    if getattr(args, 'ponte_serial', None) and not args.sem_imu and not args.synthetic:
+        try:
+            from tools.imu_serial_bridge import ImuSerialBridge
+            bridge = ImuSerialBridge(args.ponte_serial)
+            bridge.start()
+            print(f"[INFO] Ponte serial {args.ponte_serial} -> UDP 4210/4211 ativa")
+        except Exception as exc:
+            print(f"[AVISO] Nao foi possivel iniciar a ponte serial: {exc}",
+                  file=sys.stderr)
+            bridge = None
+
     # Executa fusão
     try:
         summary = run_fusion(args, calibrations, kinect_source, imu_source, synthetic_imu_poller)
     except Exception as e:
         print(f"[ERRO] {e}", file=sys.stderr)
         return 1
+    finally:
+        if bridge is not None:
+            try:
+                bridge.stop()
+                print("[INFO] Ponte serial encerrada")
+            except Exception:
+                pass
 
     # Imprime resumo
     print_summary(summary, calibrations)

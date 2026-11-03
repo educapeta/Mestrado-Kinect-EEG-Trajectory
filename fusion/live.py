@@ -260,7 +260,9 @@ class LiveFusionApp:
                     except Exception:
                         pass
 
-                # Update fusion engine
+                # O poll do Kinect pode levar ~40 ms; usar o relogio DEPOIS
+                # do poll evita amostra IMU "no futuro" em relacao ao frame.
+                now = time.monotonic()
                 fused_states = self.engine.update(now, kinect_obs, imu_samples)
                 self._state_count += len(fused_states)
 
@@ -274,7 +276,7 @@ class LiveFusionApp:
                         # Kinect status
                         obs = kinect_obs.get(hand)
                         if obs is not None:
-                            age_ms = (now - obs.timestamp) * 1000.0
+                            age_ms = max(0.0, (now - obs.timestamp) * 1000.0)
                             statuses.append(SourceStatus(
                                 source=obs.source,
                                 age_ms=age_ms,
@@ -286,7 +288,7 @@ class LiveFusionApp:
                         # IMU status
                         imu = imu_samples.get(hand)
                         if imu is not None:
-                            age_ms = (now - imu.timestamp) * 1000.0
+                            age_ms = max(0.0, (now - imu.timestamp) * 1000.0)
                             statuses.append(SourceStatus(
                                 source=imu.source,
                                 age_ms=age_ms,
@@ -320,9 +322,15 @@ class LiveFusionApp:
                 if now - self._last_print >= self.config.print_every_s:
                     elapsed = now - self._start_time
                     fps = self._frame_count / elapsed if elapsed > 0 else 0
+                    fontes = []
+                    for hand, state in fused_states.items():
+                        amostra = imu_samples.get(hand)
+                        idade = ("sem IMU" if amostra is None
+                                 else f"imu {max(0.0, (now - amostra.timestamp) * 1000.0):.0f}ms")
+                        fontes.append(f"{hand}:{state.source}({idade})")
                     print(f"[Fusion] t={elapsed:.1f}s frames={self._frame_count} "
                           f"states={self._state_count} fps={fps:.1f} "
-                          f"hands={list(fused_states.keys())}")
+                          f"fontes={fontes}")
                     self._last_print = now
 
         finally:

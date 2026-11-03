@@ -9362,3 +9362,38 @@ PENDENCIAS:
 PROXIMO: bench com IMU ativo + comparacao com groundtruth; depois Fase 4
 (validacao/EEG) ou ajustes de confianca/gravity_cam.
 
+
+
+================================================================================
+ITEM 164 (05/11/2026) - FASE 3.5: DIAGNOSTICO DO LOG DE BANCADA -- IMU NAO
+    CHEGAVA POR UDP; SERIAL COM4 -> BRIDGE; LOG DE FONTES/IDADE
+================================================================================
+SINTOMA DO USUARIO: rodou `fusion_live.py --duracao 20` com os IMUs no dorso,
+Kinect/MediaPipe 23,6 FPS, mas nao sabia se o IMU entrou/calibrou.
+DIAGNOSTICO:
+  - leitura UDP direta nas portas 4210/4211: ZERO amostras;
+  - hotspot ICS 192.168.137.1 ativo, mas nenhum cliente/ARP do ESP;
+  - serial COM4 (CP210x) estava viva e enviando os dois IMUs no formato
+    <lado>,t_us,roll,pitch,yaw,ax,ay,az,gx,gy,gz (lado 1 e 2);
+  - portanto o Wi-Fi/UDP nao estava conectado; o firmware estava publicando
+    pela serial USB. A calibracao do firmware parece OK (accel ~1 g, bias
+    estavel), mas a calibracao T/f do groundtruth e' outro processo e pode
+    estar velha se a montagem mudou.
+SOLUCAO IMEDIATA: usar `tools/imu_serial_bridge.py --port COM4` (serial->UDP)
+ou a nova opcao do CLI: `--ponte-serial COM4`, que sobe a ponte automaticamente.
+MELHORIAS:
+  - `fusion/live.py`: log periodico agora mostra por mao fonte e idade:
+    `right:fused(imu 16ms)` / `left:imu_only(imu 0ms)`; idade limitada a >=0;
+    relogio recalculado depois do poll do Kinect; timer exclui warmup.
+  - `tools/fusion_live.py`: `--ponte-serial PORTA`; README atualizado.
+  - `tools/imu_serial_bridge.py`: thread de leitura nao cospe traceback quando
+    a serial e' fechada no stop().
+SMOKE:
+  - `fusion_live.py --ponte-serial COM4 --sem-janela --duracao 5` -> exit 0,
+    101 frames, 202 estados; right:fused e left:imu_only (mao esquerda sem
+    visao valida naquele instante); ~19 FPS;
+  - sem ponte, UDP direto continua sem dados (Wi-Fi a resolver).
+PROXIMO: (1) posicionar/iluminar as DUAS maos para ambas ficarem fused;
+(2) recalibrar Y/O apos a nova montagem no dorso; (3) testar janela visual;
+(4) se quiser Wi-Fi, conferir hotspot/credenciais/UDP_DESTINO.
+
