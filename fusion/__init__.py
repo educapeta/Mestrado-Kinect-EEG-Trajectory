@@ -13,6 +13,10 @@ from .contracts import (
     SourceStatus,
 )
 
+from .adapters import (
+    KinectMediaPipeSource, ImuBankSource, SyntheticSources, load_calibrations,
+)
+from .live import FusionEngine, LiveFusionApp, LiveConfig
 from .sync import SampleBuffer, SyncBuffer, SyncSnapshot
 from .calibration import CalibrationManager, load_calibration, save_calibration
 from .sensor_manager import SensorDecision, SensorManager
@@ -35,6 +39,8 @@ from .quaternion import (
 )
 
 __all__ = [
+    "KinectMediaPipeSource", "ImuBankSource", "SyntheticSources",
+    "load_calibrations", "FusionEngine", "LiveFusionApp", "LiveConfig",
     "SampleBuffer", "SyncBuffer", "SyncSnapshot",
     "CalibrationManager", "load_calibration", "save_calibration",
     "SensorDecision", "SensorManager",

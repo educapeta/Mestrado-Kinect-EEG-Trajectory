@@ -53,6 +53,25 @@ q = filtro.step(imu, normal_cam, dt, vision_confidence=0.9)
 .\venv\Scripts\python.exe fusion_demo.py
 ```
 
+## Bancada (Fase 3.5)
+
+```powershell
+# Sintético (sem hardware)
+.\.venv\Scripts\python.exe tools\fusion_live.py --synthetic --sem-janela --duracao 1 --sem-calibracao
+
+# Kinect real (sem janela; Ctrl+C limpo)
+.\.venv\Scripts\python.exe tools\fusion_live.py --sem-janela --duracao 10
+
+# Apenas Kinect / apenas IMU
+.\.venv\Scripts\python.exe tools\fusion_live.py --sem-imu --sem-janela --duracao 10
+.\.venv\Scripts\python.exe tools\fusion_live.py --sem-kinect --sem-janela --duracao 10
+```
+
+Smoke validado em 05/11/2026: Kinect + MediaPipe via `KinectMediaPipeSource`,
+duas mãos detectadas, ~35 FPS com calibrações reais carregadas, modo
+`vision_only` quando não há amostras IMU. A janela OpenCV é opcional
+(`--sem-janela`); a lógica fica em `fusion/live.py`.
+
 ## O que falta para bancada
 
 - Adaptadores reais: `KinectHandTracker`, MediaPipe, `ImuReceiver` -> contratos.

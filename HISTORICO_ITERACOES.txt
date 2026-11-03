@@ -9312,3 +9312,53 @@ reais + janela OpenCV no estilo do tool, escolher gravity_cam a partir do T da
 calibracao e rodar bancada; depois jig A4/nivel; depois FUSED_* no EEG.
 ARQUIVOS NAO RELACIONADOS (untracked antigos da raiz) nao foram commitados.
 
+
+
+================================================================================
+ITEM 163 (05/11/2026) - FASE 3.5: ADAPTADORES REAIS + LOOP AO VIVO + SMOKE
+    DE BANCADA (KINECT/MEDIAPIPE)
+================================================================================
+AGENTES: 2 subagentes NVIDIA Ultra (B4 adapters/live; B5 CLI), Lead revisou,
+corrigiu bugs e rodou bancada.
+ARQUIVOS:
+  fusion/adapters.py       KinectMediaPipeSource (KinectHandTracker ->
+                           KinectObservation), ImuBankSource (ImuBank ->
+                           ImuSample, lado 1=direita/2=esquerda),
+                           SyntheticSources, load_calibrations.
+  fusion/live.py           LiveConfig, FusionEngine (um complementar por lado,
+                           gravity_cam = T @ [0,0,-1], SensorManager) e
+                           LiveFusionApp (poll -> update -> draw -> show).
+  tools/fusion_live.py     CLI com --duracao, --sem-janela, --sem-imu,
+                           --sem-kinect, --synthetic, --calib-dir, --imu-portas,
+                           --sem-calibracao; imports lazy; resumo final.
+  test_fusion_adapters.py  (14 testes com fakes, sem hardware)
+  test_fusion_live.py      (15 testes com fakes, sem janela)
+  test_fusion_live_cli.py  (7 testes: help/parser/sintetico/erro calibracao).
+  fusion/README.md         secao de bancada/CLI; fusion/__init__.py atualizado.
+BUGS CORRIGIDOS PELO LEAD:
+  - detect_hands_all devolve (frame_desenhado, lista_de_maos); o adapter
+    tratava como lista e engolia a excecao -> 0 observacoes;
+  - fallback palm_plane_camera devolve (normal, rms), nao (normal, direcao);
+  - KinectHandTracker nao tem start(); adapter usava .start() -> start falhava
+    silenciosamente; agora chama start/close somente se existirem (fallback
+    kinect.close());
+  - LiveFusionApp iniciava o cronometro ANTES de abrir o Kinect; o warmup
+    (~3 s) consumia a duracao e dava 0 frames. Timer movido para depois do
+    start das fontes.
+  - teste do CLI quebrava por encoding do subprocess no Windows; subprocess
+    agora usa PYTHONIOENCODING/encoding utf-8.
+VALIDACAO:
+  - suite raiz 74/74 OK (64 antigos + 10 suites novas);
+  - CLI sintetico: exit 0, resumo, sem abrir hardware;
+  - CLI help: exit 0, sem abrir hardware;
+  - SMOKE REAL: Kinect ligado, calibracoes reais carregadas, 3 s:
+    116 frames / 232 estados / ~35 FPS, maos right e left; modo vision_only
+    (nao havia amostras IMU no momento). Sem janela (--sem-janela).
+PENDENCIAS:
+  - Testar com as duas luvas UDP ativas e conferir gyro/Idade;
+  - testar janela visual (--sem-janela ausente) na bancada;
+  - validar orientacao contra o tool/groundtruth em poses conhecidas;
+  - jig A4/nivel depois; integracao EEG (FUSED_*) so' depois de validar.
+PROXIMO: bench com IMU ativo + comparacao com groundtruth; depois Fase 4
+(validacao/EEG) ou ajustes de confianca/gravity_cam.
+
