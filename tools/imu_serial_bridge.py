@@ -28,6 +28,7 @@ o que este modulo produz. O fluxo fica:
 from __future__ import annotations
 
 import math
+import queue
 import re
 import socket
 import threading
@@ -69,45 +70,78 @@ class ImuSerialReceiver:
         self.latest: Optional[tuple[int, tuple[float, ...]]] = None
         self.lock = threading.Lock()
         self.serial: Optional[serial.Serial] = None
+        # Leitura em BLOCO (item 151 do historico): readline() no CP210x
+        # entregava ~1 linha/47 ms e criava fila de 10-17 s. O buffer guarda
+        # o resto da ultima linha; a fila preserva TODAS as amostras para o
+        # bridge enviar cada uma (nao repetir a ultima).
+        self._buffer = b""
+        self._fila: "queue.Queue[tuple[int, tuple[float, ...]]]" = queue.Queue(maxsize=4000)
 
     def start(self) -> None:
         self.serial = serial.Serial(self.port, self.baud, timeout=0.2)
         self.serial.reset_input_buffer()
+        self._buffer = b""
+        self._fila = queue.Queue(maxsize=4000)
         self.running = True
         threading.Thread(target=self._run, daemon=True).start()
+
+    def _processar_linha(self, raw: bytes) -> None:
+        """Parseia uma linha completa; atualiza latest e enfileira se valida."""
+        try:
+            text = raw.decode("utf-8", errors="replace").strip()
+        except UnicodeDecodeError:
+            return
+        m = LINE_RE.match(text)
+        if not m:
+            return
+        lado = int(m.group(1))
+        if lado not in UDP_PORTS:
+            return
+        try:
+            values = tuple(float(m.group(i)) for i in range(2, 12))
+        except ValueError:
+            return
+        if not all(math.isfinite(v) for v in values):
+            return
+        amostra = (lado, values)
+        with self.lock:
+            self.latest = amostra
+        try:
+            self._fila.put_nowait(amostra)
+        except queue.Full:
+            # Nunca deixa a fila crescer sem limite: descarta a mais antiga.
+            try:
+                self._fila.get_nowait()
+                self._fila.put_nowait(amostra)
+            except queue.Empty:
+                pass
 
     def _run(self) -> None:
         assert self.serial is not None
         while self.running:
             try:
-                line = self.serial.readline()
+                # Item 151: ler BLOCO, nao readline(). O timeout de 0.2 s
+                # devolve b"" quando nao ha dado.
+                bloco = self.serial.read(4096)
             except Exception:
-                # A serial pode ser fechada por stop() enquanto a thread le.
                 break
-            if not line:
+            if not bloco:
                 continue
-            try:
-                text = line.decode("utf-8", errors="replace").strip()
-            except UnicodeDecodeError:
-                continue
-            m = LINE_RE.match(text)
-            if not m:
-                continue
-            lado = int(m.group(1))
-            try:
-                values = tuple(float(m.group(i)) for i in range(2, 12))
-            except ValueError:
-                continue
-            if not all(math.isfinite(v) for v in values):
-                continue
-            if lado not in UDP_PORTS:
-                continue
-            with self.lock:
-                self.latest = (lado, values)
+            self._buffer += bloco
+            while b"\n" in self._buffer:
+                linha, self._buffer = self._buffer.split(b"\n", 1)
+                self._processar_linha(linha)
 
     def get_latest(self) -> Optional[tuple[int, tuple[float, ...]]]:
         with self.lock:
             return self.latest
+
+    def get_next(self, timeout: float = 0.1) -> Optional[tuple[int, tuple[float, ...]]]:
+        """Proxima amostra valida (FIFO), ou None no timeout."""
+        try:
+            return self._fila.get(timeout=timeout)
+        except queue.Empty:
+            return None
 
     def stop(self) -> None:
         self.running = False
@@ -142,9 +176,8 @@ class ImuSerialBridge:
     def _run(self) -> None:
         assert self.sock is not None
         while self.running:
-            sample = self.receiver.get_latest()
+            sample = self.receiver.get_next(timeout=0.05)
             if sample is None:
-                time.sleep(0.01)
                 continue
             lado, values = sample
             port = UDP_PORTS[lado]

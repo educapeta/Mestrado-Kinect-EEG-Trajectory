@@ -9397,3 +9397,34 @@ PROXIMO: (1) posicionar/iluminar as DUAS maos para ambas ficarem fused;
 (2) recalibrar Y/O apos a nova montagem no dorso; (3) testar janela visual;
 (4) se quiser Wi-Fi, conferir hotspot/credenciais/UDP_DESTINO.
 
+
+
+================================================================================
+ITEM 165 (05/11/2026) - ATRASO DO IMU NA BANCADA: READLINE DO CP210x NO BRIDGE
+    SERIAL -> BULK READ + FILA; LATENCIA MEDIDA 28 ms
+================================================================================
+SINTOMA: usuario percebeu atraso entre o movimento e o dado do ESP no
+fusion_live; lembrou do problema do AHRS_grafico_log.bat.
+CAUSA (mesmo padrao do item 151): tools/imu_serial_bridge.py usava
+serial.readline() no CP210x. O driver entrega uma linha por vez e cria fila;
+o bridge ainda reenviava a ULTIMA amostra a cada 10 ms (mascarando o atraso).
+CORRECAO:
+  - ImuSerialReceiver._run: read(4096) em bloco + buffer de resto de linha;
+  - fila FIFO (queue.Queue, limite 4000) para preservar TODAS as amostras;
+  - ImuSerialBridge._run: consome get_next() e envia cada amostra UMA vez,
+    em vez de repetir a ultima;
+  - shutdown sem traceback; teste fake atualizado para read()/fila.
+MEDICAO REAL (COM4, 5 s, sem bridge):
+  - lado 1: n=315, span_ESP=5.175 s, atraso PC-ESP +0.028 s;
+  - lado 2: n=315, span_ESP=5.175 s, atraso PC-ESP +0.028 s.
+  Antes o readline acumulava backlog (item 151: 10-17 s).
+SMOKE LIVE:
+  - `fusion_live.py --ponte-serial COM4 --sem-janela --duracao 4` ->
+    98 frames/4.3 s, ~22.8 FPS, right:fused e left:fused (no fim),
+    idades IMU 0-15 ms.
+  - Quando aparece `imu_only`, a visao daquele lado esta' invalida
+    (mao fora/edge-on), nao o IMU.
+TESTES: suite raiz 74/74 OK; test_imu_serial_bridge 27 assercoes OK.
+PROXIMO: recalibrar Y apos montagem no dorso; testar janela visual; comparar
+com groundtruth. Wi-Fi/UDP continua opcional (serial bridge e' o caminho atual).
+

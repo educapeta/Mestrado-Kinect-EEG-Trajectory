@@ -14,6 +14,7 @@ Cobertura:
 """
 from __future__ import annotations
 
+import queue
 import socket
 import sys
 import threading
@@ -135,11 +136,15 @@ class _SerialFalsa:
     def __init__(self, linhas):
         self._linhas = list(linhas)
 
-    def readline(self):
+    def read(self, n=4096):
+        # Emula o read() em bloco do PySerial: devolve a proxima linha.
         if self._linhas:
             return self._linhas.pop(0)
         time.sleep(0.05)
         return b""
+
+    def readline(self):
+        return self.read(4096)
 
     def reset_input_buffer(self):
         pass
@@ -156,6 +161,8 @@ def test_descarte_linhas_ruins():
     r.running = True
     r.latest = None
     r.lock = threading.Lock()
+    r._buffer = b""
+    r._fila = queue.Queue(maxsize=4000)
     r.serial = _SerialFalsa([
         b"esp_timestamp_us,roll_deg,...\n",                    # cabecalho
         b"1,1790000000,1.0,2.0,3.0,0.1,0.2,0.9,0,0,0\n",       # boa (lado 1)
