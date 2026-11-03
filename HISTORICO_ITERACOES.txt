@@ -9239,3 +9239,37 @@ inclinacoes; v1 comeca com testes sinteticos, jig depois.
 PROXIMO: Fase 2 (contratos de arquitetura) com base apenas nas afirmacoes
 seguras da auditoria; depois Fase 3.
 
+
+
+================================================================================
+ITEM 161 (05/11/2026) - FASE 2: DOCUMENTO DE ARQUITETURA DA V1 (ARQUITETO
+    NVIDIA ULTRA) REVISADO PELO LEAD
+================================================================================
+ARQUIVO: docs/ARQUITETURA_FUSAO.md (contratos, diagrama, algoritmo, riscos,
+testes, criterios de aceite e perguntas abertas).
+DECISOES PRINCIPAIS:
+  - estado: q corpo->camera em quaternion (nunca Euler); predicao por gyro
+    (UDP da luva) + correcao de gravidade + correcao de yaw 3D da visao;
+    filtro complementar na V1 (EKF depois);
+  - V1: Kinect (pos/depth + RGB) + MediaPipe + IMU; SEM estereo e SEM
+    esqueleto/JointOrientation do Kinect;
+  - calibracao: T_cam_world/f_body via solve_palm_alignment_pesos +
+    AncoradorYawBoot; checkerboard 7x5/45mm e CameraAlignment sao do estereo
+    de camera auxiliar (V2), NAO da V1;
+  - visualizacao unica OpenCV leve; EEG futuro com FUSED_* opcionais e
+    feature flag, sem tocar em PALM_*/IMU_*.
+CORRECOES DO LEAD NA GERACAO AUTOMATICA:
+  - removido esqueleto/body do escopo da V1 (body tracking nao rastreia na
+    montagem; ver docs/DIAGNOSTICO_KINECT_BODY.md);
+  - calibracao T/f esclarecida (sem checkerboard/stereo na V1);
+  - corrigida a rotacao de vetor (n = q (x) f, nao q (x) f (x) q^-1) e a
+    correcao de yaw pela esquerda (erro no frame da camera);
+  - ganhos/limiares marcados como decisoes de projeto, nao literatura.
+CONTRATOS: KinectObservation, MediaPipeObservation, ImuSample (ja' existente),
+Calibration, FusedState, SourceStatus; timestamps monotonic; taxas 30 Hz
+Kinect/MediaPipe e ~100 Hz IMU; FUSED_* v1 (q, n, dir, angulos, confidence,
+latency, source, schema_ver) opcionais.
+PROXIMO: Fase 3 (implementacao em escopos disjuntos) apos responder as
+perguntas abertas (firmware quaternion UDP? normal edge-on? convencao FUSED_*
+camera/mundo? posicao no schema? jig na V1 ou V2? CSV unico/separado?).
+
