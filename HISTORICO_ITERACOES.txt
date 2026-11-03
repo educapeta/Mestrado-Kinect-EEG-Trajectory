@@ -9184,3 +9184,23 @@ VIDEOS DIY (para o usuario):
   - https://www.youtube.com/watch?v=hMU1FNeGgtM (IMU calibration project)
   - designs: github.com/xioTechnologies/Calibration-Cube, github.com/glompos21/calibration_jig
 
+
+
+================================================================================
+ITEM 159 (05/11/2026) - DIAGNOSTICO DO BODY TRACKING/JOINT ORIENTATION DO
+    KINECT: COLOR/DEPTH OK, BODY FRAMES OK, ZERO CORPOS RASTREADOS
+================================================================================
+TESTE: tools/diag_kinect_joint_orientation.py (color+depth+body, 8 s).
+RESULTADO: color 1920x1080 OK; depth 512x424 OK; 321 body frames; 0 corpos
+rastreados; body.joint_orientations nao pode ser avaliado. O frame salvo
+(docs/kinect_body_view.png) mostra o Kinect alto olhando a mesa de cima: so'
+cabeca/tronco superior/bracos, sem quadril/pernas -- o body tracker do Kinect v2
+precisa de mais corpo para rastrear. Nao e' defeito de sensor.
+CONSEQUENCIA: V1 NAO usa orientacao de junta do Kinect; usa Kinect para
+posicao/depth, MediaPipe para landmarks/normal e IMU para atitude, com fusao em
+quaternion. Reposicionar Kinect/usuario e repetir o diagnostico se quisermos
+JointOrientation no futuro.
+ARQUIVO: docs/DIAGNOSTICO_KINECT_BODY.md + docs/kinect_body_view.png.
+PROXIMO: Fase 1.5 (auditar citacoes/paginas dos relatorios A1/A2) e Fase 2
+(contratos de arquitetura), sem bloquear no JointOrientation.
+
