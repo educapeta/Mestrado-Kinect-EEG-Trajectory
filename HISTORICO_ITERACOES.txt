@@ -9273,3 +9273,42 @@ PROXIMO: Fase 3 (implementacao em escopos disjuntos) apos responder as
 perguntas abertas (firmware quaternion UDP? normal edge-on? convencao FUSED_*
 camera/mundo? posicao no schema? jig na V1 ou V2? CSV unico/separado?).
 
+
+
+================================================================================
+ITEM 162 (05/11/2026) - FASE 3: IMPLEMENTACAO DA V1 (PACOTE fusion/ + TESTES)
+================================================================================
+AGENTES: 3 subagentes `nvidia/nemotron-3-ultra-550b-a55b`, escopos disjuntos:
+  B1 contratos/quaternion; B2 sync/calibracao/sensor manager; B3 filtro
+  complementar/visualizacao/demo. Lead revisou, corrigiu e integrou.
+ARQUIVOS:
+  fusion/contracts.py       KinectObservation, MediaPipeObservation, ImuSample,
+                            Calibration, FusedState, SourceStatus.
+  fusion/quaternion.py      Hamilton, rotate_vector, ZYX, matriz, slerp, exp SO(3).
+  fusion/sync.py            SampleBuffer, SyncBuffer/SyncSnapshot (nearest/age).
+  fusion/calibration.py     load/save JSON do projeto + CalibrationManager.
+  fusion/sensor_manager.py  decisao fused/imu_only/vision_only/none.
+  fusion/complementary.py   filtro complementar em quaternion (gyro -> gravidade
+                            -> yaw pela visao, correcao de yaw pela ESQUERDA);
+                            get_fused_state sem inventar direcao de dedos.
+  fusion/visualization.py   overlay OpenCV headless (painel + seta fundida).
+  fusion/README.md          estado, uso minimo, testes e pendencias.
+  fusion/__init__.py        exports dos contratos/quaternion e modulos V1.
+  fusion_demo.py            demo sintetica (sem hardware): erro antes/depois.
+  test_fusion_*.py          7 suites novas (quaternion, contratos, sync,
+                            calibracao, sensor manager, complementar, visual).
+REVISAO DO LEAD:
+  - convencao ZYX validada contra imu.rotation_matrix (max diff ~6.7e-16);
+  - normal T R f validada (T=eye, f=z, pitch=90 -> [1,0,0]);
+  - removida direcao fixa inventada [0,-1,0] do get_fused_state (dir_cam
+    opcional; zero/validade se nao houver medida);
+  - exports do pacote e README adicionados.
+VALIDACAO: suite raiz 71/71 OK (64 antigos + 7 novos), incluindo
+test_fusion_zeroing.py; demo: erro medio 33.1 -> 10.0 graus (~69.7% reducao),
+RMS 36.4 -> 10.7 graus (~70.5%).
+ESCOPO/PENDENCIAS: o pacote e' o nucleo testavel; ainda NAO esta' ligado ao
+Kinect/MediaPipe/IMU reais nem ao EEG. Proximo passo (Fase 3.5): adaptadores
+reais + janela OpenCV no estilo do tool, escolher gravity_cam a partir do T da
+calibracao e rodar bancada; depois jig A4/nivel; depois FUSED_* no EEG.
+ARQUIVOS NAO RELACIONADOS (untracked antigos da raiz) nao foram commitados.
+
