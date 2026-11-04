@@ -53,6 +53,17 @@ q = filtro.step(imu, normal_cam, dt, vision_confidence=0.9)
 .\venv\Scripts\python.exe fusion_demo.py
 ```
 
+## Calibração Y leve
+
+Para recalibrar o Y sem o peso do groundtruth (uma janela, só Kinect+MediaPipe+IMU):
+
+```powershell
+.\venv\Scripts\python.exe tools\calibra_leve.py --ponte-serial COM4
+```
+
+Aperte Y, gire o punho devagar; o JSON oficial é gravado com backup `.json.bak`.
+Depois, sem reiniciar o ESP, rode `tools/diag_fusion_alignment.py` no mesmo boot.
+
 ## Bancada (Fase 3.5)
 
 ```powershell

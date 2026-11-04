@@ -9568,3 +9568,31 @@ USO NA BANCADA:
 NAO RESOLVE: boot yaw/T salvo de outro boot; para avaliar o Y, fazer no mesmo
 boot e diagnosticar em seguida.
 
+
+
+================================================================================
+ITEM 170 (05/11/2026) - CALIBRA_LEVE FUNCIONOU: Y NO MESMO BOOT COM
+    vis-cal 2-3 graus (direita) E 11-13 graus (esquerda)
+================================================================================
+USUARIO: calibrou com tools/calibra_leve.py (janela unica, Kinect+MediaPipe+
+IMU) e rodou diag_fusion_alignment no MESMO boot.
+RESULTADOS DO DIAGNOSTICO (mao parada):
+  - direita: vis-cal 2.3-3.4 graus; fus-vis 1.8-2.9 graus; rpy/gyro ok.
+  - esquerda: vis-cal 11-13 graus; fus-vis 5-6 graus; rpy/gyro ok.
+  - ambos fused.
+CONCLUSOES:
+  - calibra_leve.py melhorou muito a experiencia/resultado do Y (uma janela
+    grande, sem auxiliares, FPS melhor, mesma matematica/JSON);
+  - direita esta' excelente; esquerda aceitavel, com margem para repetir o Y
+    (mais parada/diversidade) se quisermos <10 graus;
+  - NAO reiniciar o ESP entre Y e uso, senao o yaw do boot muda e vis-cal
+    piora (comportamento esperado de IMU 6 eixos).
+SMOKE DO FUSION_LIVE com a nova calibracao (--ponte-serial COM4 --sem-janela
+--duracao 5): right/left fused, ~22.7 FPS, IMU 0-16 ms. Durante movimento
+rapido o log mostrou erro_cal subindo (23 -> 160/111 graus) e erro_vis baixo;
+isso e' a normal do PLANO ficando edge-on/perdendo qualidade no movimento,
+nao uma falha da calibracao estatica (que estava 2-13 graus parada).
+PROXIMO: usar fusion_live com a mao visivel, parado e em movimento lento;
+gravar --log-csv e conferir erros parado x movimento; repetir Y da esquerda
+se necessario; depois jig/Fase 4 e EEG.
+
