@@ -40,3 +40,23 @@ e **não são versionados** (direitos autorais).
 3. Kusunose et al. (2025) é **pronação/supinação do antebraço**, não orientação da palma; útil para o desenho MediaPipe+IMU e métricas.
 4. Os agentes de leitura só devem ser acionados com o PDF na pasta; caso contrário, risco de alucinação.
 5. Prioridade Fase 1: Mahony, Markley, Tian, Acharya, Kusunose, Xefteris, MediaPipe; o IJMPE entra quando o PDF for obtido.
+
+
+## PDFs adicionados em 04/11/2026
+
+| Arquivo | Referência | DOI/URL | Uso no projeto |
+|---|---|---|---|
+| `1-s2.0-S0021929025000454-main.pdf` | Mulla, Majoni, Tilley & Keir (2025). Two cameras can be as good as four for markerless hand tracking during simple finger movements. J. Biomech. 181:112534. | [10.1016/j.jbiomech.2025.112534](https://doi.org/10.1016/j.jbiomech.2025.112534) | quantas câmeras/qual posicionamento para mão |
+| `chi26_asl_learning.pdf` | Cai et al. (2026). Toward Scalable ASL Education: Egocentric Stereo Sensing with LLM Feedback for Error-Aware Learning. CHI '26. | [10.1145/3772318.3790774](https://doi.org/10.1145/3772318.3790774) | estéreo, triangulação, SG, confiança |
+| `Real Time Markerless 3D Hand Tracking for Intuitive Robotic Arm C.pdf` | Featherson (2025). Real Time Markerless 3D Hand Tracking for Intuitive Robotic Arm Control. Tese, Cal Poly. | [PDF Cal Poly](https://digitalcommons.calpoly.edu/cgi/viewcontent.cgi?article=4855&context=theses) | pipeline estéreo + MediaPipe + calibração |
+
+## Pesquisa de ponta (05/11/2026)
+
+Nota curada com artigos/código e recomendações:
+[`PESQUISA_2026-11-05.md`](PESQUISA_2026-11-05.md).
+
+Destaques: Peng, Liu & He (2026, Sensors) sobre front-end RGB-D estável
+([DOI 10.3390/s26123730](https://doi.org/10.3390/s26123730)); Karashchuk et al.
+(2021, Anipose) para multi-view; Casiez et al. (2012) para 1€ filter; Wirth et
+al. (2023) para incerteza RGB-D; Amprimo et al. (2024) para validação do
+MediaPipe.
