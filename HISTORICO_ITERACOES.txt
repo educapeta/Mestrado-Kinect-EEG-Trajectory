@@ -9535,3 +9535,36 @@ diagnostico separa erro_cal (T R f x Kinect) de erro_vis (fused x Kinect);
 rodar com a mao visivel, parada, e decidir entre repetir Y (esquerda p90 26.4)
 ou usar o modo IMU-attitude-prior/snap. Fase 5 fica scaffoldada, nao ativada.
 
+
+
+================================================================================
+ITEM 169 (05/11/2026) - FERRAMENTA NOVA: tools/calibra_leve.py (Y LEVE, SO'
+    KINECT+MEDIAPIPE+IMU, UMA JANELA)
+================================================================================
+MOTIVO: o groundtruth tool roda 2 cameras auxiliares + MediaPipe por auxiliar
++ 4 janelas por frame; na bancada o FPS e a janela pequena deixam a calibracao
+Y pior e mais lenta. O fusion_live e' leve porque so' usa Kinect+MediaPipe.
+TENTATIVA COM SUBAGENTE: um subagente NVIDIA adicionou flags
+--modo-calibracao/--sem-auxiliares ao groundtruth, mas parou antes de
+condicionar a abertura das auxiliares/janelas; o Lead REVERTEU (flags nao
+funcionais) e fez uma ferramenta separada, sem tocar no groundtruth.
+NOVO TOOL: tools/calibra_leve.py
+  - uma janela Kinect em 1600x900, sem auxiliares;
+  - mesma verdade do Y: plano do dorso (5 pontos) + depth do Kinect;
+  - mesma resolucao T/f (solve_palm_alignment_pesos) e mesmo formato JSON;
+  - Y inicia captura de ~24 s (--tempo-captura); ESC/Q sai;
+  - no fim: minimo de amostras, residuo <= PALM_ALIGNMENT_MAX_RESIDUAL_DEG,
+    .json.bak do anterior e grava imu_palm_alignment_<lado>.json;
+  - opcional --ponte-serial COM4 (sobe serial->UDP) ou usa bridge existente;
+  - --sem-janela/--auto-iniciar para smoke; test_calibra_leve.py cobre parser,
+    captura e save (sem hardware).
+SMOKE: `calibra_leve.py --ponte-serial COM4 --auto-iniciar --tempo-captura 3
+--sem-janela --duracao 6` abriu Kinect/bridge; sem mao no quadro, recusou
+amostras e nao alterou JSON (comportamento correto).
+USO NA BANCADA:
+  .\.venv\Scripts\python.exe tools\calibra_leve.py --ponte-serial COM4
+  -> manter as duas maos visiveis, apertar Y, girar o punho devagar ~24 s.
+  -> sem reiniciar o ESP depois; rodar diag_fusion_alignment no mesmo boot.
+NAO RESOLVE: boot yaw/T salvo de outro boot; para avaliar o Y, fazer no mesmo
+boot e diagnosticar em seguida.
+
