@@ -296,13 +296,15 @@ def run_hardware(
                 # - MultiView: pontos triangulados COM pesos de reprojecao
                 #
                 # Isso nao e ideal mas demonstra a comparacao A/B.
-                # A/B REAL: KinectDepth usa os 5 pontos do DEPTH do Kinect;
-                # MultiView usa os pontos triangulados.
-                if s_frame.kinect_points is None:
+                # A/B REAL: os DOIS backends usam os MESMOS 5 pontos do
+                # dorso. KinectDepth usa os 5 pontos do depth; MultiView usa
+                # os 5 triangulados. Comparar 5 x 21 nao e' comparacao.
+                if (s_frame.kinect_points is None
+                        or getattr(s_frame, "palm_points_3d", None) is None):
                     continue
                 kinect_points = s_frame.kinect_points
-                multiview_points = s_frame.points_3d
-                reproj_errors = s_frame.reproj_errors.copy()
+                multiview_points = s_frame.palm_points_3d
+                reproj_errors = s_frame.palm_reproj_errors.copy()
 
                 # Mede latencias
                 kd_start = time.monotonic()

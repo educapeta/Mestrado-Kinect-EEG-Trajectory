@@ -39,6 +39,11 @@ class AuxStereoFrame:
     #: Pontos 3D medidos pelo DEPTH do Kinect (5 pontos do dorso), para o
     #: backend KinectDepth. Sao independentes da triangulacao multi-view.
     kinect_points: Optional[np.ndarray] = None
+    #: MESMOS 5 pontos do dorso, mas triangulados. O A/B precisa comparar
+    #: posicao/normal no MESMO subconjunto; usar 21 landmarks no multi-view e
+    #: 5 no depth desloca o centroide e muda o plano.
+    palm_points_3d: Optional[np.ndarray] = None
+    palm_reproj_errors: Optional[np.ndarray] = None
 
 
 class AuxStereoSource:
@@ -285,6 +290,15 @@ class AuxStereoSource:
             if valid_mask.sum() < 5:
                 continue
 
+            # O A/B REAL compara o MESMO subconjunto do dorso usado pelo
+            # KinectDepth. Antes o multi-view usava todos os 21 landmarks e o
+            # depth 5 pontos; a diferenca de posicao/normal era metodologica.
+            idx_palma = np.asarray((0, 5, 9, 13, 17), dtype=int)
+            palm_ok = valid_mask[idx_palma].all()
+            palm_points_3d = (points_3d[idx_palma].copy()
+                              if palm_ok else None)
+            palm_reproj = (reproj[idx_palma].copy() if palm_ok else None)
+
             points_3d = points_3d[valid_mask]
             reproj = reproj[valid_mask]
 
@@ -308,6 +322,8 @@ class AuxStereoSource:
                 timestamp=now,
                 valid=True,
                 kinect_points=kinect_points,
+                palm_points_3d=palm_points_3d,
+                palm_reproj_errors=palm_reproj,
             )
 
         return results

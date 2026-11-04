@@ -9663,3 +9663,38 @@ PROXIMO: repetir A/B com maos visiveis em aux0/aux1; se MV ainda falhar,
 conferir lateralidade/correspondencia/geometria; jig continua necessario para
 verdade externa. NAO promover multi-view antes disso.
 
+
+
+================================================================================
+ITEM 173 (05/11/2026) - A/B CORRIGIDO PARA MESMOS 5 PONTOS; AINDA HÁ
+    DESLOCAMENTO SISTEMÁTICO ~300 mm EM Y -> NÃO PROMOVER MULTIVIEW
+================================================================================
+CORRECAO METODOLOGICA IMPORTANTE:
+  O KinectDepth usa 5 pontos do dorso, mas o MultiView usava os 21 landmarks
+  triangulados. Comparar posicao/normal de 5 x 21 e' comparacao invalida:
+  o centroide desloca e o plano inclui dedos. Agora AuxStereoSource guarda
+  palm_points_3d/palm_reproj_errors (indices 0,5,9,13,17) e o vision_ab usa
+  ESSES MESMOS 5 pontos nos dois backends.
+NOVA RODADA (aux0, sem aviso de resolucao):
+  ab_parado_subsets.csv (237 linhas, ambos=151):
+    left  both=88: angulo med 36.4, p95 73.4; pos diff med 311mm,
+          componentes y=-305mm; KD conf .88 edge 24%; MV conf .57 edge 54%;
+    right both=63: angulo med 58.2, p95 74.7; pos diff med 311mm,
+          componentes y=-298mm; KD conf .88 edge 22%; MV conf .65 edge 3%.
+  ab_movimento_subsets.csv (57 linhas, validos=39):
+    left  both=32: angulo med 81.8; pos diff med 349mm (y=+329);
+    right both=7:  angulo med 63.5; pos diff med 299mm (y=-293).
+INTERPRETACAO:
+  - o erro de posicao NAO e' explicado por 5 x 21; continua ~300mm e e'
+    sistematico em Y, sinal de convencao/extrinseca (frame/pixel/calibracao),
+    nao ruido aleatorio;
+  - a normal multi-view ainda difere 36-82 graus do depth, apesar do RMS do
+    plano ser baixo (com 5 pontos o plano tem poucos graus de liberdade; RMS
+    baixo sozinho nao garante orientacao correta);
+  - KinectDepth segue como unico backend confiavel no A/B atual.
+PROXIMO: validar a reprojecao de um ponto/objeto conhecido nas duas cameras
+(ou overlay do groundtruth) para achar a convencao errada; conferir
+lateralidade/correspondencia; jig continua pendente. NAO integrar MultiView
+como fonte primaria antes disso.
+ARQUIVOS: ab_parado_subsets.csv, ab_movimento_subsets.csv (locais, nao versionados).
+
