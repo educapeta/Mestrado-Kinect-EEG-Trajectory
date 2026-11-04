@@ -9627,3 +9627,39 @@ angulo medio ~2,1 graus, agree 100%). Suite final no commit.
 PENDENCIA: rodar A/B com hardware e auxiliares RECALIBRADAS; comparar jitter,
 edge_on, delta e decidir V2. Sem validacao hardware ainda.
 
+
+
+================================================================================
+ITEM 172 (05/11/2026) - PRIMEIRO A/B REAL: KINECTDEPTH VENCE; MULTIVIEW
+    QUEBRADO POR ESPELHAMENTO + RESOLUCAO DA AUXILIAR
+================================================================================
+ARQUIVOS: ab_parado.csv (347 linhas) e ab_movimento.csv (342 linhas) gerados
+pelo vision_ab (aux-index 0). Analise do Lead (sem jig):
+  PARADO:
+    right: KD valido 174/174, edge 13.2%, conf 0.93, rms 0.29mm;
+           MV valido 174/174, edge 100%, conf 0.00, rms 13.2mm;
+           pos KD-MV med 285mm; angulo entre normais med ~59 graus.
+    left:  KD 164/173, edge 11.6%, rms 1.22mm;
+           MV 46/173, edge 97.8%, conf 0, rms 22.8mm;
+           pos med 165mm; angulo med 180 graus.
+  MOVIMENTO:
+    KD ~137/170 por lado, edge 0-8%, conf 0.95-0.99, rms 1.4-1.6mm;
+    MV 44-49% edge, conf 0, rms 14-22mm; pos diff 155-391mm;
+    angulos medios 78-91 graus (p95 180).
+CONCLUSAO: o multi-view NAO esta utilizavel ainda; o KinectDepth e' o unico
+confiavel no A/B atual. A calibracao stereo tem RMS bom (aux0 1.12 px,
+aux1 0.84 px), entao o problema NAO e' o RMS do tabuleiro.
+CAUSAS ENCONTRADAS/CORRIGIDAS:
+  - AuxStereoSource lia o frame CRU da auxiliar; o groundtruth aplica
+    kinect_gt.transform_auxiliary_frame() (espelhamento) antes de detectar a
+    mao. Sem isso, os landmarks/pixels nao correspondem a calibracao.
+  - a camera abria em 640x480 enquanto a calibracao era 1280x720; o alignment
+    escalava a matriz (aviso) e perdia precisao. Agora o source forca a
+    resolucao salva no npz e tenta MJPG.
+  - apos as correcoes, smoke com mao fora do quadro deu n=0 (nenhuma mao),
+    entao ainda falta repetir com as maos visiveis. O A/B antigo (acima) e'
+    evidencia do bug, nao do metodo multi-view corrigido.
+PROXIMO: repetir A/B com maos visiveis em aux0/aux1; se MV ainda falhar,
+conferir lateralidade/correspondencia/geometria; jig continua necessario para
+verdade externa. NAO promover multi-view antes disso.
+

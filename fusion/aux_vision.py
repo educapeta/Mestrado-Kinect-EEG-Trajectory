@@ -113,6 +113,25 @@ class AuxStereoSource:
                     RuntimeWarning,
                 )
                 self._cap = None
+            else:
+                # A calibracao stereo foi feita em uma resolucao especifica
+                # (normalmente 1280x720). Abrir a camera em outra resolucao
+                # faz o alignment ESCALAR a matriz e perde precisao. Forca a
+                # resolucao salva no npz e tenta MJPEG.
+                try:
+                    view = self._alignment.aux_view(self._aux_index)
+                    size = getattr(view, "size", None)
+                    if size:
+                        self._cap.set(cv2.CAP_PROP_FRAME_WIDTH, int(size[0]))
+                        self._cap.set(cv2.CAP_PROP_FRAME_HEIGHT, int(size[1]))
+                    self._cap.set(cv2.CAP_PROP_FPS, 30)
+                    try:
+                        self._cap.set(cv2.CAP_PROP_FOURCC,
+                                     cv2.VideoWriter_fourcc(*"MJPG"))
+                    except Exception:
+                        pass
+                except Exception:
+                    pass
         elif not self._fake_mode:
             warnings.warn(
                 "AuxStereoSource: cv2 nao disponivel; camera auxiliar nao abrira.",
@@ -171,7 +190,13 @@ class AuxStereoSource:
         if not self._fake_mode and self._cap is not None:
             ok, frame = self._cap.read()
             if ok and frame is not None:
-                aux_frame = frame
+                # MESMA convencao do groundtruth: a calibracao/pixels da
+                # auxiliar foram feitos na imagem espelhada quando
+                # AUXILIARY_MIRROR_HORIZONTAL=True.
+                try:
+                    aux_frame = kinect_gt.transform_auxiliary_frame(frame)
+                except Exception:
+                    aux_frame = frame
         elif self._fake_mode:
             # Modo fake: frame auxiliar dummy (testes injetam landmarks direto)
             aux_frame = np.zeros((480, 640, 3), dtype=np.uint8)
