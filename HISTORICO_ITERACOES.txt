@@ -9596,3 +9596,34 @@ PROXIMO: usar fusion_live com a mao visivel, parado e em movimento lento;
 gravar --log-csv e conferir erros parado x movimento; repetir Y da esquerda
 se necessario; depois jig/Fase 4 e EEG.
 
+
+
+================================================================================
+ITEM 171 (05/11/2026) - BIFURCACAO CONTROLADA: BACKENDS KINECTDEPTH x
+    MULTIVIEW + FERRAMENTA A/B (AGENTES NVIDIA + REVISAO DO LEAD)
+================================================================================
+OBJETIVO: comparar cara a cara, nas MESMAS amostras, a normal da palma obtida
+pelo depth do Kinect e por triangulacao multi-view, para decidir por dados.
+ENTREGAS:
+  - fusion/vision_backends.py: VisionNormal, robust_plane_normal (SVD + outlier
+    + edge-on + sigma), KinectDepthBackend, MultiViewBackend, compare_backends;
+  - fusion/aux_vision.py: AuxStereoSource (Kinect + auxiliar -> triangulacao),
+    AuxStereoFrame com kinect_points E points_3d, compare_frame;
+  - tools/vision_ab.py: A/B sintetico e hardware, CSV e resumo;
+  - test_fusion_vision_backends.py (12 testes) e test_fusion_vision_ab.py
+    (8 testes), sem hardware.
+CORRECOES DO LEAD:
+  - removida a convencao FALSA "direita nz<0 / esquerda nz>0". O sinal da
+    normal depende da POSE, nao do lado; agora usa continuidade/canonico;
+  - testes passam a comparar o EIXO (abs) e a comparar backends por eixo;
+  - A/B de hardware corrigido: o KinectDepth usa os 5 pontos 3D do DEPTH do
+    Kinect; o MultiView usa os triangulados. Antes os dois usavam a mesma
+    triangulacao (A/B falso);
+  - tracker/alignment compartilhados no A/B hardware para nao abrir dois
+    Kinects;
+  - aux_vision atualiza o tamanho da imagem auxiliar antes da view.
+VALIDACAO: testes dos backends 12/12, A/B 8/8, CLI sintetico OK (27 frames,
+angulo medio ~2,1 graus, agree 100%). Suite final no commit.
+PENDENCIA: rodar A/B com hardware e auxiliares RECALIBRADAS; comparar jitter,
+edge_on, delta e decidir V2. Sem validacao hardware ainda.
+

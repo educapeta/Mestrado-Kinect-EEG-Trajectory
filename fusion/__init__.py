@@ -16,6 +16,10 @@ from .contracts import (
 from .adapters import (
     KinectMediaPipeSource, ImuBankSource, SyntheticSources, load_calibrations,
 )
+from .vision_backends import (
+    VisionNormal, robust_plane_normal, KinectDepthBackend, MultiViewBackend,
+    compare_backends,
+)
 from .logging import FusionCsvLogger
 from .metrics import summarize_fusion_log, print_summary as print_fusion_summary
 from .eeg_export import (FUSED_COLUMNS, FUSED_SCHEMA_VERSION,
@@ -44,6 +48,8 @@ from .quaternion import (
 )
 
 __all__ = [
+    "VisionNormal", "robust_plane_normal", "KinectDepthBackend",
+    "MultiViewBackend", "compare_backends",
     "FusionCsvLogger", "summarize_fusion_log", "print_fusion_summary",
     "FUSED_COLUMNS", "FUSED_SCHEMA_VERSION", "fused_columns", "fused_row",
     "fused_row_dict", "append_fused_columns", "validate_fused_row",
