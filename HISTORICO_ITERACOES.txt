@@ -9698,3 +9698,53 @@ lateralidade/correspondencia; jig continua pendente. NAO integrar MultiView
 como fonte primaria antes disso.
 ARQUIVOS: ab_parado_subsets.csv, ab_movimento_subsets.csv (locais, nao versionados).
 
+
+
+================================================================================
+ITEM 174 (05/11/2026) - ENCERRAMENTO DO CICLO DE BANCADA; ESTADO CONGELADO
+    E PROXIMOS PASSOS (USUARIO SAIU DA BANCADA)
+================================================================================
+CONTEXTO FINAL:
+  - calibra_leve.py (Y leve) funcionou: direita vis-cal 2-3 graus, esquerda
+    11-13 graus, ambos fused; fusion_live ~22 FPS, IMU baixa idade;
+  - calibracao stereo aux0/aux1 aceita (RMS 1.12 px e 0.84 px);
+  - PISTA DECISIVA DO USUARIO: o overlay do groundtruth tool esta CORRETO.
+    Portanto a calibracao/extrinseca Kinect+auxiliar esta boa; o deslocamento
+    sistematico de ~300 mm em Y no A/B nao vem do stereo_calibration.npz, e
+    sim do caminho AuxStereoSource/vision_ab (convencao de frame, pixels,
+    lateralidade, espelhamento, resolucao ou correspondencia).
+ULTIMA MUDANCA DE CODIGO (commit 4b19ece):
+  - o A/B agora usa os MESMOS 5 pontos do dorso (indices 0,5,9,13,17) nos dois
+    backends; antes KinectDepth usava 5 e MultiView usava 21, o que deslocava
+    centroide e mudava o plano. Correcao committed e suite 81/81.
+RESULTADO DO A/B 5x5 (aux0, sem aviso de resolucao):
+  - parado: left 88 pares, angulo med 36.4, pos diff 311mm (y=-305);
+            right 63 pares, angulo med 58.2, pos diff 311mm (y=-298);
+            KD conf .88, RMS .7-.8mm; MV conf .57-.65, edge 3-54%;
+  - movimento: left angulo 81.8, pos 349mm; right 63.5, pos 299mm.
+DECISAO DO CICLO:
+  - KinectDepth e' a fonte PRIMARIA de visao; MultiView fica congelado como
+    experimental/fallback, NAO integrado e NAO promovido;
+  - nao ativar FUSED_* no EEG; nao usar A/B atual como verdade;
+  - jig A4/nivel continua pendente;
+  - calibracoes e JSONs locais modificados (stereo_calibration*.npz,
+    imu_palm_alignment_*.json, camera_alignment.npz) ficam preservados no
+    workspace; nao foram commitados neste fechamento.
+PROXIMA BANCADA (ordem):
+  1. comparar AuxStereoSource com o overlay correto do groundtruth: checar
+     pixels (x,y), frame espelhado, resolucao 1280x720, lateralidade e
+     correspondencia dos 21 landmarks; instrumentar a reprojecao de um ponto
+     conhecido nas DUAS cameras e comparar com a posicao do Kinect;
+  2. corrigir a convencao e repetir ab_parado/ab_movimento + jig;
+  3. se MultiView vencer, promover na V2; se nao, manter KinectDepth;
+  4. so entao integrar FUSED_* no EEG.
+CONHECIMENTO:
+  - tres artigos novos analisados: J Biomech 2025 (2 cameras vs 4, triangulacao
+    de maos), CHI 2026 ASL (estereo egocentrico + Savitzky-Golay + confianca)
+    e tese Cal Poly 2025 (estereo + MediaPipe para braco robotico); nenhum
+    resolve diretamente normal da palma; reforcam multi-view/SG/confianca;
+  - pesquisa bibliografica e de repositorios GitHub disparada no fechamento
+    para atualizar literatura/INDICE.md e referencias.bib.
+ESTADO: desenvolvimento de bancada ENCERRADO neste ciclo; suite 81/81 OK;
+commits e173f26, d63a629, 4b19ece; workspace preservado para retomada.
+
