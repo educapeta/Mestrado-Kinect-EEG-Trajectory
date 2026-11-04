@@ -9748,3 +9748,37 @@ CONHECIMENTO:
 ESTADO: desenvolvimento de bancada ENCERRADO neste ciclo; suite 81/81 OK;
 commits e173f26, d63a629, 4b19ece; workspace preservado para retomada.
 
+
+
+================================================================================
+ITEM 175 (05/11/2026) - PESQUISA DE PONTA INCORPORADA A LITERATURA
+================================================================================
+FORAM DISPARADOS 3 SUBAGENTES NVIDIA (artigos, multi-view/validacao e GitHub).
+Os workflows falharam na serializacao/retornaram vazio; o Lead completou a
+curadoria diretamente via Crossref, MDPI/Semantic Scholar, GitHub e PDFs locais.
+ARQUIVOS:
+  - literatura/PESQUISA_2026-11-05.md: nota curada com artigos, codigo,
+    recomendacoes e limitacoes;
+  - literatura/INDICE.md: 3 PDFs novos indexados + secao da pesquisa;
+  - literatura/referencias.bib: 3 PDFs + 9 referencias de pesquisa + 4 repos.
+PRINCIPAIS ACHADOS:
+  - Peng, Liu & He (2026, Sensors 26:3730): MediaPipe + ZED2 depth, mediana
+    local 5x5, back-projecao, EMA0.7, consistencia de ossos; EMA0.7 melhor
+    compromisso que 1 Euro (que atenuou movimento: path ratio 0.484 x 0.803).
+  - Mulla et al. (2025): 2 cameras bem posicionadas ~4 graus vs 4 cameras para
+    angulos de dedos; nao extrapolar para normal da palma.
+  - Cai et al. (CHI 2026): estereo + triangulacao + Savitzky-Golay + confianca.
+  - Anipose (2021): multi-view robusto/calibracao/triangulacao.
+  - ShaRPy (2023): incerteza RGB-D; Amprimo (2024): validacao MediaPipe.
+  - Codigo: casiez/OneEuroFilter, lambdaloop/anipose, ManoharPaturi/mocap,
+    google-ai-edge/mediapipe.
+RECOMENDACOES PARA O PROXIMO CICLO:
+  1. mediana local 5x5 de depth nos 5 pontos do dorso;
+  2. EMA0.7 como baseline vs 1 Euro, medindo jitter e path length;
+  3. gate de consistencia de ossos + reprojecao + edge-on;
+  4. incerteza/covariancia explicita no filtro de yaw;
+  5. instrumentar um ponto conhecido nas duas cameras antes de novo A/B;
+  6. jig A4/nivel como verdade externa.
+STATUS: biblioteca atualizada; commit 77088e6 (+ este item). Desenvolvimento de
+bancada segue encerrado; retomada pela sequencia do item 174.
+
