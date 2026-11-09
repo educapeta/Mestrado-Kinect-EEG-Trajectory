@@ -262,6 +262,105 @@ class KinectMediaPipeSource:
         return now, frame_bgr, observations
 
 
+class MultiViewSource:
+    """Fonte de visao multi-view (Kinect + camera auxiliar) para a fusao.
+
+    Devolve KinectObservation com posicao/normal trianguladas. O normal vem
+    de robust_plane_normal nos MESMOS 5 pontos do dorso e a confianca usa o
+    erro de reprojecao da triangulacao.
+    """
+
+    def __init__(self, aux_index: int = 0, source: Optional[Any] = None):
+        self._aux_index = int(aux_index)
+        self._source = source
+        self._started = False
+        self._last_normal: Dict[str, np.ndarray] = {}
+        self._normal_stab = PalmNormalStabilizer()
+
+    def _create_source(self) -> Any:
+        import kinect_compat
+        kinect_compat.aplicar()
+        from .aux_vision import AuxStereoSource
+        return AuxStereoSource(aux_index=self._aux_index)
+
+    def start(self) -> None:
+        if self._started:
+            return
+        if self._source is None:
+            self._source = self._create_source()
+        start = getattr(self._source, "start", None)
+        if callable(start):
+            start()
+        self._started = True
+
+    def close(self) -> None:
+        if self._source is not None:
+            try:
+                self._source.close()
+            except Exception:
+                pass
+        self._started = False
+
+    def poll(self) -> tuple[float, Optional[np.ndarray], Dict[str, KinectObservation]]:
+        import time
+        from .vision_backends import robust_plane_normal
+        now = time.monotonic()
+        frame_bgr = None
+        if not self._started or self._source is None:
+            return now, frame_bgr, {}
+        try:
+            frames = self._source.poll()
+            color = getattr(self._source, "last_kinect_bgra", None)
+            if color is not None and getattr(cv2, "cvtColor", None) is not None:
+                frame_bgr = cv2.cvtColor(color, cv2.COLOR_BGRA2BGR)
+        except Exception:
+            return now, frame_bgr, {}
+
+        obs: Dict[str, KinectObservation] = {}
+        for hand, fr in (frames or {}).items():
+            pts = getattr(fr, "palm_points_3d", None)
+            if pts is None or np.asarray(pts).shape != (5, 3):
+                continue
+            result = robust_plane_normal(
+                np.asarray(pts, np.float64), side=hand,
+                normal_anterior=self._last_normal.get(hand))
+            if result is None:
+                continue
+            normal, rms, edge, sigma = result
+            self._last_normal[hand] = np.asarray(normal).copy()
+            reproj = getattr(fr, "palm_reproj_errors", None)
+            if reproj is not None and len(reproj):
+                rep = float(np.nanmedian(reproj))
+                conf = float(np.clip(1.0 - rep / 10.0, 0.0, 1.0))
+            else:
+                conf = float(np.clip(1.0 - sigma / 90.0, 0.0, 1.0))
+            if edge:
+                conf *= 0.6
+            # Mesma estabilizacao temporal do KinectDepth: continuidade de
+            # sinal + EMA adaptativa + edge_on/held. Sem isso, no movimento a
+            # normal triangulada pode oscilar e o filtro fica para tras.
+            stab = self._normal_stab.update(
+                hand, np.asarray(normal, np.float64),
+                float(rms), now)
+            if not stab.valid:
+                continue
+            obs[hand] = KinectObservation(
+                timestamp=now, hand=hand,
+                wrist_cam=np.median(np.asarray(pts, np.float64), axis=0),
+                palm_normal_cam=np.asarray(stab.normal_cam, np.float64),
+                palm_dir_cam=np.zeros(3, dtype=np.float64),
+                # A reprojecao e' a metrica geometrica forte; o RMS do plano
+                # de 5 pontos e' conservador demais para zerar a confianca.
+                # A normal estabilizada e' usada, mas o gate de confianca fica
+                # com a reprojecao (e o desconto de edge-on).
+                confidence=float(conf * (0.6 if (edge or stab.edge_on) else 1.0)),
+                valid=True, source="multiview",
+                normal_rms_m=float(rms), normal_sigma_deg=float(max(sigma, stab.sigma_deg)),
+                edge_on=bool(edge or stab.edge_on), normal_held=bool(stab.held),
+            )
+        return now, frame_bgr, obs
+
+
 class ImuBankSource:
     """
     Adapter for ImuBank (dual-hand IMU receiver bank).

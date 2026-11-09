@@ -9834,3 +9834,52 @@ fusion/adapters.py, fusion/contracts.py, fusion/live.py,
 tools/protocolo_bancada.py, tools/imu_serial_bridge.py, testes.
 SUITE: 82/82 OK.
 
+
+
+================================================================================
+ITEM 177 (09/11/2026) - MULTIVIEW COM JANELA: TRIANGULACAO VALIDADA,
+    KINECTDEPTH DO A/B ERA O CULPADO; INTEGRACAO NOVA
+================================================================================
+O QUE MUDOU O DIAGNOSTICO:
+  - criado tools/multiview_janela.py: janela com Kinect e auxiliar lado a lado,
+    espera ESPACO, desenha verde=MediaPipe, amarelo=triangulado projetado de
+    volta na auxiliar e ciano=5 pontos de DEPTH do Kinect projetados na auxiliar.
+  - RESULTADO VISUAL/NUMERICO (aux0, 21 pontos):
+      reproj_auxiliar do MULTIVIEW: ~0.4-4.6 px;
+      reproj_kinect do MULTIVIEW:  ~0.3-4.7 px;
+      reproj_auxiliar dos pontos de DEPTH do KinectDepth: 40-580 px!
+    Ou seja: a triangulacao multi-view esta' geometricamente coerente com as
+    DUAS cameras; o backend "KinectDepth" do A/B estava usando pontos de depth
+    ruins (provavel resgate/prior de profundidade em `_landmark_camera_point`).
+    A conclusao anterior "KinectDepth venceu" era artefato do A/B, nao verdade.
+ENTREGAS:
+  - fusion/adapters.py: MultiViewSource (5 pontos triangulados -> posicao,
+    normal robusta estabilizada, confianca por reprojecao/edge);
+  - fusion/aux_vision.py: debug de reprojecao auxiliar e dos pontos de depth;
+  - tools/multiview_janela.py: diagnostico visual;
+  - tools/protocolo_bancada.py e tools/fusion_live.py: flag --multiview /
+    --aux-index;
+  - test_fusion_multiview_source.py (suite 83/83).
+RESULTADOS DO PROTOCOLO COM JANELA (aux0, mesmo boot):
+  KinectDepth (base): parado p95 13.59; movimento p95 15.60 (88.9% fused).
+  MultiView (sem estabilizador): parado p95 3.28; movimento p95 35.01
+    (95% fused; esquerda p95 53.9).
+  MultiView + estabilizador (confianca por reprojecao):
+    parado: 100% fused; left 1.09 mean / p95 1.92; right 5.08 / p95 8.17;
+            geral p95 7.66;
+    movimento: 88% fused; left mean 17.46 p95 51.30; right 15.07 p95 45.03.
+INTERPRETACAO:
+  - MULTIVIEW e' claramente superior no PARADO (p95 7.66 x 13.59 geral;
+    esquerda 1.92 x 15.11);
+  - no movimento ainda ha' transientes grandes; pode ser movimento rapido,
+    latencia (~56 ms), estabilizador atrasando ou outliers de triangulacao.
+    Nao promover como unico backend ainda.
+PROXIMO:
+  1. repetir movimento LENTO e controlado (protocolo com cue, mesmo trajeto)
+     para separar velocidade de latencia;
+  2. testar kp_yaw/snap no MultiView; alpha_max maior no estabilizador;
+  3. comparar os 5 pontos triangulados com a normal do KinectDepth ponto a
+     ponto para achar por que o depth point esta' 40-580 px fora;
+  4. jig A4/nivel como verdade externa.
+SUITE: 83/83 OK.
+

@@ -28,6 +28,19 @@ from .vision_backends import (
 import kinect_imu_groundtruth as kinect_gt
 
 
+def _project_kinect_to_aux(view, points_3d):
+    """Projeta pontos 3D do frame do Kinect na imagem da auxiliar."""
+    pts = np.asarray(points_3d, np.float64).reshape(-1, 3)
+    R = np.asarray(view.rotation, np.float64).reshape(3, 3)
+    T = np.asarray(view.translation, np.float64).reshape(3)
+    x_aux = (R @ pts.T).T + T.reshape(1, 3)
+    proj, _ = cv2.projectPoints(
+        x_aux.reshape(-1, 1, 3), np.zeros(3), np.zeros(3),
+        np.asarray(view.effective_matrix, np.float64),
+        np.asarray(view.dist, np.float64))
+    return proj.reshape(-1, 2)
+
+
 @dataclass
 class AuxStereoFrame:
     """Resultado de um frame stereo para uma mao."""
@@ -82,6 +95,9 @@ class AuxStereoSource:
         self._cap = None
         self._started = False
         self._fake_mode = False  # True quando tracker/alignment injetados sao fakes de teste
+        self.last_aux_frame = None
+        self.last_kinect_bgra = None
+        self.last_debug = {}
 
     def _create_tracker(self) -> kinect_gt.KinectHandTracker:
         """Factory lazy para KinectHandTracker."""
@@ -178,6 +194,7 @@ class AuxStereoSource:
         color_bgra, depth = frames_result
         if color_bgra is None:
             return {}
+        self.last_kinect_bgra = color_bgra
 
         # 2. Detecta maos no Kinect
         detect_result = self._tracker.detect_hands_all(color_bgra, depth)
@@ -208,6 +225,7 @@ class AuxStereoSource:
 
         if aux_frame is None:
             return {}
+        self.last_aux_frame = aux_frame.copy()
 
         # 4. Detecta maos na auxiliar (com lateralidade)
         try:
@@ -302,6 +320,20 @@ class AuxStereoSource:
             points_3d = points_3d[valid_mask]
             reproj = reproj[valid_mask]
 
+            try:
+                aux_proj = _project_kinect_to_aux(view, points_3d)
+                aux_err = np.linalg.norm(aux_proj - aux_pixels[valid_mask], axis=1)
+            except Exception:
+                aux_proj, aux_err = None, None
+            self.last_debug[hand] = {
+                "aux_pixels": aux_pixels[valid_mask].copy(),
+                "aux_projected": aux_proj,
+                "aux_errors": aux_err,
+                "kinect_pixels": kinect_pixels[valid_mask].copy(),
+                "points_3d": points_3d.copy(),
+                "reproj_kinect": reproj.copy(),
+            }
+
             # Pontos 3D do depth do Kinect (mesma verdade do Y): 5 pontos do
             # dorso. Usados pelo KinectDepthBackend no A/B REAL.
             kinect_points = []
@@ -314,6 +346,24 @@ class AuxStereoSource:
                     kinect_points.append(np.asarray(ponto, np.float64).reshape(3))
             kinect_points = (np.asarray(kinect_points, np.float64)
                              if len(kinect_points) >= 4 else None)
+
+            # Diagnostico: projecao dos 5 pontos de DEPTH de volta na auxiliar.
+            # Se o ciano nao cair na mao, o problema esta' no ponto de depth
+            # do Kinect (nao na triangulacao).
+            kd_proj_aux = None
+            kd_err_aux = None
+            if kinect_points is not None and len(kinect_points) == 5:
+                try:
+                    kd_proj_aux = _project_kinect_to_aux(view, kinect_points)
+                    kd_err_aux = np.linalg.norm(
+                        kd_proj_aux - aux_pixels[idx_palma], axis=1)
+                except Exception:
+                    kd_proj_aux = None
+            if hand in self.last_debug:
+                self.last_debug[hand]["kd_points"] = (
+                    None if kinect_points is None else np.asarray(kinect_points))
+                self.last_debug[hand]["kd_projected"] = kd_proj_aux
+                self.last_debug[hand]["kd_errors"] = kd_err_aux
 
             results[hand] = AuxStereoFrame(
                 hand=hand,

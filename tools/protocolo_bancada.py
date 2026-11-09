@@ -28,6 +28,10 @@ if str(ROOT) not in sys.path:
 def build_parser() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(
         description="Protocolo com janela: preparacao, mao parada, movimento.")
+    p.add_argument("--multiview", action="store_true",
+                   help="usa MultiViewSource (Kinect+auxiliar) em vez de KinectDepth")
+    p.add_argument("--aux-index", type=int, default=0,
+                   help="indice da camera auxiliar (padrao 0)")
     p.add_argument("--preparacao", type=float, default=8.0,
                    help="segundos de preparacao antes de gravar (padrao 8)")
     p.add_argument("--parado", type=float, default=10.0,
@@ -86,7 +90,7 @@ def main(argv=None) -> int:
     kinect_compat.aplicar()
 
     from fusion.adapters import (
-        KinectMediaPipeSource, ImuBankSource, load_calibrations,
+        KinectMediaPipeSource, MultiViewSource, ImuBankSource, load_calibrations,
     )
     from fusion.live import FusionEngine
     from fusion.complementary import ComplementaryConfig
@@ -110,7 +114,11 @@ def main(argv=None) -> int:
             print(f"[AVISO] bridge nao iniciou: {exc}; usando UDP existente")
             bridge = None
 
-    kinect = KinectMediaPipeSource()
+    if args.multiview:
+        kinect = MultiViewSource(aux_index=int(args.aux_index))
+        print(f"[protocolo] visao multi-view (aux {args.aux_index})")
+    else:
+        kinect = KinectMediaPipeSource()
     imu = ImuBankSource()
     configs = {}
     for hand, cal in calibrations.items():

@@ -62,6 +62,12 @@ def build_parser() -> argparse.ArgumentParser:
         help='Desabilita fonte Kinect (diagnóstico apenas IMU)'
     )
     parser.add_argument(
+        '--multiview', action='store_true',
+        help='Usa MultiViewSource (Kinect + camera auxiliar)'
+    )
+    parser.add_argument('--aux-index', type=int, default=0,
+                        help='Indice da camera auxiliar (padrao 0)')
+    parser.add_argument(
         '--synthetic', action='store_true',
         help='Usa fontes sintéticas (sem hardware)'
     )
@@ -172,9 +178,15 @@ def create_sources(args, calibrations: Dict[str, Any]):
         # Fontes reais
         if not args.sem_kinect:
             try:
-                from fusion.adapters import KinectMediaPipeSource
-                kinect_source = KinectMediaPipeSource()
-                print("[INFO] Fonte Kinect+MediaPipe criada")
+                if getattr(args, "multiview", False):
+                    from fusion.adapters import MultiViewSource
+                    kinect_source = MultiViewSource(
+                        aux_index=int(getattr(args, "aux_index", 0)))
+                    print("[INFO] Fonte MultiView (Kinect+auxiliar) criada")
+                else:
+                    from fusion.adapters import KinectMediaPipeSource
+                    kinect_source = KinectMediaPipeSource()
+                    print("[INFO] Fonte Kinect+MediaPipe criada")
             except Exception as e:
                 print(f"[AVISO] Falha ao criar fonte Kinect: {e}", file=sys.stderr)
                 kinect_source = None
