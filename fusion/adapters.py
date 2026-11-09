@@ -352,6 +352,16 @@ class MultiViewSource:
                 float(rms), now)
             if not stab.valid:
                 continue
+            # Ancora o overlay no pixel da palma do Kinect (debug do
+            # AuxStereoSource); sem isso a seta cai no centro da imagem.
+            palm_px = None
+            try:
+                dbg = (getattr(self._source, "last_debug", None) or {}).get(hand)
+                kp = dbg.get("kinect_pixels") if dbg else None
+                if kp is not None and len(kp) > 9:
+                    palm_px = np.asarray(kp[9], np.float64).reshape(2)
+            except Exception:
+                palm_px = None
             obs[hand] = KinectObservation(
                 timestamp=now, hand=hand,
                 wrist_cam=np.median(np.asarray(pts, np.float64), axis=0),
@@ -368,6 +378,7 @@ class MultiViewSource:
                 valid=True, source="multiview",
                 normal_rms_m=float(rms), normal_sigma_deg=float(max(sigma, stab.sigma_deg)),
                 edge_on=bool(edge or stab.edge_on), normal_held=bool(stab.held),
+                palm_px=palm_px,
             )
         # Guardar para hold curto.
         for hand, o in obs.items():

@@ -119,6 +119,17 @@ def draw_camera_axes(frame_bgr: np.ndarray,
     return frame_bgr
 
 
+def _angulo_deg(a: Optional[np.ndarray], b: Optional[np.ndarray]):
+    """Angulo entre duas direcoes (com sinal: oposto = 180, nao 0)."""
+    if a is None or b is None:
+        return None
+    a = _unit(a)
+    b = _unit(b)
+    if a is None or b is None:
+        return None
+    return float(np.degrees(np.arccos(np.clip(np.dot(a, b), -1.0, 1.0))))
+
+
 def draw_overlay(
     frame_bgr: np.ndarray,
     state: FusedState,
@@ -127,6 +138,8 @@ def draw_overlay(
     source_text: Optional[str] = None,
     vision_normal_cam: Optional[np.ndarray] = None,
     panel_origin: Optional[Tuple[int, int]] = None,
+    imu_normal_cam: Optional[np.ndarray] = None,
+    vision_label: str = "VIS",
 ) -> np.ndarray:
     """Desenha a fusao ancorada na palma + painel + triade da camera."""
     if frame_bgr is None or frame_bgr.size == 0:
@@ -170,7 +183,20 @@ def draw_overlay(
         cv2.putText(frame_bgr, aviso_z, (painel_x, painel_y), FONT, 0.45,
                     COLOR_TEXT, 1, cv2.LINE_AA)
         painel_y += 21
-    cv2.putText(frame_bgr, "magenta=FUSED  verde=KINECT  ciano=dir",
+    n_imu = _unit(imu_normal_cam)
+    ang_imu_vis = _angulo_deg(n_imu, vision_normal_cam)
+    ang_imu_fus = _angulo_deg(n_imu, normal)
+    if n_imu is not None:
+        txt = f"amarelo=IMU  IMUxVIS={ang_imu_vis:.1f}deg" if ang_imu_vis is not None else "amarelo=IMU"
+        cv2.putText(frame_bgr, txt, (painel_x, painel_y), FONT, 0.42,
+                    COLOR_IMU, 1, cv2.LINE_AA)
+        painel_y += 21
+        if ang_imu_fus is not None:
+            cv2.putText(frame_bgr, f"IMUxFUSED={ang_imu_fus:.1f}deg",
+                        (painel_x, painel_y), FONT, 0.42, COLOR_IMU, 1,
+                        cv2.LINE_AA)
+            painel_y += 21
+    cv2.putText(frame_bgr, f"magenta=FUSED  verde={vision_label}  ciano=dir",
                 (painel_x, painel_y), FONT, 0.42, COLOR_TEXT, 1, cv2.LINE_AA)
     painel_y += 21
     if calibration is not None:
@@ -205,7 +231,10 @@ def draw_overlay(
     # Normal fundida (magenta) e verdade do Kinect (verde) no MESMO ponto.
     _seta_normal(frame_bgr, origem_palma, normal, COLOR_FUSED, "FUSED")
     if vision_normal_cam is not None:
-        _seta_normal(frame_bgr, origem_palma, vision_normal_cam, COLOR_VISION, "KINECT")
+        _seta_normal(frame_bgr, origem_palma, vision_normal_cam,
+                     COLOR_VISION, vision_label)
+    if n_imu is not None:
+        _seta_normal(frame_bgr, origem_palma, n_imu, COLOR_IMU, "IMU")
 
     # Direcao dos dedos, se a visao forneceu.
     dirv = _unit(state.dir_cam)

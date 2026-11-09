@@ -98,6 +98,7 @@ def main(argv=None) -> int:
     from fusion.complementary import ComplementaryConfig
     from fusion.logging import FusionCsvLogger
     from fusion.metrics import summarize_fusion_log, print_summary
+    from fusion.visualization import draw_overlay
 
     calibrations = load_calibrations(args.calib_dir)
     faltando = [h for h in ("right", "left") if h not in calibrations]
@@ -207,6 +208,37 @@ def main(argv=None) -> int:
                         except Exception:
                             pass
                 if frame_atual is not None and not args.sem_janela:
+                    # Overlay vetorial: amarelo=n_imu (T R f), verde=visao,
+                    # magenta=fundido. E' o teste cru do multi-view no video.
+                    base = frame_atual.copy()
+                    for indice_estado, (hand_e, estado_e) in enumerate(
+                            (estados or {}).items()):
+                        obs_e = (obs or {}).get(hand_e)
+                        imu_e = (amostras or {}).get(hand_e)
+                        cal_e = engine.calibration(hand_e)
+                        n_imu_e = None
+                        if (imu_e is not None and imu_e.valid
+                                and cal_e is not None):
+                            try:
+                                n_imu_e = cal_e.normal_cam_from_imu(imu_e)
+                            except Exception:
+                                n_imu_e = None
+                        vis_label = ("MULTIVIEW"
+                                     if (obs_e is not None
+                                         and str(obs_e.source).startswith("multiview"))
+                                     else "KINECT")
+                        try:
+                            draw_overlay(
+                                base, estado_e, [],
+                                calibration=cal_e,
+                                vision_normal_cam=(obs_e.palm_normal_cam
+                                                   if obs_e is not None else None),
+                                imu_normal_cam=n_imu_e,
+                                vision_label=vis_label,
+                                panel_origin=(10, 30 + indice_estado * 235))
+                        except Exception:
+                            pass
+                    frame_atual = base
                     sub = subtitulo
                     if roteiro:
                         acumulado = 0.0

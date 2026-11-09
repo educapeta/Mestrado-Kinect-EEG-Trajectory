@@ -367,14 +367,37 @@ class LiveFusionApp:
                             ))
 
                         # Draw using provided visualizer or default
+                        # n_imu = T R f, para comparar com a visao no mesmo
+                        # frame. Nao passa pelo filtro: e' o teste cru.
+                        n_imu = None
+                        amostra_imu = imu_samples.get(hand)
+                        cal_hand = self.engine.calibration(hand)
+                        if (amostra_imu is not None and amostra_imu.valid
+                                and cal_hand is not None):
+                            try:
+                                n_imu = cal_hand.normal_cam_from_imu(amostra_imu)
+                            except Exception:
+                                n_imu = None
+                        vision_label = ("MULTIVIEW"
+                                        if (obs is not None
+                                            and str(obs.source).startswith("multiview"))
+                                        else "KINECT")
                         if self.visualizer is not None and hasattr(self.visualizer, 'draw_overlay'):
-                            self.visualizer.draw_overlay(frame_bgr, state, statuses)
+                            try:
+                                self.visualizer.draw_overlay(
+                                    frame_bgr, state, statuses,
+                                    imu_normal_cam=n_imu,
+                                    vision_label=vision_label)
+                            except TypeError:
+                                self.visualizer.draw_overlay(frame_bgr, state, statuses)
                         else:
                             draw_overlay(
                                 frame_bgr, state, statuses,
                                 vision_normal_cam=(obs.palm_normal_cam
                                                    if obs is not None else None),
                                 panel_origin=(10, 30 + indice_mao * 235),
+                                imu_normal_cam=n_imu,
+                                vision_label=vision_label,
                             )
 
                     # Show window only if show=True

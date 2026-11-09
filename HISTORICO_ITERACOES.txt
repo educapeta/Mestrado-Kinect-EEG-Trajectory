@@ -10009,3 +10009,30 @@ PROXIMOS:
      continuar limitando.
 SUITE: 83/83 OK.
 
+
+
+================================================================================
+ITEM 181 (09/11/2026) - OVERLAY n_IMU x n_VISAO x n_FUSED NO LIVE/PROTOCOLO
+    E DIAGNOSTICO DO ROLL DA DIREITA
+================================================================================
+OVERLAY:
+  - fusion/visualization.py: parametros imu_normal_cam e vision_label;
+    amarelo = n_imu (T R f), verde = n_visao (KINECT ou MULTIVIEW), magenta =
+    fundido; painel mostra IMUxVIS e IMUxFUSED em graus;
+  - fusion/live.py: calcula n_imu por mao a partir da calibracao+amostra IMU
+    e passa ao overlay; label MULTIVIEW quando a fonte e' multi-view;
+  - tools/protocolo_bancada.py: aplica o mesmo overlay no video das fases
+    (parado/guiado) antes do HUD de fase;
+  - MultiViewSource preenche palm_px (landmark 9 do Kinect) para ancorar as
+    setas na palma.
+ROLL DIREITA:
+  - adicionadas colunas roll/pitch/yaw e prev_* ao palma_vetor_log;
+  - tools/analisa_roll_palma.py compara a variacao tangencial da normal
+    prevista vs verdade durante o roll;
+  - nos logs de 17:01/17:02: 17:01 mostrou LEFT oposta (dot_med -0.935) e
+    RIGHT concordante (+0.979); 17:02 mostrou RIGHT concordante (+0.883,
+    erro de eixo ~28 graus, p95 65). Nao ha' inversao fixa da direita:
+    parece troca de lado/arquivo ou sinal/calibracao, nao flip de roll.
+    Nao aplicar flip cego; confirmar lado fisico e rodar V/G com uma mao so'.
+SUITE: 83/83 OK.
+
