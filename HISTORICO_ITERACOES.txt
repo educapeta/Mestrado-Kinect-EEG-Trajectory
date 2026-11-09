@@ -9927,3 +9927,39 @@ PROXIMOS COMANDOS (sempre com janela):
   python tools/protocolo_bancada.py --guiado --aux-index 0 \
       --ponte-serial COM4 --saida-prefixo <nome>   # KinectDepth
 
+
+
+================================================================================
+ITEM 179 (09/11/2026) - MULTIVIEW: HOLD/CONFIANCA E O LIMITE DO "100% FUSED"
+================================================================================
+MUDANCAS:
+  - MultiViewSource: hold de 150 ms quando nao ha frame/mao; confianca com piso
+    0.40 em edge-on (o FusionEngine reduz o ganho, mas nao jogamos o frame
+    fora); normal estabilizada; coluna vis_conf no CSV;
+  - protocolo --guiado (5 passos) e logging de qualidade.
+RESULTADOS (guiado3, com janela):
+  - parado: 100% fused, MAS 100% dos frames tinham edge_on=1; erro fused
+    vs visao left mean 6.69 p95 8.26; right mean 25.08 p95 26.14. Nao e' um
+    bom numero de qualidade; e' visao edge-on com ganho baixo.
+  - movimento: 90.6% fused; left mean 12.95 p95 51.65 (23% edge); right mean
+    12.86 p95 32.49 (44% edge); imu_only restante tinha held=100% e edge 73-79%.
+  - comparacao: na rodada estatica anterior, com a palma NAO edge-on, o
+    MultiView deu p95 7.66 (left 1.92, right 8.17) e 100% fused.
+CONCLUSAO:
+  - "100% fused" NAO e' meta de qualidade: quando o plano da palma esta'
+    edge-on, a visao e' mal condicionada e o correto e' imu_only/ganho baixo.
+    Forcar fused nesses frames nao melhora a orientacao;
+  - MultiView e' excelente quando a normal e' observavel (p95 ~7.7 geral no
+    estatico), mas no movimento/edge-on ainda nao supera o KinectDepth;
+  - KinectDepth continua fallback, mas os pontos de depth do A/B estao errados
+    (40-580 px fora), o que precisa ser corrigido para confiar no fallback.
+PROXIMOS PASSOS:
+  1. medir com JIG/pose conhecida, nao com mao livre; registrar o angulo
+     verdadeiro e comparar KinectDepth x MultiView;
+  2. rodada guiada com poses que mantenham a palma frontal (evitar edge-on)
+     para medir o teto de qualidade do MultiView;
+  3. investigar/corrigir `_landmark_camera_point` do KinectDepth (depth
+     rescue/prior) e refazer o A/B;
+  4. decidir backend por metrica de erro angular, nao por % fused.
+SUITE: 83/83 OK.
+

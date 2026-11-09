@@ -276,6 +276,9 @@ class MultiViewSource:
         self._started = False
         self._last_normal: Dict[str, np.ndarray] = {}
         self._normal_stab = PalmNormalStabilizer()
+        self._last_obs: Dict[str, KinectObservation] = {}
+        self._last_obs_time: Dict[str, float] = {}
+        self.max_hold_s = 0.15
 
     def _create_source(self) -> Any:
         import kinect_compat
@@ -353,11 +356,30 @@ class MultiViewSource:
                 # de 5 pontos e' conservador demais para zerar a confianca.
                 # A normal estabilizada e' usada, mas o gate de confianca fica
                 # com a reprojecao (e o desconto de edge-on).
-                confidence=float(conf * (0.6 if (edge or stab.edge_on) else 1.0)),
+                # Nao descartar o frame so' por edge-on: o FusionEngine
+                # ja' reduz o ganho (0.25) e o sigma. Piso de 0.40 permite
+                # fused com baixo ganho em vez de cair para imu_only.
+                confidence=float(max(0.40, conf * (0.6 if (edge or stab.edge_on) else 1.0))),
                 valid=True, source="multiview",
                 normal_rms_m=float(rms), normal_sigma_deg=float(max(sigma, stab.sigma_deg)),
                 edge_on=bool(edge or stab.edge_on), normal_held=bool(stab.held),
             )
+        # Guardar para hold curto.
+        for hand, o in obs.items():
+            self._last_obs[hand] = o
+            self._last_obs_time[hand] = now
+        # Se nao veio frame/mao, reusa por poucos ms com confianca decrescente.
+        for hand, anterior in self._last_obs.items():
+            if hand in obs:
+                continue
+            idade = now - self._last_obs_time.get(hand, -1e9)
+            if 0 <= idade <= self.max_hold_s:
+                fator = max(0.0, 1.0 - idade / max(self.max_hold_s, 1e-6))
+                from dataclasses import replace
+                obs[hand] = replace(
+                    anterior, timestamp=now,
+                    confidence=float(anterior.confidence) * 0.5 * fator,
+                    normal_held=True, source="multiview_hold")
         return now, frame_bgr, obs
 
 
