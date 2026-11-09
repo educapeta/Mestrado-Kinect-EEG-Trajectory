@@ -81,11 +81,10 @@ class FakeKinectHandTracker:
         direction = np.array([0.0, 1.0, 0.0], dtype=np.float64)
         return normal, direction
 
-    def palm_plane_camera(self, landmarks, side):
-        """Fallback plane-based orientation."""
+    def palm_plane_camera(self, landmarks, side, normal_anterior=None):
+        """Plano medio sintetico (normal, rms_m)."""
         normal = np.array([0.0, 0.0, -1.0], dtype=np.float64)
-        direction = np.array([0.0, 1.0, 0.0], dtype=np.float64)
-        return normal, direction
+        return normal, 0.001
 
 
 # =============================================================================
@@ -170,7 +169,8 @@ def test_kinect_source_poll_with_fake_tracker():
             assert isinstance(obs, KinectObservation)
             assert obs.hand == side
             assert obs.valid is True
-            assert obs.confidence == 0.85
+            assert 0.0 <= obs.confidence <= 1.0
+            assert obs.normal_sigma_deg >= 0.0
             assert obs.source == 'kinect_depth'
             assert obs.palm_normal_cam.shape == (3,)
             assert obs.palm_dir_cam.shape == (3,)
@@ -214,7 +214,8 @@ def test_kinect_source_invalid_normal_fallback():
         for obs in observations.values():
             # Fallback gives valid normal
             assert obs.valid is True
-            assert obs.confidence == 0.85
+            assert 0.0 <= obs.confidence <= 1.0
+            assert obs.normal_sigma_deg >= 0.0
 
         print("[OK] test_kinect_source_invalid_normal_fallback passed")
     finally:

@@ -78,7 +78,10 @@ class ImuSerialReceiver:
         self._fila: "queue.Queue[tuple[int, tuple[float, ...]]]" = queue.Queue(maxsize=4000)
 
     def start(self) -> None:
-        self.serial = serial.Serial(self.port, self.baud, timeout=0.2)
+        # timeout CURTO: read(4096) com timeout 0.2 s esperava encher o bloco
+        # (ou estourar 200 ms) e entregava as amostras em rajadas de ate
+        # ~170 ms de atraso. Agora lemos somente o que ja' esta' no driver.
+        self.serial = serial.Serial(self.port, self.baud, timeout=0.02)
         self.serial.reset_input_buffer()
         self._buffer = b""
         self._fila = queue.Queue(maxsize=4000)
@@ -120,8 +123,10 @@ class ImuSerialReceiver:
         assert self.serial is not None
         while self.running:
             try:
-                # Item 151: ler BLOCO, nao readline(). O timeout de 0.2 s
-                # devolve b"" quando nao ha dado.
+                # Item 151 + 176: ler BLOCO com timeout CURTO (20 ms, nao
+                # 200 ms). O read devolve o que chegou no timeout, sem esperar
+                # encher 4096 bytes; isso corta as rajadas de 100-170 ms sem
+                # depender de in_waiting (que travou o bridge nesta bancada).
                 bloco = self.serial.read(4096)
             except Exception:
                 break

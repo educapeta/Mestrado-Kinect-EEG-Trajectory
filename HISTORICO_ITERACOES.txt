@@ -9782,3 +9782,55 @@ RECOMENDACOES PARA O PROXIMO CICLO:
 STATUS: biblioteca atualizada; commit 77088e6 (+ este item). Desenvolvimento de
 bancada segue encerrado; retomada pela sequencia do item 174.
 
+
+
+================================================================================
+ITEM 176 (09/11/2026) - BANCADA: FIRMWARE SERIAL-ONLY, NORMAL ESTABILIZADA,
+    HOLD DE VISAO, PROTOCOLO COM CUES E TUNING DO FILTRO
+================================================================================
+CAUSA RAIZ DOS GAPS DE IMU:
+  - a serial parava ~6 s a cada 15 s. No loop do firmware, quando o Wi-Fi
+    nao conecta, connectWiFi(6000) BLOQUEIA o loop por 6 s (main.cpp).
+  - criado o env `esp32_duas_imus_serial` (HABILITAR_WIFI=0): sem tentativa de
+    Wi-Fi, sem UDP/OTA; so' serial. Usuario gravou pelo gravar.bat.
+  - medicao apos o flash: ~131 amostras/s por lado, idade maxima 32 ms,
+    SEM gaps. Antes: idade media 242 ms / p95 1547 ms.
+  - o firmware normal (com Wi-Fi) continua intacto no env padrao.
+Y NO BOOT ATUAL:
+  - tentativa 1 (24 s) falhou: residuos 34.12/23.26 -> JSON preservado;
+  - tentativa 2 (30 s): right 13.57 graus, left 10.80 graus -> gravados.
+NORMAL ESTABILIZADA + HOLD:
+  - fusion/palm_normal.py: estabilizador temporal por lado, continuidade de
+    sinal, EMA adaptativa por confianca/RMS, edge_on, sigma, hold curto;
+  - adapters.py: usa palm_plane_camera com normal_anterior, preenche
+    normal_rms_m/normal_sigma_deg/edge_on/normal_held e faz hold de 150 ms da
+    ultima observacao valida entre frames do Kinect;
+  - live.py: reduz o ganho de yaw em edge_on/held/sigma alto;
+  - test_fusion_palm_normal.py (5 testes) + adapters ajustados.
+PROTOCOLO DE BANCADA (tools/protocolo_bancada.py):
+  - janela sempre no topo, espera o usuario apertar ESPACO/ENTER, depois
+    PREPARACAO -> MAO PARADA -> MOVA DEVAGAR -> FIM, com beeps e CSV por fase;
+  - resolve o problema de rodar log headless enquanto o usuario esta' no
+    teclado (logs anteriores de "movimento" eram invalidos).
+RESULTADOS v2 (protocolo com cue, mesma sessao):
+  BASE (kp_yaw=0.5, snap=0.7):
+    parado: 100% fused; left mean 9.33 p95 15.11; right mean 9.24 p95 10.48;
+    movimento: 88.9% fused; left mean 12.29 p95 31.13; right mean 6.21 p95 14.93.
+  VARIANTE (kp_yaw=0.7, snap_conf=0.6):
+    parado: 100% fused; left mean 3.54 p95 4.71; right mean 12.09 p95 16.50;
+    movimento: 93.5% fused; left mean 7.19 p95 15.08; right mean 8.54 p95 15.15.
+  CONCLUSAO: a variante melhora alguns lados/fases mas piora outros; nao ha'
+  vitoria consistente (variacao de calibracao/pose domina). Manter config segura
+  (kp 0.5/snap 0.7) como default. A variante `--sem-snap` DIVERGIU (erro
+  60-100 graus) e foi descartada.
+PENDENCIAS:
+  - repetir protocolo em ordem randomizada e com lados separados para tunar
+    sem confundir pose/calibracao;
+  - calibrar Y separadamente por lado se quiser reduzir o pior lado;
+  - jig A4/nivel para verdade externa;
+  - multi-view continua congelado.
+ARQUIVOS: firmware/esp32_duas_imus (serial-only), fusion/palm_normal.py,
+fusion/adapters.py, fusion/contracts.py, fusion/live.py,
+tools/protocolo_bancada.py, tools/imu_serial_bridge.py, testes.
+SUITE: 82/82 OK.
+

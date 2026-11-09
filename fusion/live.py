@@ -143,7 +143,16 @@ class FusionEngine:
                 normal = obs.palm_normal_cam
                 if np.all(np.isfinite(normal)) and np.linalg.norm(normal) > 1e-6:
                     vision_normal = normal / np.linalg.norm(normal)
-                    vision_confidence = obs.confidence
+                    vision_confidence = float(obs.confidence)
+                    # Edge-on/held/sigma alto: reduzir o ganho de yaw em vez
+                    # de deixar um frame ruim "puxar" o filtro.
+                    if getattr(obs, "edge_on", False):
+                        vision_confidence *= 0.25
+                    sigma_vis = float(getattr(obs, "normal_sigma_deg", 0.0))
+                    if sigma_vis > 15.0:
+                        vision_confidence *= max(0.1, 15.0 / sigma_vis)
+                    if getattr(obs, "normal_held", False):
+                        vision_confidence *= 0.5
                     vision_valid = True
                     dir_cam = obs.palm_dir_cam
 

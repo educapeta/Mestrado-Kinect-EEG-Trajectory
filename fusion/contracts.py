@@ -65,6 +65,11 @@ class KinectObservation:
     source: str = "kinect_depth"
     #: Posicao da palma em pixels da imagem color (x,y); None se indisponivel.
     palm_px: Optional[np.ndarray] = None
+    #: Qualidade/incerteza da normal (preenchidas pelo adaptador estabilizado).
+    normal_rms_m: float = 0.0
+    normal_sigma_deg: float = 0.0
+    edge_on: bool = False
+    normal_held: bool = False
 
     def __post_init__(self):
         # Convert None to zero arrays for consistent handling

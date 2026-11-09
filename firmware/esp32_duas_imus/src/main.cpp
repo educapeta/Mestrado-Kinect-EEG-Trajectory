@@ -8,6 +8,14 @@
 // Credenciais de rede (eduroam / WPA2-PSK). Arquivo esta' no .gitignore.
 #include "credenciais.h"
 
+// Bancada serial-only (item 176): com HABILITAR_WIFI=0 o loop nao tenta
+// conectar/reconectar Wi-Fi. Sem isso, connectWiFi(6000) bloqueia 6 s a cada
+// 15 s e a serial do IMU para nesse intervalo. O build normal continua com
+// Wi-Fi (default 1); o env esp32_duas_imus_serial define 0.
+#ifndef HABILITAR_WIFI
+#define HABILITAR_WIFI 1
+#endif
+
 // ==================== CONFIGURACOES DOS SENSORES ====================
 // Dois MPU6050 no MESMO barramento I2C (Wire), enderecos configuraveis via
 // build_flags do platformio.ini. O lado (direita/esquerda) e' determinado pelo
@@ -500,7 +508,11 @@ void setup() {
 
   // Primeira tentativa com tempo cheio (o hotspot da bancada pode demorar a
   // subir); depois o loop cuida da reconexao com backoff.
+#if HABILITAR_WIFI
   connectWiFi(20000);
+#else
+  Serial.println("[wifi] DESABILITADO por HABILITAR_WIFI=0 (modo serial-only)");
+#endif
   ultimaTentativaWifi = millis();
   calibrateImuAt(ADDR_DIREITO, gyroBiasDx, gyroBiasDy, gyroBiasDz,
                  accelOffDx, accelOffDy, accelOffDz);
@@ -518,11 +530,13 @@ void loop() {
   // Reconexao com BACKOFF: antes CADA volta bloqueava 20 s (sem hotspot a
   // bancada so' recebia dados em rajadas de ~1 s a cada 20 s). Agora: 6 s de
   // tentativa a cada 15 s -- o resto do tempo o loop le os IMUs tranquilo.
+#if HABILITAR_WIFI
   if (WiFi.status() != WL_CONNECTED &&
       millis() - ultimaTentativaWifi >= 15000) {
     ultimaTentativaWifi = millis();
     connectWiFi(6000);
   }
+#endif
   talvezIniciarOta();
   if (otaPronto) {
     ArduinoOTA.handle();
@@ -562,6 +576,7 @@ void loop() {
         // `1,<10 campos>`. O UDP continua com 10 campos (imu.py nao muda).
         Serial.print("1,");
         Serial.print(packet);
+#if HABILITAR_WIFI
 #if ENVIAR_UNICAST
         udp_direita.beginPacket(UDP_DESTINO_STR_DIREITA, UDP_PORT_DIREITA);
 #else
@@ -569,6 +584,7 @@ void loop() {
 #endif
         udp_direita.write((const uint8_t *)packet, strlen(packet));
         udp_direita.endPacket();
+#endif
       }
     }
   }
@@ -603,6 +619,7 @@ void loop() {
         // Prefixo do lado SO' na serial (contrato do tools/imu_serial_bridge).
         Serial.print("2,");
         Serial.print(packet);
+#if HABILITAR_WIFI
 #if ENVIAR_UNICAST
         udp_esquerda.beginPacket(UDP_DESTINO_STR_ESQUERDO, UDP_PORT_ESQUERDA);
 #else
@@ -610,6 +627,7 @@ void loop() {
 #endif
         udp_esquerda.write((const uint8_t *)packet, strlen(packet));
         udp_esquerda.endPacket();
+#endif
       }
     }
   }

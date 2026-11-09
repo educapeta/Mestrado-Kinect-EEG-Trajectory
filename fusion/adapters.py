@@ -20,6 +20,7 @@ from .contracts import (
     Calibration,
 )
 from .calibration import load_calibration
+from .palm_normal import PalmNormalStabilizer
 
 # Mapping from hand side string to ImuBank side code (1=right, 2=left)
 SIDE_TO_BANK = {'right': 1, 'left': 2}
@@ -44,6 +45,12 @@ class KinectMediaPipeSource:
         self._tracker = tracker
         self._started = False
         self._runtime: Optional[Any] = None
+        self._normal_stab = PalmNormalStabilizer()
+        self._last_raw_normal: Dict[str, np.ndarray] = {}
+        #: Ultima observacao valida por lado, para hold entre frames do Kinect.
+        self._last_obs: Dict[str, KinectObservation] = {}
+        self._last_obs_time: Dict[str, float] = {}
+        self.max_hold_s = 0.15
 
     def _create_tracker(self) -> Any:
         """Lazy factory for KinectHandTracker."""
@@ -80,6 +87,27 @@ class KinectMediaPipeSource:
                     except Exception:
                         pass
         self._started = False
+
+    def _hold(self, now: float) -> Dict[str, KinectObservation]:
+        """Reusa a ultima observacao por ate max_hold_s (curto)."""
+        saida: Dict[str, KinectObservation] = {}
+        for side, obs in self._last_obs.items():
+            idade = now - self._last_obs_time.get(side, -1e9)
+            if idade < 0.0 or idade > self.max_hold_s:
+                continue
+            # Decaimento linear; nao deixa um frame velho com confianca alta.
+            fator = max(0.0, 1.0 - idade / max(self.max_hold_s, 1e-6))
+            from dataclasses import replace
+            novo = replace(
+                obs,
+                timestamp=now,
+                confidence=float(obs.confidence) * 0.5 * fator,
+                normal_held=True,
+                source="kinect_depth_hold",
+            )
+            if novo.confidence > 0.15:
+                saida[side] = novo
+        return saida
 
     def poll(self) -> tuple[float, Optional[np.ndarray], Dict[str, KinectObservation]]:
         """
@@ -150,23 +178,39 @@ class KinectMediaPipeSource:
                 # laranjas (normal de 3 pontos e' bem mais ruidosa).
                 normal = None
                 direction = None
+                rms_normal = 0.0
+                raw_normal = None
                 try:
-                    normal, _rms = self._tracker.palm_plane_camera(
-                        landmarks, side)
+                    # Passar a normal anterior ajuda o plano e a continuidade
+                    # do sinal; o estabilizador faz a suavizacao angular.
+                    raw_normal, rms_normal = self._tracker.palm_plane_camera(
+                        landmarks, side,
+                        normal_anterior=self._last_raw_normal.get(side))
                 except Exception:
-                    normal = None
+                    raw_normal, rms_normal = None, 0.0
                 # Fallback: normal de 3 pontos + direcao dos dedos.
                 try:
-                    if normal is None:
-                        normal, direction = self._tracker.palm_orientation_camera(
+                    if raw_normal is None:
+                        raw_normal, direction = self._tracker.palm_orientation_camera(
                             landmarks, side)
+                        # Fallback tem mais ruido: sinaliza RMS pior.
+                        rms_normal = 0.015
                     else:
                         _n3, direction = self._tracker.palm_orientation_camera(
                             landmarks, side)
                 except Exception:
-                    if normal is None:
-                        normal = None
+                    if raw_normal is None:
+                        raw_normal = None
                         direction = None
+                if raw_normal is not None:
+                    try:
+                        self._last_raw_normal[side] = np.asarray(
+                            raw_normal, dtype=np.float64).reshape(3).copy()
+                    except (TypeError, ValueError):
+                        pass
+                stabil = self._normal_stab.update(
+                    side, raw_normal, float(rms_normal or 0.0), now)
+                normal = stabil.normal_cam if stabil.valid else None
 
                 # Posicao 2D da palma (landmark 9) para ancorar o overlay.
                 palm_px = None
@@ -180,8 +224,9 @@ class KinectMediaPipeSource:
                     palm_px = None
 
                 # Create observation
-                valid = normal is not None and np.all(np.isfinite(normal))
-                confidence = 0.85 if valid else 0.3
+                valid = bool(stabil.valid and normal is not None
+                             and np.all(np.isfinite(normal)))
+                confidence = float(stabil.confidence if valid else 0.0)
 
                 obs = KinectObservation(
                     timestamp=now,
@@ -193,13 +238,26 @@ class KinectMediaPipeSource:
                     valid=bool(valid),
                     source='kinect_depth',
                     palm_px=palm_px,
+                    normal_rms_m=float(stabil.rms_m),
+                    normal_sigma_deg=float(stabil.sigma_deg),
+                    edge_on=bool(stabil.edge_on),
+                    normal_held=bool(stabil.held),
                 )
                 observations[side] = obs
+                self._last_obs[side] = obs
+                self._last_obs_time[side] = now
                 seen_sides.add(side)
 
         except Exception:
             # Never throw on bad frame - return what we have
             pass
+
+        # Entre frames do Kinect/MediaPipe, reusa por poucos ms a ultima
+        # observacao. Sem isso o FusionEngine fica majoritariamente imu_only
+        # porque o loop roda mais rapido que a visao (~30 Hz).
+        if self._started:
+            for side, extra in self._hold(now).items():
+                observations.setdefault(side, extra)
 
         return now, frame_bgr, observations
 
