@@ -43,6 +43,8 @@ def build_parser() -> argparse.ArgumentParser:
                    help="0=infinito; >0 encerra depois de N s")
     p.add_argument("--salvar-png", type=str, default=None,
                    help="salva o ultimo frame do grafico em PNG")
+    p.add_argument("--max-pontos", type=int, default=300,
+                   help="maximo de pontos desenhados por linha (padrao 300)")
     return p
 
 
@@ -58,12 +60,21 @@ class LeitorSerial(threading.Thread):
         self.running = True
         self.erro = None
         self.serial = None
+        self._offset = {}
+        self.backlog = 0
 
-    def _append(self, lado: int, rpy, acc, gyr) -> None:
+    def _append(self, lado: int, t_us: int, rpy, acc, gyr) -> None:
         agora = time.monotonic()
         with self.lock:
             d = self.dados[lado]
+            if self._offset.get(lado) is None:
+                # offset estimado na primeira amostra; a latencia mostrada e'
+                # RELATIVA a esse primeiro frame (nao absoluta).
+                self._offset[lado] = agora - (float(t_us) / 1e6)
             d["t"].append(agora)
+            d["t_us"].append(int(t_us))
+            d["lat"].append(max(0.0, (agora - (float(t_us) / 1e6
+                                               + self._offset[lado])) * 1000.0))
             d["rpy"].append(rpy)
             d["acc"].append(acc)
             d["gyr"].append(gyr)
@@ -83,7 +94,8 @@ class LeitorSerial(threading.Thread):
                     gyr = (20.0 * math.sin(0.8 * t + ph),
                            -15.0 * math.cos(0.6 * t + ph),
                            10.0 * math.sin(0.3 * t + ph))
-                    self._append(lado, rpy, acc, gyr)
+                    self._append(lado, int((time.monotonic()) * 1e6),
+                                 rpy, acc, gyr)
                 time.sleep(0.02)
             return
 
@@ -102,6 +114,10 @@ class LeitorSerial(threading.Thread):
 
         try:
             while self.running:
+                try:
+                    self.backlog = int(self.serial.in_waiting)
+                except Exception:
+                    self.backlog = 0
                 raw = self.serial.readline()
                 if not raw:
                     continue
@@ -113,7 +129,8 @@ class LeitorSerial(threading.Thread):
                     vals = [float(x) for x in campos[1:]]
                 except ValueError:
                     continue
-                self._append(int(campos[0]), vals[1:4], vals[4:7], vals[7:10])
+                self._append(int(campos[0]), int(vals[0]),
+                             vals[1:4], vals[4:7], vals[7:10])
         finally:
             if self.serial is not None:
                 self.serial.close()
@@ -185,8 +202,10 @@ def main(argv=None) -> int:
     args = build_parser().parse_args(argv)
     import cv2
 
-    dados = {1: {k: deque(maxlen=5000) for k in ("t", "rpy", "acc", "gyr")},
-             2: {k: deque(maxlen=5000) for k in ("t", "rpy", "acc", "gyr")}}
+    dados = {1: {k: deque(maxlen=5000)
+                 for k in ("t", "t_us", "lat", "rpy", "acc", "gyr")},
+             2: {k: deque(maxlen=5000)
+                 for k in ("t", "t_us", "lat", "rpy", "acc", "gyr")}}
     lock = threading.Lock()
     leitor = LeitorSerial(args.porta, args.baud, dados, lock,
                           simular=args.simular)
@@ -222,24 +241,34 @@ def main(argv=None) -> int:
                         cv2.FONT_HERSHEY_SIMPLEX, 0.9, (0, 220, 255), 2)
             largura = 700
             altura = 250
+            def _dec(vals):
+                if len(vals) <= max(2, args.max_pontos):
+                    return vals
+                passo = max(1, len(vals) // args.max_pontos)
+                return vals[::passo]
+
             for col, lado in enumerate((1, 2)):
                 x = 25 + col * (largura + 40)
                 nome = "DIREITA (1)" if lado == 1 else "ESQUERDA (2)"
                 d = snap[lado]
+                ts = _dec(d["t"])
+                rpy = _dec(d["rpy"])
+                acc = _dec(d["acc"])
+                gyr = _dec(d["gyr"])
                 s_rpy = [
-                    ("roll", (80, 80, 255), [(t, v[0]) for t, v in zip(d["t"], d["rpy"])]),
-                    ("pitch", (80, 255, 80), [(t, v[1]) for t, v in zip(d["t"], d["rpy"])]),
-                    ("yaw", (255, 180, 80), [(t, v[2]) for t, v in zip(d["t"], d["rpy"])]),
+                    ("roll", (80, 80, 255), [(t, v[0]) for t, v in zip(ts, rpy)]),
+                    ("pitch", (80, 255, 80), [(t, v[1]) for t, v in zip(ts, rpy)]),
+                    ("yaw", (255, 180, 80), [(t, v[2]) for t, v in zip(ts, rpy)]),
                 ]
                 s_acc = [
-                    ("ax", (80, 80, 255), [(t, v[0]) for t, v in zip(d["t"], d["acc"])]),
-                    ("ay", (80, 255, 80), [(t, v[1]) for t, v in zip(d["t"], d["acc"])]),
-                    ("az", (255, 180, 80), [(t, v[2]) for t, v in zip(d["t"], d["acc"])]),
+                    ("ax", (80, 80, 255), [(t, v[0]) for t, v in zip(ts, acc)]),
+                    ("ay", (80, 255, 80), [(t, v[1]) for t, v in zip(ts, acc)]),
+                    ("az", (255, 180, 80), [(t, v[2]) for t, v in zip(ts, acc)]),
                 ]
                 s_gyr = [
-                    ("gx", (80, 80, 255), [(t, v[0]) for t, v in zip(d["t"], d["gyr"])]),
-                    ("gy", (80, 255, 80), [(t, v[1]) for t, v in zip(d["t"], d["gyr"])]),
-                    ("gz", (255, 180, 80), [(t, v[2]) for t, v in zip(d["t"], d["gyr"])]),
+                    ("gx", (80, 80, 255), [(t, v[0]) for t, v in zip(ts, gyr)]),
+                    ("gy", (80, 255, 80), [(t, v[1]) for t, v in zip(ts, gyr)]),
+                    ("gz", (255, 180, 80), [(t, v[2]) for t, v in zip(ts, gyr)]),
                 ]
                 _painel(canvas, x, 55, largura, altura, f"{nome} RPY",
                         s_rpy, agora, args.janela, "graus")
@@ -247,9 +276,22 @@ def main(argv=None) -> int:
                         s_acc, agora, args.janela, "g", (-1.5, 1.5))
                 _painel(canvas, x, 585, largura, altura, f"{nome} GYRO",
                         s_gyr, agora, args.janela, "dps")
-            cv2.putText(canvas, "ESC/Q sair | janela {:.0f}s".format(args.janela),
-                        (20, 880), cv2.FONT_HERSHEY_SIMPLEX, 0.5,
-                        (180, 180, 180), 1)
+            lats = []
+            for lado in (1, 2):
+                if snap[lado]["lat"]:
+                    lats.append(snap[lado]["lat"][-1])
+            lat_ms = float(np.median(lats)) if lats else float("nan")
+            try:
+                backlog = int(leitor.backlog)
+            except Exception:
+                backlog = 0
+            cv2.putText(
+                canvas,
+                f"ESC/Q sair | janela {args.janela:.0f}s | "
+                f"lat_rel={lat_ms:.0f}ms | backlog={backlog}B | "
+                f"pontos/linha<={args.max_pontos}",
+                (20, 880), cv2.FONT_HERSHEY_SIMPLEX, 0.5,
+                (180, 180, 180), 1)
             ultimo = canvas
             if not args.sem_janela:
                 cv2.imshow("IMU raw - RPY | accel | gyro", canvas)
