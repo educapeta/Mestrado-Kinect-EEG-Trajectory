@@ -3720,6 +3720,15 @@ def main():
                         except (TypeError, ValueError, IndexError):
                             return None
 
+                    normal_prev_log = (None if sample_lado is None
+                                       else fusion.palm_direction(sample_lado))
+
+                    def _eixo_prev(vetor, indice):
+                        try:
+                            return float(np.asarray(vetor).reshape(3)[indice])
+                        except (TypeError, ValueError, IndexError):
+                            return None
+
                     log_palma.registrar(
                         t_mono=now, lado=lado, frame=frame_contador,
                         mao_detectada=1,
@@ -3748,6 +3757,15 @@ def main():
                         palm_dir_x=_eixo(palm_dir_log, 0),
                         palm_dir_y=_eixo(palm_dir_log, 1),
                         palm_dir_z=_eixo(palm_dir_log, 2),
+                        roll_deg=(None if sample_lado is None
+                                  else sample_lado.roll_deg),
+                        pitch_deg=(None if sample_lado is None
+                                   else sample_lado.pitch_deg),
+                        yaw_deg=(None if sample_lado is None
+                                 else sample_lado.yaw_deg),
+                        prev_x=_eixo_prev(normal_prev_log, 0),
+                        prev_y=_eixo_prev(normal_prev_log, 1),
+                        prev_z=_eixo_prev(normal_prev_log, 2),
                         erro_plano_deg=mao.get("palm_erro_plano_deg"),
                         erro_palma_deg=mao.get("palm_error_deg"),
                         sync_color_depth_ms=getattr(

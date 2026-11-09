@@ -2539,6 +2539,10 @@ CABECALHO_LOG_PALMA = (
     "palm_dir_x",
     "palm_dir_y",
     "palm_dir_z",
+    # Atitude crua + previsao T R f: sem estas colunas nao da' para separar
+    # "a seta gira ao contrario" de "o T/f esta' errado" no log do vetor.
+    "roll_deg", "pitch_deg", "yaw_deg",
+    "prev_x", "prev_y", "prev_z",
     "erro_plano_deg",
     "erro_palma_deg",
     "sync_color_depth_ms",
