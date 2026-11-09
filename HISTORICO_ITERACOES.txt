@@ -9883,3 +9883,47 @@ PROXIMO:
   4. jig A4/nivel como verdade externa.
 SUITE: 83/83 OK.
 
+
+
+================================================================================
+ITEM 178 (09/11/2026) - MULTIVIEW GUIADO + QUALIDADE NO CSV: ESTATICO BOM,
+    MOVIMENTO AINDA EM ABERTO
+================================================================================
+MUDANCAS:
+  - fusion/logging.py: colunas novas vis_rms_m, vis_sigma_deg, vis_edge_on,
+    vis_held (para diagnosticar transientes sem precisar de instrumentacao
+    extra);
+  - tools/protocolo_bancada.py: --guiado (5 passos de 4 s: esquerda, direita,
+    cima, baixo, centro) e --multiview/--aux-index;
+  - MultiViewSource estabilizado (normal suavizada; confianca pela reprojecao).
+  - suite 83/83 OK.
+RODADAS:
+  1) MultiView livre (sem guiado): parado 100% fused, p95 7.66 geral
+     (left 1.92, right 8.17); movimento p95 44.74, 88% fused.
+  2) MultiView GUIADO: parado 0% fused (as maos nao estavam no enquadramento
+     na fase parada; log invalido para comparacao); movimento 73.2% fused,
+     p95 22.49 (left 21.89, right 23.29), max 50.59.
+INTERPRETACAO:
+  - MULTIVIEW no estatico e' muito superior ao KinectDepth (p95 ~1.9-8.2
+    contra ~10.5-15.1);
+  - no movimento o guiado melhorou o p95 de ~44.7 para ~22.5, mas ainda pior
+    que o KinectDepth (~15.6). Latencia do MultiView e' ~55-58 ms e a normal
+    triangulada ainda sofre em rotacoes rapidas; estabilizador/ganho do filtro
+    precisam ser ajustados;
+  - o A/B antigo que elegeu KinectDepth estava contaminado: os pontos de depth
+    do KinectDepth projetam 40-580 px fora da auxiliar, enquanto o multi-view
+    projeta 0.4-4.6 px. A verdade geometrica favorece o multi-view.
+DECISAO:
+  - KinectDepth continua fallback/default seguro;
+  - MultiView e' candidato a primario, mas NAO promover antes de:
+    (a) repetir parado com as maos no enquadramento;
+    (b) movimento guiado com alpha_max/kp_yaw comparados;
+    (c) jig A4/nivel para verdade externa;
+  - investigar por que o depth point do KinectDepth esta' tao fora (resgate de
+    profundidade/prior) antes de usar o KinectDepth como fallback confiavel.
+PROXIMOS COMANDOS (sempre com janela):
+  python tools/protocolo_bancada.py --multiview --guiado --aux-index 0 \
+      --ponte-serial COM4 --saida-prefixo <nome>
+  python tools/protocolo_bancada.py --guiado --aux-index 0 \
+      --ponte-serial COM4 --saida-prefixo <nome>   # KinectDepth
+

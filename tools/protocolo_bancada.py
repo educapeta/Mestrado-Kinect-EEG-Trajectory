@@ -30,6 +30,8 @@ def build_parser() -> argparse.ArgumentParser:
         description="Protocolo com janela: preparacao, mao parada, movimento.")
     p.add_argument("--multiview", action="store_true",
                    help="usa MultiViewSource (Kinect+auxiliar) em vez de KinectDepth")
+    p.add_argument("--guiado", action="store_true",
+                   help="movimento guiado: esquerda/direita/cima/baixo/volta")
     p.add_argument("--aux-index", type=int, default=0,
                    help="indice da camera auxiliar (padrao 0)")
     p.add_argument("--preparacao", type=float, default=8.0,
@@ -145,7 +147,8 @@ def main(argv=None) -> int:
             pass
 
     def fase(nome: str, duracao: float, csv_path: str | None,
-             titulo: str, subtitulo: str, cor, aguardar: bool = False) -> str:
+             titulo: str, subtitulo: str, cor, aguardar: bool = False,
+             roteiro=None) -> str:
         logger = FusionCsvLogger(csv_path) if csv_path else None
         if logger:
             logger.open()
@@ -204,7 +207,17 @@ def main(argv=None) -> int:
                         except Exception:
                             pass
                 if frame_atual is not None and not args.sem_janela:
-                    vis = _desenha(frame_atual, titulo, subtitulo,
+                    sub = subtitulo
+                    if roteiro:
+                        acumulado = 0.0
+                        for dur_passo, texto_passo in roteiro:
+                            if restante > duracao - (acumulado + dur_passo):
+                                sub = texto_passo
+                                break
+                            acumulado += dur_passo
+                        else:
+                            sub = roteiro[-1][1]
+                    vis = _desenha(frame_atual, titulo, sub,
                                    restante, cor)
                     cv2.imshow("Protocolo de bancada", vis)
                     if (cv2.waitKey(1) & 0xFF) == 27:
@@ -231,9 +244,21 @@ def main(argv=None) -> int:
         _beep(990, 150)
         if etapa == "ABORTADO":
             return 0
-        etapa = fase("movimento", args.movimento, mov_path,
-                     "MOVA DEVAGAR", "Gire os punhos devagar, sem pressa",
-                     (0, 165, 255))
+        if args.guiado:
+            roteiro = [
+                (4.0, "1/5 Gire a palma para a ESQUERDA"),
+                (4.0, "2/5 Gire a palma para a DIREITA"),
+                (4.0, "3/5 Incline a palma para CIMA"),
+                (4.0, "4/5 Incline a palma para BAIXO"),
+                (4.0, "5/5 Volte ao centro"),
+            ]
+            etapa = fase("movimento", sum(d for d, _ in roteiro), mov_path,
+                         "MOVA DEVAGAR", "Siga as instrucoes na tela",
+                         (0, 165, 255), roteiro=roteiro)
+        else:
+            etapa = fase("movimento", args.movimento, mov_path,
+                         "MOVA DEVAGAR", "Gire os punhos devagar, sem pressa",
+                         (0, 165, 255))
         _beep(1320, 180)
         if etapa == "ABORTADO":
             return 0

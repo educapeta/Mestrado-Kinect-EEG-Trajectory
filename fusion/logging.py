@@ -38,6 +38,7 @@ CSV_HEADERS = [
     'imu_age_ms',
     'imu_roll_deg', 'imu_pitch_deg', 'imu_yaw_deg',
     'imu_gx_dps', 'imu_gy_dps', 'imu_gz_dps',
+    'vis_rms_m', 'vis_sigma_deg', 'vis_edge_on', 'vis_held',
 ]
 
 
@@ -216,6 +217,17 @@ class FusionCsvLogger:
             ])
         else:
             row.extend(['', '', '', '', '', ''])
+
+        # Qualidade da normal de visao (para diagnosticar transientes).
+        if kinect_obs is not None:
+            row.extend([
+                f'{float(getattr(kinect_obs, "normal_rms_m", 0.0)):.6f}',
+                f'{float(getattr(kinect_obs, "normal_sigma_deg", 0.0)):.3f}',
+                '1' if bool(getattr(kinect_obs, "edge_on", False)) else '0',
+                '1' if bool(getattr(kinect_obs, "normal_held", False)) else '0',
+            ])
+        else:
+            row.extend(['', '', '', ''])
 
         self._writer.writerow(row)
         self._row_count += 1
