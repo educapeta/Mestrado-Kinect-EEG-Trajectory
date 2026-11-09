@@ -45,6 +45,10 @@ def build_parser() -> argparse.ArgumentParser:
                    help="salva o ultimo frame do grafico em PNG")
     p.add_argument("--max-pontos", type=int, default=300,
                    help="maximo de pontos desenhados por linha (padrao 300)")
+    p.add_argument("--sem-escala-fixa", action="store_true",
+                   help="usa auto-escala (um pico pode achatar o resto)")
+    p.add_argument("--log", type=str, default=None,
+                   help="grava todas as linhas cruas da serial neste arquivo")
     return p
 
 
@@ -62,6 +66,8 @@ class LeitorSerial(threading.Thread):
         self.serial = None
         self._offset = {}
         self.backlog = 0
+        self.contadores = {"ok": 0, "invalida": 0, "fora": 0}
+        self.log_path = None
 
     def _append(self, lado: int, t_us: int, rpy, acc, gyr) -> None:
         agora = time.monotonic()
@@ -96,6 +102,8 @@ class LeitorSerial(threading.Thread):
                            10.0 * math.sin(0.3 * t + ph))
                     self._append(lado, int((time.monotonic()) * 1e6),
                                  rpy, acc, gyr)
+                    with self.lock:
+                        self.contadores["ok"] += 1
                 time.sleep(0.02)
             return
 
@@ -111,6 +119,12 @@ class LeitorSerial(threading.Thread):
             self.running = False
             return
 
+        log_file = None
+        if self.log_path:
+            try:
+                log_file = open(self.log_path, "a", encoding="utf-8")
+            except Exception:
+                log_file = None
         buffer = b""
         try:
             while self.running:
@@ -127,16 +141,37 @@ class LeitorSerial(threading.Thread):
                 while b"\n" in buffer:
                     raw, buffer = buffer.split(b"\n", 1)
                     texto = raw.decode("utf-8", errors="replace").strip()
+                    if log_file is not None:
+                        log_file.write(texto + "\n")
+                        log_file.flush()
                     campos = texto.split(",")
                     if len(campos) != 11 or campos[0] not in ("1", "2"):
+                        with self.lock:
+                            self.contadores["invalida"] += 1
                         continue
                     try:
                         vals = [float(x) for x in campos[1:]]
                     except ValueError:
+                        with self.lock:
+                            self.contadores["invalida"] += 1
                         continue
-                    self._append(int(campos[0]), int(vals[0]),
-                                 vals[1:4], vals[4:7], vals[7:10])
+                    # Faixa fisica plausivel para os MPU6050 desta bancada.
+                    rpy = vals[1:4]
+                    acc = vals[4:7]
+                    gyr = vals[7:10]
+                    if (any(abs(v) > 180.0 for v in rpy)
+                            or any(abs(v) > 4.0 for v in acc)
+                            or any(abs(v) > 2000.0 for v in gyr)):
+                        with self.lock:
+                            self.contadores["fora"] += 1
+                        # ainda grava no log, mas NAO entra no grafico
+                        continue
+                    self._append(int(campos[0]), int(vals[0]), rpy, acc, gyr)
+                    with self.lock:
+                        self.contadores["ok"] += 1
         finally:
+            if log_file is not None:
+                log_file.close()
             if self.serial is not None:
                 self.serial.close()
 
@@ -192,7 +227,8 @@ def _painel(canvas, x, y, w, h, titulo, series, t_ref, janela,
             if t < tx:
                 continue
             px = int(x + 40 + (t - tx) / max(janela, 1e-6) * (w - 55))
-            py = int(y + h - 25 - (v - ymin) / span * (h - 60))
+            vv = min(max(v, ymin), ymax)
+            py = int(y + h - 25 - (vv - ymin) / span * (h - 60))
             pts.append((px, py))
         if len(pts) >= 2:
             cv2.polylines(canvas, [np.array(pts, np.int32)],
@@ -214,6 +250,7 @@ def main(argv=None) -> int:
     lock = threading.Lock()
     leitor = LeitorSerial(args.porta, args.baud, dados, lock,
                           simular=args.simular)
+    leitor.log_path = args.log
     leitor.start()
     if leitor.erro:
         print(f"[ERRO] {leitor.erro}")
@@ -275,12 +312,15 @@ def main(argv=None) -> int:
                     ("gy", (80, 255, 80), [(t, v[1]) for t, v in zip(ts, gyr)]),
                     ("gz", (255, 180, 80), [(t, v[2]) for t, v in zip(ts, gyr)]),
                 ]
+                rpy_fixo = None if args.sem_escala_fixa else (-180.0, 180.0)
+                acc_fixo = None if args.sem_escala_fixa else (-2.0, 2.0)
+                gyr_fixo = None if args.sem_escala_fixa else (-1500.0, 1500.0)
                 _painel(canvas, x, 55, largura, altura, f"{nome} RPY",
-                        s_rpy, agora, args.janela, "graus")
+                        s_rpy, agora, args.janela, "graus", rpy_fixo)
                 _painel(canvas, x, 320, largura, altura, f"{nome} ACCEL",
-                        s_acc, agora, args.janela, "g", (-1.5, 1.5))
+                        s_acc, agora, args.janela, "g", acc_fixo)
                 _painel(canvas, x, 585, largura, altura, f"{nome} GYRO",
-                        s_gyr, agora, args.janela, "dps")
+                        s_gyr, agora, args.janela, "dps", gyr_fixo)
             lats = []
             for lado in (1, 2):
                 if snap[lado]["lat"]:
@@ -290,11 +330,13 @@ def main(argv=None) -> int:
                 backlog = int(leitor.backlog)
             except Exception:
                 backlog = 0
+            c = dict(leitor.contadores)
             cv2.putText(
                 canvas,
                 f"ESC/Q sair | janela {args.janela:.0f}s | "
                 f"lat_rel={lat_ms:.0f}ms | backlog={backlog}B | "
-                f"pontos/linha<={args.max_pontos}",
+                f"ok={c.get('ok', 0)} inv={c.get('invalida', 0)} "
+                f"fora={c.get('fora', 0)}",
                 (20, 880), cv2.FONT_HERSHEY_SIMPLEX, 0.5,
                 (180, 180, 180), 1)
             ultimo = canvas
