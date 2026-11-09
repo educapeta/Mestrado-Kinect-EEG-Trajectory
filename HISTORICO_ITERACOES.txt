@@ -9963,3 +9963,49 @@ PROXIMOS PASSOS:
   4. decidir backend por metrica de erro angular, nao por % fused.
 SUITE: 83/83 OK.
 
+
+
+================================================================================
+ITEM 180 (09/11/2026) - CAUSA RAIZ DO Y ENCONTRADA: DEPTH (Y-UP) x
+    MULTIVIEW/OPENCV (Y-DOWN); CORRECAO E LIMITE T/f
+================================================================================
+CAUSA RAIZ:
+  - `_landmark_camera_point` devolve o camera space do Kinect com Y para CIMA;
+  - a triangulacao/OpenCV (e a reprojecao na auxiliar) usa Y para BAIXO;
+  - o A/B comparava os dois sem converter. Isso explicava o deslocamento
+    sistematico de ~300 mm em Y e o ciano (depth do Kinect) centenas de px
+    fora da auxiliar.
+CORRECAO:
+  - AuxStereoSource converte os 5 pontos de depth para Y-down antes do A/B
+    (projecao na auxiliar);
+  - MultiViewSource converte os 5 pontos triangulados para Y-up antes de
+    calcular normal/posicao para a fusao (calibracao Y-up).
+  - tools/multiview_janela.py mostra kd_z/mv_z e a projecao.
+EFEITO:
+  - ciano (depth) caiu de 40-580 px para ~30-70 px fora na auxiliar na maioria
+    dos frames (ainda há outliers de depth, mas o frame estava errado);
+  - protocolo com MultiView (guiado): PARADO 100% fused, p95 15.47 geral
+    (left 16.13, right 11.83); MOVIMENTO 99.4% fused, p95 29.31 geral
+    (left 32.68, right 26.89). Disponibilidade resolvida; precisao ainda
+    limitada.
+REFIT T/f A PARTIR DOS LOGS:
+  - criado tools/refit_tf_log.py (le vis_n_* + imu_rpy do CSV, resolve T/f);
+  - mesma sessao parado+movimento: right residuo 14.71, left 10.84;
+    nao melhora o Y atual (13.57/10.80) -> NAO salvar;
+  - log de sessoes diferentes nao pode ser misturado (boot yaw diferente):
+    residuos 46-50 graus.
+CONCLUSAO:
+  - a geometria do MultiView esta' validada; o erro estatico restante (~10-16)
+    bate com o residuo do Y/T-f, nao com a triangulacao;
+  - ainda nao promover a producao; falta uma recalibracao Y melhor (poses
+    mais variadas/limpas) ou jig de verdade externa;
+  - KinectDepth point foi corrigido no A/B (Y-down), mas os outliers de depth
+    (30-70 px) precisam de um gate de profundidade para fallback.
+PROXIMOS:
+  1. recalibrar Y no mesmo boot, com poses mais variadas e sem edge-on;
+  2. repetir protocolo MV (parado + guiado), comparar p95 com o Y novo;
+  3. jig A4/nivel para verdade externa;
+  4. eventualmente usar normais MV para um Y/T-f proprio, se o Y do depth
+     continuar limitando.
+SUITE: 83/83 OK.
+

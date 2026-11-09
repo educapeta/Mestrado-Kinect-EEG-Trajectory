@@ -112,12 +112,18 @@ def main(argv=None) -> int:
                         err = dbg.get("aux_errors")
                         kerr = dbg.get("reproj_kinect")
                         kderr = dbg.get("kd_errors")
+                        kd = dbg.get("kd_points")
+                        mv = dbg.get("points_3d")
+                        ztxt = ""
+                        if kd is not None and len(kd) and mv is not None and len(mv):
+                            ztxt = (f" kd_z={np.nanmedian(np.asarray(kd)[:,2]):.3f} "
+                                    f"mv_z={np.nanmedian(np.asarray(mv)[:,2]):.3f}")
                         partes.append(
                             f"{hand}: aux_reproj="
                             f"{np.nanmedian(err):.1f}px kd_reproj_aux="
                             f"{'--' if kderr is None else f'{np.nanmedian(kderr):.1f}'}px "
                             f"kin_reproj={np.nanmedian(kerr):.1f}px "
-                            f"n={len(dbg['points_3d'])}")
+                            f"n={len(dbg['points_3d'])}{ztxt}")
                     print(f"[debug t={agora-t0:.1f}s] " + " | ".join(partes),
                           flush=True)
                 else:

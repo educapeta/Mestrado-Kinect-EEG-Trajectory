@@ -324,8 +324,13 @@ class MultiViewSource:
             pts = getattr(fr, "palm_points_3d", None)
             if pts is None or np.asarray(pts).shape != (5, 3):
                 continue
+            # Triangulacao/OpenCV usa Y para BAIXO; a fusao/calibracao usa o
+            # camera space do Kinect com Y para CIMA. Converter antes de
+            # normal/posicao para nao misturar referenciais.
+            pts = np.asarray(pts, np.float64).copy()
+            pts[:, 1] = -pts[:, 1]
             result = robust_plane_normal(
-                np.asarray(pts, np.float64), side=hand,
+                pts, side=hand,
                 normal_anterior=self._last_normal.get(hand))
             if result is None:
                 continue

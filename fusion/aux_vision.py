@@ -343,7 +343,13 @@ class AuxStereoSource:
                 except (AttributeError, IndexError, TypeError):
                     ponto = None
                 if ponto is not None and np.isfinite(ponto).all():
-                    kinect_points.append(np.asarray(ponto, np.float64).reshape(3))
+                    # `_landmark_camera_point` usa o camera space do Kinect
+                    # (Y para cima); a triangulacao/OpenCV usa Y para baixo.
+                    # Sem esta conversao o A/B compara frames diferentes e o
+                    # ponto de depth parece centenas de px fora na auxiliar.
+                    ponto = np.asarray(ponto, np.float64).reshape(3).copy()
+                    ponto[1] = -ponto[1]
+                    kinect_points.append(ponto)
             kinect_points = (np.asarray(kinect_points, np.float64)
                              if len(kinect_points) >= 4 else None)
 
