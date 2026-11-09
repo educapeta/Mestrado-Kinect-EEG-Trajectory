@@ -195,6 +195,9 @@ def build_parser() -> argparse.ArgumentParser:
                         help=f"duracao da captura Y (padrao {CAPTURE_SECONDS:g} s)")
     parser.add_argument("--auto-iniciar", action="store_true",
                         help="inicia a captura Y automaticamente ao abrir")
+    parser.add_argument("--lado", choices=["ambos", "right", "left"],
+                        default="ambos",
+                        help="calibrar so' um lado (padrao ambos)")
     parser.add_argument("--sem-janela", action="store_true",
                         help="nao abre janela OpenCV (smoke headless)")
     parser.add_argument("--ponte-serial", type=str, default=None, metavar="PORTA",
@@ -257,9 +260,10 @@ def main(argv: Optional[list[str]] = None) -> int:
                 frame = cv2.cvtColor(display, cv2.COLOR_BGRA2BGR)
 
             amostras = banco
+            lados_alvo = SIDES if args.lado == "ambos" else (args.lado,)
             for mao in maos or []:
                 lado = mao.get("side")
-                if lado not in SIDES:
+                if lado not in lados_alvo:
                     continue
                 landmarks = mao.get("landmarks")
                 if landmarks is None:
@@ -280,7 +284,7 @@ def main(argv: Optional[list[str]] = None) -> int:
             if captura.ativa and captura.restante_s() <= 0.0:
                 captura.parar()
                 print("Captura Y terminada; resolvendo T/f...")
-                for lado in SIDES:
+                for lado in (SIDES if args.lado == "ambos" else (args.lado,)):
                     if captura.contar(lado) < MIN_SAMPLES:
                         print(f"  {lado}: amostras insuficientes "
                               f"({captura.contar(lado)}/{MIN_SAMPLES}); JSON NAO alterado")
@@ -300,7 +304,7 @@ def main(argv: Optional[list[str]] = None) -> int:
                 linhas = ["Y = iniciar captura  ESC/Q = sair"]
                 if captura.ativa:
                     linhas.append(f"CAPTURANDO: {captura.restante_s():.1f}s")
-                for lado in SIDES:
+                for lado in (SIDES if args.lado == "ambos" else (args.lado,)):
                     linhas.append(f"{lado}: {captura.contar(lado)} amostras")
                 _texto(frame, linhas)
                 cv2.imshow(WINDOW, frame)
