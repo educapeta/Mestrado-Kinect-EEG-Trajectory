@@ -10068,3 +10068,36 @@ PROXIMO:
   4. nao usar --imu-portas trocado (lados estao corretos).
 SUITE: 83/83 OK.
 
+
+
+================================================================================
+ITEM 183 (09/11/2026) - ENCERRAMENTO DO DIA DE BANCADA (ESTADO CONGELADO)
+================================================================================
+ESTADO:
+  - firmware serial-only (HABILITAR_WIFI=0) gravado; serial ~estavel, bridge
+    persistente e' o modo recomendado (nao usar --ponte-serial em cada comando
+    para nao reiniciar a serial/boot);
+  - overlays: amarelo n_imu (T R f), verde n_visao (KINECT/MULTIVIEW),
+    magenta fundido, com IMUxVIS/IMUxFUSED; protocolo com janela e cues;
+  - reancoragem automatica de yaw no FusionEngine (boot_anchor) funcionando:
+    direita ficou com erro_cal ~9-12 graus;
+  - ESQUERDA ainda com erro_cal ~80-105 graus: T/f/f_body esquerdo ruim, NAO
+    e' apenas yaw. Backup tambem falhou. Teste de refit/log da esquerda fica
+    para a proxima sessao;
+  - MultiView geometricamente validado (reproj ~0.4-4.6 px); no estatico chegou
+    a p95 ~7.7 com 100% fused; movimento ainda pior que KinectDepth em
+    transientes (p95 ~15-45 dependendo do teste). Nao promovido;
+  - KinectDepth continua fallback; o ponto de depth tem erro residual (~30-70
+    px na auxiliar) e precisa de gate antes de confiar como fallback.
+CODIGO: nada pendente; ultimos commits 9fccef5, 2c84659, 9dbbce5; suite 83/83.
+ARQUIVOS LOCAIS preservados (nao versionados): calibracoes JSON, _calib_teste,
+logs CSV e PNGs.
+PROXIMA SESSAO (ordem):
+  1. bridge persistente em um terminal;
+  2. capturar log da esquerda em poses variadas com fusion_live --log-csv;
+  3. refit_tf_log --lado left --salvar --dir-saida _calib_left_fix; testar com
+     --calib-dir antes de promover;
+  4. se refit nao fechar, testar se o defeito acompanha o sensor esquerdo
+     (troca fisica dos MPUs) ou a montagem da luva;
+  5. retomar jig/poses conhecidas e comparacao final KinectDepth x MultiView.
+
