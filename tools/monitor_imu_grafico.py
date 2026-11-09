@@ -102,35 +102,40 @@ class LeitorSerial(threading.Thread):
         try:
             import serial
             self.serial = serial.Serial(
-                self.porta, self.baud, timeout=0.2,
+                self.porta, self.baud, timeout=0.02,
                 dsrdtr=False, rtscts=False)
-            self.serial.dtr = False
-            self.serial.rts = False
+            # NAO mexer em DTR/RTS (ver monitor_imu_raw): trava o boot.
             self.serial.reset_input_buffer()
         except Exception as exc:  # noqa: BLE001
             self.erro = f"{type(exc).__name__}: {exc}"
             self.running = False
             return
 
+        buffer = b""
         try:
             while self.running:
                 try:
                     self.backlog = int(self.serial.in_waiting)
                 except Exception:
                     self.backlog = 0
-                raw = self.serial.readline()
-                if not raw:
+                # Leitura em BLOCO: readline() por linha nao drenava a serial
+                # e o buffer acumulava 15+ KB (~1.4 s de atraso medido).
+                bloco = self.serial.read(4096)
+                if not bloco:
                     continue
-                texto = raw.decode("utf-8", errors="replace").strip()
-                campos = texto.split(",")
-                if len(campos) != 11 or campos[0] not in ("1", "2"):
-                    continue
-                try:
-                    vals = [float(x) for x in campos[1:]]
-                except ValueError:
-                    continue
-                self._append(int(campos[0]), int(vals[0]),
-                             vals[1:4], vals[4:7], vals[7:10])
+                buffer += bloco
+                while b"\n" in buffer:
+                    raw, buffer = buffer.split(b"\n", 1)
+                    texto = raw.decode("utf-8", errors="replace").strip()
+                    campos = texto.split(",")
+                    if len(campos) != 11 or campos[0] not in ("1", "2"):
+                        continue
+                    try:
+                        vals = [float(x) for x in campos[1:]]
+                    except ValueError:
+                        continue
+                    self._append(int(campos[0]), int(vals[0]),
+                                 vals[1:4], vals[4:7], vals[7:10])
         finally:
             if self.serial is not None:
                 self.serial.close()

@@ -48,9 +48,8 @@ def main(argv=None) -> int:
             args.porta, args.baud, timeout=0.3,
             dsrdtr=False, rtscts=False,
         )
-        # Nao puxar DTR/RTS: evita reset involuntario da placa.
-        porta.dtr = False
-        porta.rts = False
+        # NAO mexer em DTR/RTS: nesta placa isso segura o ESP32 em
+        # boot/reset e a serial entrega so' lixo de boot (medido 09/11/2026).
         porta.reset_input_buffer()
     except Exception as exc:  # noqa: BLE001 - hardware
         print(f"[ERRO] nao abri {args.porta}: {type(exc).__name__}: {exc}")
