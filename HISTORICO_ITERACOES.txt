@@ -10036,3 +10036,35 @@ ROLL DIREITA:
     Nao aplicar flip cego; confirmar lado fisico e rodar V/G com uma mao so'.
 SUITE: 83/83 OK.
 
+
+
+================================================================================
+ITEM 182 (09/11/2026) - REANCORAGEM DE YAW NO FUSIONENGINE: DIREITA OK,
+    ESQUERDA AINDA COM T/f RUIM
+================================================================================
+MOTIVO: T/f salvo depende do yaw absoluto do boot do IMU. O tool tem
+AncoradorYawBoot, mas o fusion_live nao tinha; reiniciar/abrir a serial podia
+invalidar o Y e o erro_cal subia para 50-100 graus enquanto erro_vis ficava 1-5.
+IMPLEMENTACAO:
+  - fusion/boot_anchor.py: CalibrationBootAnchor adapta Calibration ao
+    AncoradorYawBoot de imu.py; atualiza T_cam_world EM MEMORIA, sem salvar JSON;
+  - fusion/live.py: FusionEngine cria um ancorador por mao, alimenta com
+    (R_imu, normal_da_visao) e, quando ancora, reinicializa o filtro com a
+    atitude/T novos.
+RESULTADO (janela, ponte persistente):
+  - right: delta -14.5 graus; erro_cal caiu de ~50-60 para ~9-12 graus;
+  - left: delta +87.4 graus (8 amostras, erro 6.5), mas erro_cal continuou
+    80-105 graus -> o problema da esquerda NAO e' apenas yaw; f_body/T atual
+    (residual 14.15) esta' ruim e o backup (8.66) tambem falhou no teste.
+  - teste com _calib_teste (backup esquerdo) + ancorador: left erro_cal ~90,
+    fused 13.9%; nao usar backup como solucao.
+PROXIMO:
+  1. capturar log da esquerda em poses variadas (fusion_live --log-csv, mao
+     esquerda apenas) e rodar tools/refit_tf_log.py --lado left para obter um
+     T/f novo em pasta temporaria; se o residuo ficar baixo, testar e promover;
+  2. se o refit nao fechar, testar se o defeito acompanha o SENSOR esquerdo
+     (trocar fisicamente os dois MPUs) ou a montagem da luva;
+  3. manter a reancoragem automatica (direita ficou boa);
+  4. nao usar --imu-portas trocado (lados estao corretos).
+SUITE: 83/83 OK.
+

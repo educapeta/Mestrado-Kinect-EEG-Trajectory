@@ -27,6 +27,7 @@ from .complementary import (
 )
 from .sensor_manager import SensorManager
 from .visualization import draw_overlay
+from .boot_anchor import CalibrationBootAnchor
 
 
 @dataclass
@@ -49,7 +50,8 @@ class FusionEngine:
     def __init__(
         self,
         calibrations: Dict[str, Calibration],
-        configs: Optional[Dict[str, ComplementaryConfig]] = None
+        configs: Optional[Dict[str, ComplementaryConfig]] = None,
+        use_boot_anchor: bool = True,
     ):
         """
         Initialize fusion engine.
@@ -60,6 +62,8 @@ class FusionEngine:
         """
         self._filters: Dict[str, QuaternionComplementaryFilter] = {}
         self._sensor_managers: Dict[str, SensorManager] = {}
+        self._boot_anchors: Dict[str, CalibrationBootAnchor] = {}
+        self.use_boot_anchor = bool(use_boot_anchor)
         self._last_update: Dict[str, float] = {}
         #: Inicializacao unica de q com a atitude do IMU + calibracao.
         self._inicializados: Dict[str, bool] = {}
@@ -90,6 +94,8 @@ class FusionEngine:
 
             # Sensor manager for this hand
             self._sensor_managers[hand] = SensorManager()
+            if self.use_boot_anchor:
+                self._boot_anchors[hand] = CalibrationBootAnchor(cal, hand)
 
             self._last_update[hand] = 0.0
             self._inicializados[hand] = False
@@ -155,6 +161,26 @@ class FusionEngine:
                         vision_confidence *= 0.5
                     vision_valid = True
                     dir_cam = obs.palm_dir_cam
+
+            # 0) Reancoragem do yaw do boot (T/f salvo vale no boot em que foi
+            # medido; o yaw absoluto do IMU muda a cada reset). Usa a visao
+            # como referencia e corrige a Calibration EM MEMORIA.
+            ancora = self._boot_anchors.get(hand)
+            if (ancora is not None and not ancora.done
+                    and vision_valid
+                    and imu is not None and imu.valid):
+                try:
+                    resolvido = ancora.sample(imu, vision_normal)
+                except Exception:
+                    resolvido = None
+                if resolvido is not None:
+                    try:
+                        q_novo = filter_obj.calibration.q_body_cam_from_imu(imu)
+                        filter_obj.reset(q_novo)
+                        self._inicializados[hand] = True
+                        self._visao_alinhada[hand] = False
+                    except Exception:
+                        pass
 
             # 1) Inicializacao de ATITUDE COMPLETA com IMU + calibracao:
             # q = T_cam_world * R_imu(body->world). Nao basta alinhar so' a
