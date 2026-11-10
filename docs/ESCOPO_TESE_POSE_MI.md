@@ -239,6 +239,44 @@ Se quiser usar a trajetória como auxiliar:
 O E2T previu **velocidade 3D** em MI com referência da ME; isso é evidência de
 que a ideia é viável, não prova de replay temporal exato.
 
+### 3.5.1. Pose final: label da trial, não label de toda janela
+
+Sua preocupação é correta: se você pegar todas as janelas dos 4 s de MI e der a
+mesma pose final, algumas janelas podem representar a fase de alcance, não o
+hold. Isso é **ruído de label**.
+
+Três soluções, da mais simples para a mais sofisticada:
+
+1. **Só janelas tardias (recomendado no piloto):**
+   - usar apenas os últimos 1,5–2 s da MI;
+   - label = pose final/hold da ME anterior;
+   - janelas iniciais ficam fora da perda de pose (podem entrar na classificação
+     ou no auxiliar).
+2. **Pooling por atenção/MIL (multiple-instance learning):**
+   - o modelo vê várias janelas da mesma trial;
+   - produz **uma** predição de pose por trial;
+   - o label é único por trial;
+   - o modelo aprende a dar peso às janelas mais informativas.
+3. **Alvo resolvido no tempo (trajetória/velocidade):**
+   - cada janela tem alvo correspondente à fase da ME, alinhado por DTW/fase;
+   - é o caminho do E2T, mas exige alinhamento temporal.
+
+No piloto, comece com (1). Se sobrar tempo, compare com (2). Não use (3) como
+alvo principal.
+
+### 3.5.2. Como fica o modelo final do piloto
+
+```text
+encoder SAND compartilhado
+  ├─ cabeça de pose final: xyz + 6D + abertura
+  ├─ cabeça auxiliar de velocidade linear 3D (ME)
+  └─ cabeça de classificação: direita/esquerda/repouso (opcional)
+```
+
+- pose final: label da trial, janelas tardias;
+- velocidade: label da ME, janelas alinhadas ao ME onset/DTW, peso menor;
+- classificação: todas as janelas de MI, label de classe.
+
 ## 3.6. Janelas de treino: ME onset × MI onset
 
 ```text
