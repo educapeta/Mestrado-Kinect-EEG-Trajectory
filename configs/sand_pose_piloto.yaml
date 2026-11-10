@@ -1,0 +1,62 @@
+# Configuração do piloto SAND-Pose.
+# Os nomes de arquivos e caminhos seguem docs/DATASET_POSE_SCHEMA.md.
+# O objetivo deste config é o baseline offline; o tempo real vem depois.
+
+data:
+  root: dados_pose
+  manifest: manifest.csv
+  window_sec: 2.0
+  window_start_sec: 0.0
+  window_stride_sec: 0.1
+  eeg_fs: 500
+  target_fs: 30
+  target_seq_len: 30
+  target_mode: relative_rest     # relative_rest | absolute
+  band_hz: [1.0, 30.0]
+  car: true
+  zscore: train
+  channels: auto                 # interseção por nome da montagem
+
+model:
+  arch: SANDPose
+  n_channels: 32
+  n_timesteps: 1000              # 2.0 s @ 500 Hz
+  d_model: 32
+  n_layers: 4
+  dropout: 0.1
+  pos_dim: 3
+  rot_dim: 6
+  use_imu: false                 # piloto começa sem IMU
+
+train:
+  batch_size: 16
+  epochs: 100
+  lr: 0.001
+  weight_decay: 0.0001
+  patience: 12
+  seed: 42
+  device: auto
+
+loss:
+  pos: huber
+  lambda_pos: 1.0
+  lambda_rot: 1.0
+  lambda_smooth: 0.05
+
+metrics:
+  - pos_rmse_mm
+  - pos_p95_mm
+  - geodesic_deg_median
+  - geodesic_deg_p95
+  - pcc_x
+  - pcc_y
+  - pcc_z
+
+split:
+  mode: session
+  train_sessions: []              # preencher ao gerar o dataset
+  val_sessions: []
+  test_sessions: []
+
+checkpoint:
+  out: sand_pose_piloto.pt
