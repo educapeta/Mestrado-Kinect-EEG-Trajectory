@@ -10101,3 +10101,37 @@ PROXIMA SESSAO (ordem):
      (troca fisica dos MPUs) ou a montagem da luva;
   5. retomar jig/poses conhecidas e comparacao final KinectDepth x MultiView.
 
+
+
+================================================================================
+ITEM 184 (10/11/2026) - ESBOCO DA TESE PARA SAND-POSE (EXECUCAO -> MI)
+================================================================================
+ARQUIVOS CRIADOS NA TESE (OneDrive/Tese_Latex/Mestrado):
+  - sections/Metodologia_Pose.tex (integrado no main no lugar da metodologia
+    antiga de classificacao; ~14-15 paginas, 12 subsecoes, 10 equacoes, 6
+    tabelas; pose final/hold + 6D + abertura, rotulo fraco, janelas ME/MI,
+    SAND-Pose multi-task, E0/E1/E2, P1/P2/P3, metricas, CEP, planos B);
+  - sections/Ajuste_Escopo_Tese.tex (standalone, ~4.800 palavras; justificativa,
+    problema, H1-H4, OE1-OE6, revisao breve, delimitacao, contribuicoes/CEP);
+  - sections/Ajuste_Escopo_Include.tex (versao do ajuste pronta para \input;
+    incluida como Apendice C de trabalho no main);
+  - LEIA-ME_ESBOCO.md (guia de leitura, backups e pendencias).
+  - library.bib: +9 entradas (E2T, SAND, imagined 3D, review trajectory, MTRT,
+    M3T, Stinear, imagery voluntary, WAY-EEG-GAL); duplicata kinesthetic2006
+    removida (mantida Stinear2005).
+  - main.tex: input de Metodologia_Pose; Apendice C de escopo.
+BACKUPS: todos os originais com sufixo .bak_20261110.
+DOC FORA DA TESE:
+  - docs/EMENDA_CEP_POSE_MI.md (emenda CEP em Markdown, 783 linhas; protocolo,
+    TCLE, LGPD, riscos, analise estatistica, cronograma, checklists).
+INCONSISTENCIAS RESOLVIDAS:
+  - lateralidade: tarefa bimanual; 12 condicoes mao-alvo (3 objetos x 2
+    orientacoes x 2 maos); classificacao direita/esquerda/repouso;
+  - pose de MI: rotulo fraco da execucao anterior admitido como analise
+    exploratoria; avaliacao principal zero-shot e fine-tune com classe;
+  - blocos: 5x25 trials por sessao (pausas 3-5 min), 2 sessoes x 125.
+PENDENCIAS: validar com orientador; emenda CEP; atualizar Introducao/Revisao/
+Resultados/Conclusao; corrigir refs antigas sem chave no bib (hall etc.);
+compilar em Overleaf/MiKTeX (LaTeX nao instalado nesta maquina).
+SUITE DO PROJETO DE AQUISICAO: 83/83 OK (ultima execucao).
+
