@@ -14,6 +14,51 @@ Pose = posição `xyz` + orientação (`R`/quaternion) + abertura da garra.
 A classificação MI (mão direita/esquerda/repouso) continua como **tarefa
 secundária/baseline**, não como objetivo principal.
 
+### 1.1. Formulação científica que evita promessa excessiva
+
+A contribuição não é “a execução ensina a MI” em abstrato. É:
+
+> **Usar a execução motora como supervisão auxiliar para aprender uma
+> representação de pose que possa ser decodificada a partir de MI, reduzindo a
+> dependência de labels de execução no momento do uso.**
+
+O que isso permite afirmar, no máximo:
+
+- execução fornece labels de pose que a MI não tem;
+- um modelo treinado nessa representação pode funcionar em MI sem labels de
+  pose;
+- isso é uma **hipótese de transferência**, a ser medida.
+
+O que **não** permite afirmar automaticamente:
+
+- que o modelo funcionará em amputados, AVC ou ALS;
+- que a MI de um paciente é equivalente à MI de um saudável;
+- que a execução de pessoas saudáveis resolve a falta de execução do usuário
+  final;
+- que o seeding por execução pode ser feito pelo próprio paciente.
+
+Para a limitação de pacientes, a lógica correta é:
+
+```text
+treino: execução de uma coorte saudável (ou mista, quando possível)
+alvo:   MI do usuário que não consegue executar
+```
+
+O usuário final não precisa executar no treino; ele precisa que a
+representação aprendida com execução transfira para a MI dele. Isso é
+exatamente o que H2 testa, e é uma limitação em aberto — não um resultado
+garantido.
+
+Se o objetivo for “pessoas que não têm braço”, a tese deve dizer:
+
+- a coorte de treino é saudável;
+- a MI é o sinal de uso;
+- a validação em pacientes é trabalho futuro, salvo se houver coorte clínica.
+
+Também não chame isso de “impossibilidade de aplicar em pessoas não
+saudáveis”: BCIs de MI já são usadas em pacientes; a limitação real é
+**desempenho, variabilidade e generalização**, não impossibilidade.
+
 ## 2. Hipóteses
 
 - **H1 (execução):** EEG de execução permite decodificar pose contínua acima do

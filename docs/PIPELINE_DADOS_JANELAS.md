@@ -191,6 +191,77 @@ x_imu      (N, 10, T)     # IMU reamostrado
   ou regressão + limiar;
 - no futuro, troque a cabeça escalar por um vetor de juntas.
 
+### 5.6. Janela de análise (4 s) NÃO é a janela de entrada (2 s)
+
+Essa é a confusão mais comum. Existem três coisas diferentes:
+
+| Coisa | Exemplo | Para que serve |
+| --- | --- | --- |
+| **janela do trial** | cue -0,5 s até cue + 3,5 s = 4 s | contexto experimental e análise de fases |
+| **janela de entrada do modelo** | últimos 2 s de EEG | o tensor que a rede recebe |
+| **janela de saída** | pose atual, ou 0,5–1 s à frente | o que a rede prevê |
+
+Se o modelo foi treinado com entrada de **4 s**, no online ele precisa receber
+**4 s**. Não dá para alimentar 2 s sem retreinar ou sem um modelo que aceite
+comprimento variável. O contrário também vale: se treinou com 2 s, o online usa
+2 s.
+
+#### O que eu recomendo
+
+- **offline:** analise o trial de 4 s (fases, ERD/ERS, pose ao longo do trial);
+- **modelo:** comece com entrada fixa de **2 s**, a mesma do SAND atual
+  (`T = 1000` amostras a 500 Hz);
+- **online:** janela rolante de 2 s, deslizando a cada 33–100 ms.
+
+Assim o modelo é treinado e usado no mesmo formato. O trial de 4 s continua
+existindo para a análise e para o desenho experimental.
+
+#### “Mas a janela de 2 s não me atrasa 2 s?”
+
+Não. A janela é **histórico**, não espera. O loop online funciona assim:
+
+```text
+a cada 33 ms:
+  pega os últimos 2 s do ring buffer
+  pré-processa
+  roda o modelo
+  prevê a pose de agora (ou de +100 ms)
+  envia ao robô
+```
+
+Depois que o buffer encheu (2 s após o início), você recebe uma predição a
+cada 33 ms. O atraso real é:
+
+```text
+latência = aquisição + comunicação + pré-processamento + inferência + suavização + robô
+```
+
+A janela de 2 s **não** soma 2 s de atraso. Ela é o contexto que o modelo olha
+para trás.
+
+#### Se você quiser mesmo treinar com 4 s
+
+Aí o online precisa de um ring buffer de 4 s. É possível, mas:
+
+- o modelo processa 2× mais amostras;
+- a resposta fica mais “lenta” para mudanças recentes;
+- para MI, que é lenta, pode até ajudar;
+- para controle fino, 2 s costuma ser suficiente.
+
+Não misture: **treinar em 4 s e usar 2 s no online é erro de distribuição.**
+
+#### Como comparar 2 s vs 4 s cientificamente
+
+Treine dois modelos separados, com o mesmo split:
+
+```text
+Modelo A: entrada 2 s, stride 0,1 s
+Modelo B: entrada 4 s, stride 0,1 s
+```
+
+Compare posição, orientação e classificação. O trial de 4 s é o mesmo para os
+dois; muda só o recorte de entrada.
+
 ## 6. Camada 5 — inferência online
 
 ### 6.1. Loop
