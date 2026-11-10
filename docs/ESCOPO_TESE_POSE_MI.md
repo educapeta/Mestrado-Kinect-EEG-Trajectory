@@ -113,6 +113,56 @@ Duas opções de seeding:
 - priming mais forte, mas trial longo e risco de contaminação motora;
 - precisa de washout e randomização.
 
+### 3.2.1. Timing do trial de 12 s e fadiga
+
+O `eeg_motor_paradigm.py` atual usa:
+
+```text
+HOME/repouso      2 s
+CUE + ME          4 s
+pausa + vídeo      2 s
+MI                4 s
+----------------------
+total             12 s
+```
+
+O “pausa 2 s que engata no próximo” é o **HOME do próximo trial**; não são
+14 s.
+
+Com 250 trials em uma sessão:
+
+```text
+250 × 12 s = 3.000 s = 50 min de trials puros
+5 blocos × 50 trials = 5 × 10 min
+4 pausas de 2 min = 8 min
+--------------------------------
+~58 min de protocolo ativo
++ baseline (5 min) + prática (6 × 12 s ≈ 1,2 min)
++ setup de EEG/touca/gel (20–40 min)
+= ~1 h 25 min a 1 h 45 min de visita
+```
+
+Isso é **cansativo**, principalmente porque são 250 repetições de
+alcance/preensão + MI. O tempo de MI real por participante é:
+
+```text
+250 × 4 s = 1.000 s = 16,7 min de EEG de MI
+```
+
+Ou seja: 50 min de sessão produzem só ~17 min de MI. Os outros ~17 min são ME
+e ~17 min são pausa/vídeo/home.
+
+**Recomendação:** não use 50 trials por bloco. Use 25–30 trials por bloco
+(5–6 min), com pausas de 3–5 min. Se 250 é o total do participante em 6
+sessões, cada sessão tem ~42 trials e fica muito mais viável.
+
+Cuidado com a ambiguidade:
+
+- **250 trials por sessão × 6 sessões** = 1.500 trials/participante — muito
+  provavelmente inviável;
+- **250 trials totais por participante em 6 sessões** = ~42/sessão — viável
+  para piloto.
+
 ### 3.3. Tarefa e objetos
 
 - 3 objetos/posições diferentes;
@@ -121,6 +171,34 @@ Duas opções de seeding:
 - aleatorizar objeto, lado e ordem;
 - não usar peso/fricção como no WAY-EEG-GAL: aqui o interesse é **pose**,
   não força.
+
+## 3.4. Zero-shot, fine-tune e “MI pura” — mesmo modelo
+
+Não são três arquiteturas. É o **mesmo modelo**, com protocolos de treino
+diferentes:
+
+| Protocolo | Treino | Teste | O que prova |
+| --- | --- | --- | --- |
+| **Zero-shot** | execução | MI | transferência sem nenhum label de MI |
+| **Fine-tune** | execução + poucas MI | MI restante | adaptação com calibração curta |
+| **MI pura (classificação)** | MI com labels de classe | MI | classificação direita/esquerda/repouso |
+| **MI pura (pose)** | MI com label fraco da execução | MI | só é possível assumindo o pareamento ME→MI |
+
+“MI pura” para pose **não existe sem algum label**. Se você usar a pose da
+execução como label da MI, isso é aprendizado fraco/supervisionado por
+transferência, não ground truth de MI.
+
+O caminho mais leve:
+
+```text
+1 modelo com encoder compartilhado
+  ├─ cabeça de pose (posição + 6D + abertura)
+  └─ cabeça de classificação (direita/esquerda/repouso)
+```
+
+Treine primeiro em execução; depois avalie zero-shot em MI; depois faça
+fine-tune com poucas trials de MI; a classificação pode ser treinada desde o
+início como tarefa auxiliar.
 
 ## 4. Janela de 4 s: o que ela significa
 
