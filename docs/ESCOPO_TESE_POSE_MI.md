@@ -200,6 +200,81 @@ Treine primeiro em execução; depois avalie zero-shot em MI; depois faça
 fine-tune com poucas trials de MI; a classificação pode ser treinada desde o
 início como tarefa auxiliar.
 
+## 3.5. Alvo principal: pose final/hold; velocidade/trajetória como auxiliar
+
+Essa é uma decisão metodológica forte e defensável:
+
+```text
+ALVO PRINCIPAL
+  pose final/hold da mão:
+  posição + rotação (6D/quaternion) + abertura
+
+ALVO AUXILIAR
+  velocidade 3D (e talvez velocidade angular) da ME,
+  usada para dar consistência temporal/suavidade
+```
+
+Por que faz sentido:
+
+- o robô precisa chegar a uma pose final para segurar o objeto;
+- a pose final é menos sensível a diferenças de ritmo da MI do que a
+  trajetória inteira;
+- a velocidade auxiliar aproveita a lógica temporal do E2T sem exigir que a
+  MI reproduza exatamente os 4 s da ME;
+- a MI pode ser mais lenta/rápida; a pose final continua sendo o alvo
+  semântico correto.
+
+O que **não** fazer:
+
+- usar a trajetória inteira como alvo principal e MSE no tempo exato;
+- chamar a trajetória da ME de “ground truth da MI”;
+- exigir que a MI tenha a mesma duração/velocidade da ME.
+
+Se quiser usar a trajetória como auxiliar:
+
+- treine uma cabeça de velocidade/trajetória com peso menor;
+- alinhe por fase/DTW para o cálculo da perda auxiliar;
+- reporte as duas métricas: erro temporal estrito e erro com DTW.
+
+O E2T previu **velocidade 3D** em MI com referência da ME; isso é evidência de
+que a ideia é viável, não prova de replay temporal exato.
+
+## 3.6. Janelas de treino: ME onset × MI onset
+
+```text
+EXECUÇÃO (ME):
+  janela de 2 s em torno do onset do movimento
+  ex.: [ME_onset - 0,5 s, ME_onset + 1,5 s]
+  ou janelas deslizantes durante a ME
+
+MI:
+  janela de 2 s ancorada no INÍCIO DA MI (beep/cue), com offset
+  ex.: [MI_onset + 0,5 s, MI_onset + 2,5 s]
+```
+
+Não use “ME_onset + 2 s” para a MI: na MI não há movimento medido; o marcador
+correto é o início da MI. O offset de 0,5 s é para evitar o transiente
+visual/ERP do cue; não é regra universal, mas é comum em ERD/ERS.
+
+Se o alvo principal é a pose final, a janela de MI pode ser escolhida dentro da
+fase de MI (por exemplo, 0,5–2,5 s ou 2–4 s) com o mesmo label final; isso
+reduz a dependência de alinhamento temporal.
+
+## 3.7. Estímulo visual antes da MI
+
+O E2T usa uma **esfera branca** como guia e esferas laranja/arrows para
+trajetória; não usa vídeo real da mão. Para o seu paradigma:
+
+- troque o vídeo real por uma **animação esquemática** da trajetória;
+- fundo neutro/escuro, sem mão, sem textura, sem detalhes;
+- mostre o alvo final (esfera/caixa) e um ponto/cursor percorrendo o caminho;
+- durante a MI, tela neutra;
+- registre `video/animation_start` e `animation_end` no CSV;
+- mantenha o mesmo estímulo em todas as trials.
+
+O vídeo real pode ser um confound visual/atencional; a animação geométrica é
+mais controlada e ainda serve de priming.
+
 ## 4. Janela de 4 s: o que ela significa
 
 Sua ideia: `-0,5 s antes do cue` + `3,5 s depois do cue` = 4 s.
