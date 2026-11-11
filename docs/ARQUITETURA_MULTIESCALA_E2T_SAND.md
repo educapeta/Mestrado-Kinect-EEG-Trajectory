@@ -157,7 +157,7 @@ Stride sugerido:
 Para o piloto, eu faria:
 
 1. **Ramo principal de 2 s** para MI e online;
-2. **Ramo longo de 8 s apenas em execução**, como professor;
+2. **Ramo longo de 8 s em execução e MI** (com ME = MI = 8 s), como professor/offline;
 3. pose final direta + velocidade auxiliar;
 4. consistência multiescala com peso pequeno;
 5. nenhuma janela de 8 s atravessando ME→MI.
@@ -183,35 +183,38 @@ repouso 5 s + instrução 8 s + ready 2 s
 = 33 s por trial
 ```
 
-O que tem 8 s é cada fase (ME e MI), não o trial completo. A 500 Hz e 32
-canais, uma fase de 8 s tem:
+O que tem 8 s é cada fase (ME e MI), não o trial completo. O artigo descreve
+um sistema de **64 canais** (não 32). A 500 Hz e 64 canais, uma fase de 8 s tem:
 
 ```text
-8 s × 500 Hz × 32 canais = 128.000 valores
+8 s × 500 Hz × 64 canais = 256.000 valores
 ```
 
-Se contarmos ME + MI por trial: 256.000 valores por trial. Em 2.400 trials:
-614,4 milhões de valores, aproximadamente **2,46 GB em float32**, só das
+Se contarmos ME + MI por trial: 512.000 valores por trial. Em 2.400 trials:
+1.228,8 milhões de valores, aproximadamente **4,92 GB em float32**, só das
 fases analisadas.
 
-## 10. Se o nosso MI passar para 8 s
+Isso também corrige a conta que usava 32 canais: o E2T gravou com sistema de
+64 canais.
 
-O trial passa a ser:
+## 10. Se o nosso ME e MI passarem para 8 s cada
+
+Faz sentido igualar as duas fases. O trial passa a ser:
 
 ```text
-HOME 2 s + ME 4 s + animação 2 s + MI 8 s = 16 s
+HOME 2 s + ME 8 s + animação 2 s + MI 8 s = 20 s
 ```
 
 Com 125 trials por sessão:
 
 ```text
-125 × 16 s = 2.000 s = 33,3 min de protocolo ativo por sessão
+125 × 20 s = 2.500 s = 41,7 min de protocolo ativo por sessão
 ```
 
 Com 2 sessões (250 trials/participante):
 
 ```text
-250 × 16 s = 4.000 s = 66,7 min de protocolo ativo por participante
+250 × 20 s = 5.000 s = 83,3 min de protocolo ativo por participante
 ```
 
 O tempo de MI por participante será:
@@ -220,13 +223,15 @@ O tempo de MI por participante será:
 250 × 8 s = 2.000 s = 33,3 min de EEG de MI
 ```
 
+O tempo de ME será o mesmo: 33,3 min. O restante (HOME + animação) soma 16,7 min.
+
 Comparação de volume bruto de EEG (32 canais, 500 Hz, float32):
 
 | Desenho | Trials | Tempo/trial | Valores de EEG | Float32 |
 | --- | --- | --- | --- | --- |
-| 5 participantes × 250 | 1.250 | 16 s | 320 milhões | ~1,28 GB |
-| 6 participantes × 250 | 1.500 | 16 s | 384 milhões | ~1,54 GB |
-| E2T (fases ME+MI) | 2.400 | 16 s (2×8 s) | 614 milhões | ~2,46 GB |
+| 5 participantes × 250 | 1.250 | 20 s | 400 milhões | ~1,60 GB |
+| 6 participantes × 250 | 1.500 | 20 s | 480 milhões | ~1,92 GB |
+| E2T (64 canais, ME+MI) | 2.400 | 16 s (2×8 s) | 1.229 milhões | ~4,92 GB |
 
 Ou seja: **125 trials por sessão × 2 sessões = 250 trials/participante** já
 produz uma quantidade grande de **pontos de EEG**. O gargalo não é o número de
@@ -235,26 +240,63 @@ labels, a fadiga e a divisão treino/teste.
 
 ### O que muda na arquitetura
 
-Com MI de 8 s, finalmente é possível treinar o **ramo longo de 8 s também na
-MI**, sem atravessar a ME:
+Com ME e MI de 8 s, o ramo longo pode ser treinado nas duas condições sem
+atravessar fases:
 
 ```text
-janela longa: 8 s, começando no MI onset
+janela longa: 8 s de ME ou 8 s de MI, começando no respectivo onset
 janela curta: 2 s deslizante dentro desses 8 s
 ```
 
 Isso resolve o problema de vazamento que existia com MI de 4 s. Em
 contrapartida:
 
-- o trial fica 33% mais longo (16 s);
+- o trial passa para 20 s;
+- 125 trials/sessão = 41,7 min de protocolo ativo; com pausas e setup, a visita
+  fica em ~1h40–2h;
 - a fadiga aumenta;
-- 125 trials/sessão ainda é viável, mas o CEP precisa refletir a duração;
 - o ramo longo de 8 s continua **não causal para online** (só está disponível
   no fim da MI); o ramo curto de 2 s é o que controla em tempo real.
 
-## 11. O que ainda precisa ser decidido
+Se a fadiga for um problema, uma alternativa é **100 trials/sessão × 2
+sessões = 200/participante**, como no E2T:
 
-- manter MI de 4 s ou estender para 8 s? (com 8 s, o trial vira 16 s)
+```text
+200 × 20 s = 4.000 s = 66,7 min ativos
+200 × 8 s = 1.600 s = 26,7 min de MI
+```
+
+Ainda é bastante dado e reduz a carga.
+
+## 11. O E2T diz que a quantidade de dados foi suficiente?
+
+Não explicitamente. O artigo:
+
+- usa **12 participantes**;
+- **200 trials por participante** (50 por tarefa × 4 tarefas);
+- **2.400 trials** no total;
+- treina modelos **por sujeito**;
+- não apresenta cálculo de poder ou análise formal de suficiência amostral.
+
+Nas limitações, eles reconhecem que:
+
+- o treinamento por sujeito limita a generalização entre sujeitos;
+- não existe dataset público com EEG + trajetória 3D contínua em MI, então
+  treinaram e avaliaram apenas no próprio dataset;
+- assumem que a trajetória imaginada espelha a executada, e reconhecem o viés
+  dessa suposição;
+- a MI tem SNR menor que a ME.
+
+Ou seja: **2.400 trials foram suficientes para o resultado dentro do desenho
+deles, com 12 sujeitos e treino por sujeito, mas eles não provam suficiência
+geral**. O nosso 1.250–1.500 é menor em número de sujeitos; por outro lado,
+temos mais trials por participante (250 vs 200). Para um piloto é razoável;
+para generalização entre sujeitos, é limitado.
+
+## 12. O que ainda precisa ser decidido
+
+- ME = MI = 8 s (trial de 20 s) ou manter ME 4 s + MI 8 s?
+- 125 trials/sessão × 2 ou 100 × 2?
 - contexto longo em 100 Hz ou 500 Hz?
 - pesos das perdas de pose, velocidade e consistência;
 - usar destilação do ramo longo para o curto ou treinar separado;
