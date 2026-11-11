@@ -10135,3 +10135,42 @@ Resultados/Conclusao; corrigir refs antigas sem chave no bib (hall etc.);
 compilar em Overleaf/MiKTeX (LaTeX nao instalado nesta maquina).
 SUITE DO PROJETO DE AQUISICAO: 83/83 OK (ultima execucao).
 
+
+
+================================================================================
+ITEM 185 (11/11/2026) - PARADIGMA 4 CLASSES + CEP + TRACKING KINECT x AUX
+================================================================================
+PARADIGMA (C:\mestradopy\eeg_motor_paradigm.py, backup .bak_20261110):
+  - PROTOCOL_VERSION 2.0-pose; 4 classes (garrafa+direita/esquerda,
+    bola+direita/esquerda); 2 sessoes x 25 trials/classe = 100/sessao =
+    200/participante; trial 20 s (HOME 2 + ME 8 + animacao 2 + MI 8);
+    4 blocos de 25/sessao, pausa 240 s; animacao esquematica no lugar do
+    video; --sessao {1,2}; metadados JSON com planejamento.
+  - testes: py_compile OK; generator 1 bloco/2 trials OK; validar_planejamento
+    25x4=100 e 100x2=200; testes antigos de 6 classes/12 s falham por design.
+CEP (pasta Comite Etica intocada; saida em Tese_Latex_Agente/CEP):
+  - NAO ha CAAE/parecer no dossie de maio/2026; dossie e' de submissao.
+  - CEPSH/UFSC: mudanca substancial nao e' emenda; recomendacao = novo projeto
+    vinculado ao CAAE anterior (se existir). Minuta de emenda antiga superada.
+  - prazo: submeter ate 19/11/2026 (22/11 e' domingo; 20/11 feriado) para a
+    reuniao de 07/12/2026; depois so' fevereiro/2027; tramitacao 40 dias.
+  - documentos: ANALISE_CEP_ATUAL.md, SOLICITACAO_MUDANCA_CEP.md,
+    TCLE_ADENDO.md, CHECKLIST_SUBMISSAO_22NOV.md,
+    RESUMO_EXECUTIVO_PARA_ORIENTADOR.md, RELATORIO_DIA_20261111.md.
+TRACKING (teste real 20 s, 551 frames, FPS 12.8; ferramentas novas
+tools/compara_tracking_mao.py e tools/metricas_tracking_mao.py):
+  - Kinect depth: cobertura 99.6/100% dos 21 landmarks, dorso 10.3 mm jitter,
+    5% saltos >50 mm; reprojecao ida-e-volta ~1.8 px (so' consistencia).
+  - Multi-view: reprojecao 3-5 px, mas cobertura 18.5/63%; 3D depth projetado
+    na auxiliar erra ~300-316 px -> calibracao/extrinseca ou correspondencia
+    inconsistente; multi-view NAO comparavel ate recalibrar (alvo 10-20 px).
+  - decisao provisoria: Kinect depth primario; multi-view experimental.
+  - suavizacao: SavGol offline reduz jitter 52-68% mas usa futuro; online usar
+    fixed-lag (atraso ~234 ms) ou causal/EMA; E2T offline nao e' online.
+  - relatorio/CSV/PNG em Tese_Latex_Agente/Tracking/.
+PLANO: Tese_Latex_Agente/Plano_Aquisicao/PLANO_ARRANQUE.md.
+NOTA ETICA: nao coletar dados humanos antes da aprovacao; o CEP nao menciona
+piloto tecnico; qualquer auto-teste deve ser avaliado com o CEP/orientador.
+PROXIMO: confirmar CAAE, decidir via, converter docs para PDF/DOCX, recalibrar
+stereo na distancia de trabalho, atualizar testes antigos e submeter ate 19/11.
+

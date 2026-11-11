@@ -4,27 +4,40 @@ Programa 1 (gravacao offline). Um UNICO processo integra:
 
   1. Pipeline g.Pype: GNautilus 32 canais @ 500 Hz (ou Generator sintetico)
      -> Bandpass 1-30 Hz -> Notch 50/60 Hz -> RecordingMuxer -> CSV.
-  2. Paradigma Qt (thread principal), protocolo final da dissertacao:
+  2. Paradigma Qt (thread principal), protocolo 2.0-pose:
      [PREPARACAO ~10 min: EEG, calibracao do Kinect e teste de sinal; ESPACO
-      inicia] -> [INSTRUCAO: slides + demo dos simbolos + --trials-teste trials de PRATICA (padrao 6; 789 + pratica=1; --sem-instrucoes pula)] -> [BASELINE 5 min: TELA DE INSTRUCAO (ESPAÇO inicia) + 2 min olhos FECHADOS, 2 min olhos ABERTOS,
-      1 min repouso ativo; BIP no INICIO e no FIM de cada etapa] -> calibracao de origem (10 s) -> contagem ->
-      [5 BLOCOS de 50 trials com 2 min de pausa entre eles] -> encerramento.
-     Cada trial tem 12 s:
-       REPOUSO 2 s (mao no home + ponto de fixacao)
-       CUE + ME 4 s (imagem do objeto - garrafa/bola/caneta - + simbolo da
-         MAO esquerda/direita; o participante EXECUTA alcance/preensao)
-       PAUSA + VIDEO 2 s (video do proprio movimento em camera lenta 0,5x,
-         com a trajetoria 3D desenhada sobre o quadro - priming visual)
-       MI 4 s (BIPE sonoro no onset + tela neutra "AGORA IMAGINE"; --mi-desenho pulsa o texto e --mi-auto-onset inicia o timer no onset do movimento -- ambos opt-in)
-     Condicoes: 3 objetos x 2 maos = 6, balanceadas ao longo da sessao.
+      inicia] -> [INSTRUCAO: slides + demo dos simbolos + --trials-teste
+      trials de PRATICA (padrao 8; 789 + pratica=1; --sem-instrucoes pula)] ->
+      [BASELINE 5 min: TELA DE INSTRUCAO (ESPAÇO inicia) + 2 min olhos
+      FECHADOS, 2 min olhos ABERTOS, 1 min repouso ativo; BIP no INICIO e no
+      FIM de cada etapa] -> calibracao de origem (10 s) -> contagem ->
+      [4 BLOCOS de 25 trials; pausa de 3-5 min entre eles] -> encerramento.
+     SESSAO: 100 trials = 25 por classe x 4 classes. Cada participante faz
+     2 sessoes (`--sessao {1,2}`) = 200 trials/participante; a sessao vai no
+     JSON de metadados e no nome dos arquivos (gravacao_MEMI_<P>_s<N>_...).
+     Cada trial tem 20 s:
+       REPOUSO/HOME 2 s (mao no home + ponto de fixacao)
+       CUE + ME 8 s (garrafa a DIREITA ou bola a ESQUERDA da mesa + simbolo
+         da MAO esquerda/direita; o participante EXECUTA alcance/preensao/
+         hold/retorno)
+       ANIMACAO 2 s (animacao ESQUEMATICA da trajetoria: mesa, home, alvo e
+         ponto em movimento; fundo neutro, SEM video real da mao)
+       MI 8 s (BIPE sonoro no onset + tela neutra "AGORA IMAGINE";
+         --mi-desenho pulsa o texto e --mi-auto-onset inicia o timer no onset
+         do movimento -- ambos opt-in)
+     Condicoes: 2 objetos x 2 maos = 4 (811 garrafa+direita, 812
+     garrafa+esquerda, 813 bola+direita, 814 bola+esquerda). `caneta` saiu
+     das condicoes ativas (815/816 continuam reservados como legado).
   3. Thread de tracking: reutiliza KinectHandTracker/CameraAlignment de
      kinect_imu_groundtruth (triangulacao stereo MediaPipe->3D + cadeia de
      fallback) e o ImuReceiver de imu.py (ESP32, UDP 4210),
      publicando no estado thread-safe, a cada frame: a posicao 3D da mao
      (landmark 9 = centro da palma, metros no frame do Kinect), roll/pitch/yaw
      do ESP32, a geometria do BRACO (ombro/cotovelo/punho + angulos, com
-     cinematica inversa de elos rigidos), a ORIENTACAO DA PALMA e o CLIPE do
-     movimento em camera lenta para a fase de priming.
+     cinematica inversa de elos rigidos), a ORIENTACAO DA PALMA e,
+     opcionalmente (--video-real), o CLIPE do movimento em camera lenta.
+     No protocolo 2.0-pose a pausa pos-ME NAO usa video real: mostra uma
+     animacao esquematica da trajetoria (794), sem imagem da mao.
 
 O CSV final tem: Time, EEG_Ch01..ChNN, KT_x_m, KT_y_m, KT_z_m,
 IMU_L_* (11 colunas) + IMU_R_* (11 colunas) + IMU_hand, KTT_valid,
@@ -67,17 +80,18 @@ Codigos de marcador (convensao BCI Competition IV 2a estendida):
   32766 = inicio da sessao           768 = inicio do trial (repouso/home)
   32765 = fim da sessao              769 = cue MAO ESQUERDA
   276   = baseline olhos abertos     770 = cue MAO DIREITA
-  277   = baseline olhos fechados    811..816 = condicoes (objeto x mao):
+  277   = baseline olhos fechados    811..814 = condicoes (objeto x mao):
   784   = baseline repouso ativo        811 garrafa+direita, 812 garrafa+esq,
-  500/501 = inicio/fim da origem         813 bola+direita, 814 bola+esquerda,
-  778/779 = inicio/fim da ME             815 caneta+direita, 816 caneta+esq
+  500/501 = inicio/fim da origem         813 bola+direita, 814 bola+esquerda
+  778/779 = inicio/fim da ME             815/816 = LEGADO (caneta; nao sorteados)
   780/781 = inicio/fim da MI
   790/791 = inicio/fim do bloco      792/793 = inicio/fim da PAUSA ENTRE
                                      BLOCOS (contagem + espera do ESPACO)
-  794   = inicio do video em 0,5x     796 = TRIAL CANCELADO pelo experimentador
-   789 = trial de PRATICA (instrucoes; TODOS os eventos da pratica levam pratica=1 no JSON)
+  794   = inicio da ANIMACAO esquematica (2 s; nome legado: video em 0,5x)
+  796 = TRIAL CANCELADO pelo experimentador
+  789 = trial de PRATICA (instrucoes; TODOS os eventos da pratica levam pratica=1 no JSON)
 
-Os codigos de mao (769/770), ME (778) e condicao (811-816) sao emitidos com
+Os codigos de mao (769/770), ME (778) e condicao (811-814) sao emitidos com
 offsets de 50/100 ms no inicio do cue para nao colidirem na coluna Marker
 (que guarda um codigo por amostra). Per-trial metadata (objeto, mao, bloco)
 fica no JSON de eventos.
@@ -102,11 +116,13 @@ CONTROLE DA SESSAO (o que fazer quando algo da errado no meio do trial)
 
 Uso tipico (g.Nautilus real, sempre com o .venv do projeto e no terminal do
 VS Code - o g.Pype exige IDE suportada):
-    .venv\\Scripts\\python.exe eeg_motor_paradigm.py --source gnautilus
+    .venv\\Scripts\\python.exe eeg_motor_paradigm.py --source gnautilus --sessao 1
     .venv\\Scripts\\python.exe eeg_motor_paradigm.py --impedancia  (checar antes)
 
-Teste rapido sem hardware:
-    python eeg_motor_paradigm.py --source generator --blocos 1 --trials-por-bloco 2
+Teste rapido sem hardware (1 bloco, 2 trials; a sessao vai no nome/JSON):
+    python eeg_motor_paradigm.py --source generator --sessao 2 --blocos 1 \\
+        --trials-por-bloco 2 --sem-preparacao --sem-instrucoes --sem-kinect \\
+        --sem-janela-tracking --sem-painel-impedancia --sem-questionario
     python eeg_motor_paradigm.py --source generator --sem-kinect
 """
 from __future__ import annotations
@@ -182,26 +198,34 @@ MOTION_HZ = 30.0
 MOTION_IN_EEG_CSV = False
 #: Versao do protocolo/arquivo. Gravada no JSON da sessao: se o protocolo
 #: mudar, as sessoes antigas continuam identificaveis.
-PROTOCOL_VERSION = "1.0"
-TRIALS_PER_CLASS = 16      # (legado) trials por classe do protocolo antigo
+PROTOCOL_VERSION = "2.0-pose"
+TRIALS_PER_CLASS = 25      # trials por classe EM CADA SESSAO (protocolo 2.0-pose)
+SESSIONS = 2               # sessoes por participante (`--sessao {1,2}`)
 
-# --- Protocolo final (metodologia da dissertacao) ---------------------------
-# Cada trial tem 12 s:
-#   [REPOUSO 2 s: mao na posicao inicial (home) + ponto de fixacao]
-#   [CUE + ME 4 s: imagem do objeto (garrafa/bola/caneta) + lado da mao;
-#    o participante EXECUTA alcance/preensao -> Kinect grava a trajetoria]
-#   [PAUSA + VIDEO 2 s: video do proprio movimento em camera lenta (0,5x)]
-#   [MI 4 s: IMAGINA o mesmo movimento; BIPE no onset + tela "AGORA IMAGINE";
+# --- Protocolo 2.0-pose -----------------------------------------------------
+# Cada trial tem 20 s:
+#   [REPOUSO/HOME 2 s: mao na posicao inicial (home) + ponto de fixacao]
+#   [CUE + ME 8 s: objeto (garrafa a direita / bola a esquerda da mesa) +
+#    lado da mao; o participante EXECUTA alcance/preensao/hold/retorno]
+#   [ANIMACAO 2 s: animacao ESQUEMATICA da trajetoria (mesa/home/alvo/ponto),
+#    fundo neutro; SUBSTITUI o video real da mao]
+#   [MI 8 s: IMAGINA o mesmo movimento; BIPE no onset + tela neutra;
 #    apenas EEG e' registrado]
+# Sessao = 4 blocos x 25 trials = 100 trials (25 por classe x 4 classes);
+# participante = 2 sessoes x 100 = 200 trials.
 HOME_SEC = 2.0
-CUE_ME_SEC = 4.0
-PAUSE_VIDEO_SEC = 2.0
-MI_SEC = 4.0
-TRIAL_SEC = HOME_SEC + CUE_ME_SEC + PAUSE_VIDEO_SEC + MI_SEC      # 12 s
+CUE_ME_SEC = 8.0
+ANIM_SEC = 2.0
+PAUSE_VIDEO_SEC = ANIM_SEC        # nome legado (--video-sec) = animacao
+MI_SEC = 8.0
+TRIAL_SEC = HOME_SEC + CUE_ME_SEC + ANIM_SEC + MI_SEC             # 20 s
+ANIM_FPS = 30.0                   # repintura da animacao esquematica
 
-BLOCKS = 5                        # blocos por sessao
-TRIALS_PER_BLOCK = 50             # trials por bloco (10 min por bloco)
-BLOCK_PAUSE_SEC = 120.0           # pausa entre blocos (contagem + ESPACO)
+BLOCKS = 4                        # blocos por sessao
+TRIALS_PER_BLOCK = 25             # trials por bloco (100 trials/sessao)
+BLOCK_PAUSE_SEC = 240.0           # pausa entre blocos (3-5 min: 180-300 s)
+BLOCK_PAUSE_MIN_SEC = 180.0       # limite inferior documentado (3 min)
+BLOCK_PAUSE_MAX_SEC = 300.0       # limite superior documentado (5 min)
 #: Pausa entre blocos (relato de 21/10/2026): a contagem e' so' o tempo de
 #: DESCANSO do participante. Ao zerar -- ou quando o ESPACO a encurta -- a tela
 #: PARA em "PRESSIONE ESPACO PARA CONTINUAR" e o proximo bloco so' comeca com um
@@ -219,13 +243,13 @@ BASELINE_EYES_OPEN_SEC = 120.0    # baseline: 2 min olhos abertos
 BASELINE_EYES_CLOSED_SEC = 120.0  # baseline: 2 min olhos fechados
 BASELINE_REST_SEC = 60.0          # baseline: 1 min repouso ativo
 
-SLOWMO_SPEED = 0.5                # camera lenta do video de priming
+SLOWMO_SPEED = 0.5                # camera lenta (LEGADO: so' com --video-real)
 SLOWMO_CAPTURE_FPS = 30.0         # taxa de captura dos quadros do video
 SLOWMO_BUFFER_SEC = 4.0           # buffer circular de quadros (s) - PRECISA
                                   # cobrir: (ate' o fim da ME) + SLOWMO_SPAN_SEC
                                   # quando o clipe e' ancorado no ONSET. Com o
                                   # onset ~0,3-1,5 s apos a cue e a pausa
-                                  # comecando a 4 s, [onset, onset+1 s] cabe em
+                                  # comecando a 8 s, [onset, onset+1 s] cabe em
                                   # [pedido-4 s, pedido]. RAM: 4 s x 30 fps x
                                   # 640x360x3 B ~ 83 MB.
 SLOWMO_SPAN_SEC = 1.0             # trecho do movimento mostrado (s reais)
@@ -264,8 +288,19 @@ MOVE_ONSET_SMOOTH = 3             # mediana movel (amostras) contra jitter
 #: Landmark do MediaPipe Hands usado como posicao da mao (9 = centro da palma,
 #: conforme a metodologia de aquisicao; 0 = pulso).
 HAND_TRACK_LANDMARK = 9
-OBJECTS = ("garrafa", "bola", "caneta")
+#: Objetos ATIVOS do protocolo 2.0-pose (2 objetos x 2 maos = 4 classes).
+#: `caneta` saiu do sorteio (815/816 ficam reservados como legado).
+OBJECTS = ("garrafa", "bola")
+#: Posicao FISICA dos objetos na mesa (nao muda com a mao que executa).
+OBJECT_SIDE = {"garrafa": "direita", "bola": "esquerda"}
 HANDS = ("esquerda", "direita")
+#: As 4 classes na MESMA ordem dos codigos de condicao 811-814 (direita
+#: antes de esquerda): garrafa+direita, garrafa+esquerda, bola+direita,
+#: bola+esquerda.
+CONDITIONS = tuple((obj, mao) for obj in OBJECTS
+                   for mao in ("direita", "esquerda"))
+TRIALS_PER_SESSION = TRIALS_PER_CLASS * len(CONDITIONS)      # 100
+TRIALS_PER_PARTICIPANT = TRIALS_PER_SESSION * SESSIONS       # 200
 
 REST_EYES_OPEN = BASELINE_EYES_OPEN_SEC
 REST_EYES_CLOSED = BASELINE_EYES_CLOSED_SEC
@@ -320,7 +355,12 @@ CODE_BLOCK_START = 790
 CODE_BLOCK_END = 791
 CODE_PAUSE_START = 792
 CODE_PAUSE_END = 793
-CODE_SLOWMO_START = 794
+#: Inicio da ANIMACAO ESQUEMATICA da trajetoria (2 s) que substitui o video
+#: real no protocolo 2.0-pose. Mantem o codigo 794 do protocolo anterior para
+#: que as analises que recortam [794, 780) continuem funcionando.
+CODE_ANIM_START = 794
+#: Nome legado do MESMO codigo (video em camera lenta, --video-real).
+CODE_SLOWMO_START = CODE_ANIM_START
 #: INICIO DO MOVIMENTO (onset) detectado pelo Kinect durante a ME. Usado para
 #: ancorar a janela de EEG 0,5 s ANTES do movimento (planejamento motor) e o
 #: clipe do priming no inicio real do movimento.
@@ -349,11 +389,16 @@ CODE_LINK_OK = 898
 CODE_HAND = {"esquerda": 769, "direita": 770}
 #: Codigo da CONDICAO (objeto x mao), emitido ~100 ms depois do codigo da mao
 #: para nao colidir na coluna Marker (um codigo por amostra).
+#: Protocolo 2.0-pose: 4 classes (2 objetos x 2 maos), codigos 811-814.
 CODE_CONDITION = {
     ("garrafa", "direita"): 811,
     ("garrafa", "esquerda"): 812,
     ("bola", "direita"): 813,
     ("bola", "esquerda"): 814,
+}
+#: Mapeamento LEGADO de `caneta` (nao entra no sorteio nem em OBJECTS). Fica
+#: registrado para ler sessoes antigas e para nao reutilizar 815/816.
+CODE_CONDITION_LEGACY = {
     ("caneta", "direita"): 815,
     ("caneta", "esquerda"): 816,
 }
@@ -372,23 +417,23 @@ CODE_NAMES = {
     CODE_TRIAL: "inicio do trial (repouso/home)",
     CODE_ORIGIN_START: "inicio calibracao de origem",
     CODE_ORIGIN_END: "fim calibracao de origem",
-    CODE_ME_START: "inicio fase ME (execucao)",
-    CODE_ME_END: "fim ME (pausa + video)",
-    CODE_MI_START: "inicio fase MI (imaginacao)",
+    CODE_ME_START: "inicio fase ME (execucao, 8 s)",
+    CODE_ME_END: "fim ME (inicio da animacao esquematica)",
+    CODE_MI_START: "inicio fase MI (imaginacao, 8 s)",
     CODE_MI_END: "fim MI (fim do trial)",
     CODE_BLOCK_START: "inicio do bloco",
     CODE_BLOCK_END: "fim do bloco",
     CODE_PAUSE_START: "inicio pausa entre blocos",
     CODE_PAUSE_END: "fim pausa entre blocos",
-    CODE_SLOWMO_START: "inicio do video em camera lenta",
+    CODE_ANIM_START: "inicio da animacao esquematica (2 s; 794 legado do video)",
     769: "cue mao esquerda",
     770: "cue mao direita",
     811: "condicao garrafa + mao direita",
     812: "condicao garrafa + mao esquerda",
     813: "condicao bola + mao direita",
     814: "condicao bola + mao esquerda",
-    815: "condicao caneta + mao direita",
-    816: "condicao caneta + mao esquerda",
+    815: "LEGADO condicao caneta + mao direita (nao sorteada)",
+    816: "LEGADO condicao caneta + mao esquerda (nao sorteada)",
 }
 
 # Estados de fase compartilhados com a thread de tracking.
@@ -396,7 +441,8 @@ PHASE_IDLE = ""
 PHASE_ORIGIN = "origem"
 PHASE_HOME = "home"
 PHASE_ME = "ME"
-PHASE_VIDEO = "video"
+PHASE_ANIM = "animacao"     # animacao esquematica (protocolo 2.0-pose)
+PHASE_VIDEO = "video"       # LEGADO: video real em camera lenta (--video-real)
 PHASE_MI = "MI"
 
 CUE_LABELS = {
@@ -405,6 +451,50 @@ CUE_LABELS = {
     "circulo": "AMBAS as maos",
     "nada": "",
 }
+
+
+def planejamento_protocolo():
+    """Resumo numerico do protocolo 2.0-pose (autoteste e metadados)."""
+    return {
+        "protocolo_versao": PROTOCOL_VERSION,
+        "classes": len(CONDITIONS),
+        "objetos": list(OBJECTS),
+        "maos": list(HANDS),
+        "trials_por_classe_por_sessao": TRIALS_PER_CLASS,
+        "trials_por_sessao": TRIALS_PER_SESSION,
+        "sessoes_por_participante": SESSIONS,
+        "trials_por_participante": TRIALS_PER_PARTICIPANT,
+        "blocos_por_sessao": BLOCKS,
+        "trials_por_bloco": TRIALS_PER_BLOCK,
+        "trial_sec": TRIAL_SEC,
+        "home_sec": HOME_SEC,
+        "me_sec": CUE_ME_SEC,
+        "animacao_sec": ANIM_SEC,
+        "mi_sec": MI_SEC,
+        "pausa_bloco_sec": BLOCK_PAUSE_SEC,
+    }
+
+
+def validar_planejamento():
+    """Confere as somas do protocolo; devolve o resumo ou levanta ValueError.
+
+    Autoteste: 25 trials/classe x 4 classes = 100/sessao; 4 blocos x 25 = 100;
+    2 sessoes x 100 = 200/participante; trial de 20 s.
+    """
+    plano = planejamento_protocolo()
+    if plano["trials_por_classe_por_sessao"] * plano["classes"] \
+            != plano["trials_por_sessao"]:
+        raise ValueError(f"trials por sessao inconsistente: {plano}")
+    if plano["blocos_por_sessao"] * plano["trials_por_bloco"] \
+            != plano["trials_por_sessao"]:
+        raise ValueError(f"blocos x trials/bloco inconsistente: {plano}")
+    if plano["trials_por_sessao"] * plano["sessoes_por_participante"] \
+            != plano["trials_por_participante"]:
+        raise ValueError(f"total por participante inconsistente: {plano}")
+    if abs(plano["home_sec"] + plano["me_sec"] + plano["animacao_sec"]
+           + plano["mi_sec"] - plano["trial_sec"]) > 1e-9:
+        raise ValueError(f"duracao do trial inconsistente: {plano}")
+    return plano
 
 # ---------------------------------------------------------------------------
 # Colunas de movimento anexadas ao CSV (ordem = ordem no CSV).
@@ -1479,11 +1569,12 @@ class TrackingThread(threading.Thread):
             if phase in (PHASE_HOME, PHASE_ORIGIN) and self.onset_detector:
                 self.onset_detector.reset()     # nova trial: zera a deteccao
                 self.onset_time = None
-            if phase == PHASE_VIDEO and self.onset_detector:
+            if phase in (PHASE_VIDEO, PHASE_ANIM) and self.onset_detector:
                 # Fim da ME: guarda a trajetoria da ME (o clipe do priming vai
                 # ser ancorado NELA, com a serie inteira -- ver `_clip_window`)
                 # e REARMA o detector para a MI (--mi-auto-onset), sem mexer no
-                # onset_time (ele continua valendo como fallback).
+                # onset_time (ele continua valendo como fallback). Vale tambem
+                # na animacao esquematica (sem clipe, mas com o rearme da MI).
                 self._me_track = list(self.onset_detector.track)
                 self.onset_detector.reset()
             onset_ativo = phase == PHASE_ME or (
@@ -2049,7 +2140,7 @@ class TrackingThread(threading.Thread):
         antigo, avisado no console).
 
         O fim da janela e' LIMITADO ao pedido (`request_time`): se o movimento
-        comecou muito tarde (ex.: 3,6 s apos a cue, com a ME de 4 s), os quadros
+        comecou muito tarde (ex.: 7,6 s apos a cue, com a ME de 8 s), os quadros
         do fim ainda nao existem no buffer -- o clipe sai mais curto (o playback
         estica, ver `_video_tick`) em vez de ficar com a cauda vazia.
         """
@@ -2189,7 +2280,8 @@ class TrackingThread(threading.Thread):
         label = {"": "aguardando", PHASE_ORIGIN: "CALIBRACAO ORIGEM",
                  PHASE_HOME: "repouso (home)",
                  PHASE_ME: "fase ME (execucao)",
-                 PHASE_VIDEO: "pausa + video 0,5x",
+                 PHASE_ANIM: "animacao esquematica",
+                 PHASE_VIDEO: "video real 0,5x (legado)",
                  PHASE_MI: "fase MI (imaginacao)"}[phase]
         if self.state.cue:
             label += f" | {self.state.cue}"
@@ -2580,18 +2672,24 @@ class _StimulusCanvas(QWidget):
 
     Modos:
       home      -> ponto de fixacao + marca de "home" (mao na posicao inicial);
-      cue       -> fixacao + OBJETO alvo (garrafa/bola/caneta) + simbolo da
-                   MAO indicada (esquerda/direita) ao lado do objeto;
-      video     -> quadro do video do movimento em camera lenta (0,5x);
+      cue       -> fixacao + OBJETO alvo (garrafa/bola) + simbolo da MAO
+                   indicada (esquerda/direita) ao lado do objeto;
+      anim      -> animacao ESQUEMATICA da trajetoria (mesa, home, alvo e
+                   ponto em movimento), fundo neutro e SEM video real;
+      video     -> LEGADO: quadro do video do movimento em camera lenta
+                   (0,5x; so' com --video-real);
       message   -> texto grande (instrucoes, pausas, baseline);
-      aviso     -> aviso centralizado de video indisponivel (sem clipe do
-                   Kinect na pausa de video);
+      aviso     -> aviso centralizado de video indisponivel (legado);
       countdown -> numero da contagem regressiva.
     Teclas: ESPACO avisa o controlador (pular pausa) e ESC encerra a sessao.
     """
 
     WHITE = QColor(245, 245, 245)
     DIM = QColor(120, 120, 120)
+    NEUTRAL = QColor(26, 26, 29)      # fundo neutro da animacao/MI
+    TABLE = QColor(58, 58, 64)        # contorno da mesa na animacao
+    TARGET = QColor(255, 210, 90)     # alvo da animacao
+    PATH = QColor(135, 135, 143)      # trajetoria planejada (pontilhada)
 
     def __init__(self):
         super().__init__()
@@ -2639,6 +2737,27 @@ class _StimulusCanvas(QWidget):
         if getattr(self, "_pulsante", False):
             self.update()
 
+    def show_animation(self, object_name, hand, duration=ANIM_SEC):
+        """ANIMACAO ESQUEMATICA da trajetoria (protocolo 2.0-pose).
+
+        Substitui o video real da mao na pausa pos-ME: fundo neutro, mesa,
+        posicao `home`, alvo (garrafa a direita / bola a esquerda) e um ponto
+        que percorre a trajetoria. `hand` so' rotula a mao que executa; a
+        posicao do objeto NAO muda com o lado da mao.
+        """
+        self.mode = "anim"
+        self.object_name = object_name
+        self.hand = hand
+        self._anim_t0 = time.monotonic()
+        self._anim_dur = max(0.0, float(duration))
+        self.image = None
+        self.update()
+
+    def anim_tick(self):
+        """Repinta a animacao (chamada pelo controlador a ~ANIM_FPS)."""
+        if self.mode == "anim":
+            self.update()
+
     def show_message(self, text):
         self.mode = "message"
         self.text = text
@@ -2672,10 +2791,17 @@ class _StimulusCanvas(QWidget):
     def paintEvent(self, _event):
         painter = QPainter(self)
         painter.setRenderHint(QPainter.Antialiasing, True)
-        painter.fillRect(self.rect(), Qt.black)
+        # Protocolo 2.0-pose: animacao e MI usam fundo NEUTRO (cinza escuro),
+        # sem imagem da mao; os demais modos mantem o fundo preto.
+        painter.fillRect(self.rect(),
+                         self.NEUTRAL if self.mode in ("anim", "mi")
+                         else Qt.black)
         width, height = self.width(), self.height()
         if self.mode == "video" and self.image is not None:
             self._paint_image(painter, width, height)
+            return
+        if self.mode == "anim":
+            self._paint_animation(painter, width, height)
             return
         if self.mode == "cue":
             if getattr(self, "_pulsante", False):
@@ -2738,8 +2864,107 @@ class _StimulusCanvas(QWidget):
                                 radius * 4.4, radius * 1.4),
                          Qt.AlignHCenter, "home")
 
+    @staticmethod
+    def _bezier_point(p0, p1, p2, t):
+        """Ponto da Bezier quadratica p0 -> p1 (controle) -> p2 em [0, 1]."""
+        u = 1.0 - float(t)
+        return QPointF(u * u * p0.x() + 2.0 * u * t * p1.x() + t * t * p2.x(),
+                       u * u * p0.y() + 2.0 * u * t * p1.y() + t * t * p2.y())
+
+    def _paint_animation(self, painter, width, height):
+        """Animacao esquematica da trajetoria (substitui o video real).
+
+        Desenha uma mesa vista de cima, a posicao `home` (mao apoiada), o alvo
+        na posicao FISICA do objeto (garrafa a direita, bola a esquerda) e um
+        ponto que percorre a trajetoria planejada. Fundo neutro, sem imagem da
+        mao e sem video: e' um esquema, nao um feedback do movimento real.
+        """
+        lado = OBJECT_SIDE.get(self.object_name, "direita")
+        home = QPointF(width * 0.5, height * 0.80)
+        alvo = QPointF(width * (0.76 if lado == "direita" else 0.24),
+                       height * 0.38)
+        esp = max(2.0, min(width, height) * 0.004)
+        mesa = QRectF(width * 0.06, height * 0.20, width * 0.88, height * 0.72)
+        painter.setPen(QPen(self.TABLE, esp))
+        painter.setBrush(Qt.NoBrush)
+        painter.drawRoundedRect(mesa, 18, 18)
+
+        desvio = width * (0.10 if lado == "direita" else -0.10)
+        controle = QPointF((home.x() + alvo.x()) * 0.5 + desvio,
+                           min(home.y(), alvo.y()) - height * 0.05)
+
+        # trajetoria planejada (pontilhada): fica visivel desde o inicio.
+        caminho = QPainterPath(home)
+        caminho.quadTo(controle, alvo)
+        painter.setPen(QPen(self.PATH, esp * 1.2, Qt.DashLine, Qt.RoundCap))
+        painter.setBrush(Qt.NoBrush)
+        painter.drawPath(caminho)
+
+        # progresso CRONOMETRADO (independe da taxa de repintura).
+        duracao = max(1e-3, float(getattr(self, "_anim_dur", ANIM_SEC)))
+        decorrido = time.monotonic() - getattr(self, "_anim_t0",
+                                               time.monotonic())
+        t = min(1.0, max(0.0, decorrido / duracao))
+        suave = t * t * (3.0 - 2.0 * t)          # ease-in/ease-out
+
+        # trecho ja percorrido (linha cheia) + ponto na posicao atual.
+        passos = max(2, int(80 * suave))
+        parcial = QPainterPath(home)
+        for k in range(1, passos + 1):
+            parcial.lineTo(self._bezier_point(home, controle, alvo,
+                                              suave * k / passos))
+        painter.setPen(QPen(self.WHITE, esp * 1.8, Qt.SolidLine, Qt.RoundCap))
+        painter.drawPath(parcial)
+        ponto = self._bezier_point(home, controle, alvo, suave)
+        raio_ponto = max(8.0, min(width, height) * 0.014)
+        painter.setPen(QPen(QColor(20, 20, 22), esp))
+        painter.setBrush(self.WHITE)
+        painter.drawEllipse(ponto, raio_ponto, raio_ponto)
+        painter.setBrush(Qt.NoBrush)
+
+        # alvo: anel + objeto na posicao fisica da mesa.
+        raio = max(24.0, min(width, height) * 0.05)
+        painter.setPen(QPen(self.TARGET, esp * 1.4))
+        painter.drawEllipse(alvo, raio, raio)
+        caixa = QRectF(alvo.x() - raio * 0.62, alvo.y() - raio * 0.62,
+                       raio * 1.24, raio * 1.24)
+        painter.setPen(QPen(self.WHITE, max(4.0, esp * 2.0)))
+        if self.object_name == "garrafa":
+            self._draw_bottle(painter, caixa)
+        else:
+            self._draw_ball(painter, caixa)
+
+        # home (ponto de partida).
+        raio_home = max(16.0, min(width, height) * 0.028)
+        painter.setPen(QPen(self.DIM, esp * 1.2))
+        painter.drawEllipse(home, raio_home, raio_home)
+
+        # rotulos discretos (sem simbolo de mao: a animacao e' da TRAJETORIA).
+        fonte = QFont("Arial", max(12, int(min(width, height) * 0.026)),
+                      QFont.Bold)
+        painter.setFont(fonte)
+        painter.setPen(QPen(self.WHITE))
+        mao = "DIREITA" if self.hand == "direita" else "ESQUERDA"
+        painter.drawText(
+            QRectF(home.x() - width * 0.20, home.y() + raio_home * 1.4,
+                   width * 0.40, height * 0.08),
+            Qt.AlignHCenter | Qt.AlignTop, f"MAO {mao} (home)")
+        painter.drawText(
+            QRectF(alvo.x() - width * 0.22, alvo.y() - raio * 2.4,
+                   width * 0.44, height * 0.08),
+            Qt.AlignHCenter | Qt.AlignBottom,
+            f"{str(self.object_name).upper()} ({lado.upper()})")
+        painter.setPen(QPen(self.DIM))
+        painter.setFont(QFont("Arial",
+                              max(10, int(fonte.pointSize() * 0.72)),
+                              QFont.Bold))
+        painter.drawText(QRectF(width * 0.10, height * 0.045,
+                                width * 0.80, height * 0.07),
+                         Qt.AlignHCenter | Qt.AlignVCenter,
+                         "ANIMACAO ESQUEMATICA DA TRAJETORIA")
+
     def _paint_object(self, painter, width, height):
-        """Objeto alvo, grande e centralizado (garrafa / bola / caneta)."""
+        """Objeto alvo, grande e centralizado (garrafa / bola; caneta=legado)."""
         # mesma caixa/linha que `geometria_cue`/`geometria_mao` usam
         geo = geometria_cue(width, height)
         lado, cx, cy = geo["lado"], geo["cx"], geo["cy"]
@@ -2750,7 +2975,7 @@ class _StimulusCanvas(QWidget):
             self._draw_bottle(painter, box)
         elif self.object_name == "bola":
             self._draw_ball(painter, box)
-        else:
+        elif self.object_name == "caneta":      # legado (nao sorteada)
             self._draw_pen(painter, box)
 
     @staticmethod
@@ -2987,6 +3212,14 @@ class StimulusWindow(QMainWindow):
     def show_mi(self, pulsante=False):
         self.canvas.show_mi(pulsante=pulsante)
 
+    def show_animation(self, object_name, hand, duration=ANIM_SEC):
+        """Animacao esquematica da trajetoria (protocolo 2.0-pose)."""
+        self.canvas.show_animation(object_name, hand, duration=duration)
+
+    def anim_tick(self):
+        """Repinta a animacao esquematica (chamada pelo controlador)."""
+        self.canvas.anim_tick()
+
     def pulse_tick(self):
         self.canvas.pulse_tick()
 
@@ -3085,14 +3318,16 @@ class ExperimenterPanel(QMainWindow):
 class _ParadigmController(QObject):
     """Maquina de estados do paradigma ME/MI (roda na thread principal do Qt).
 
-    Sequencia por trial (total ~13,25 s + ITI aleatorio 1-2 s):
-      fixacao 3 s (768) -> beep em -1 s -> cue 1.25 s (769/770/771)
-      -> ME 4 s (778; simbolo permanece; execucao do braco + fechar a mao)
-      -> pausa 1 s (779) -> MI 4 s (780; BIPE + tela "AGORA IMAGINE";
-        overlay do Kinect so' na tela de tracking)
-      -> fim MI (781) -> ITI 1-2 s -> proximo trial.
-    A calibracao de origem (500/501, 10 s, mao apoiada na mesa) acontece uma
-    unica vez antes do primeiro trial.
+    Protocolo 2.0-pose. Sequencia por trial (20 s):
+      768 home/repouso 2 s (ponto de fixacao)
+      -> cue + ME 8 s (769/770 + 778 + 811-814; o simbolo permanece e o
+         participante EXECUTA alcance/preensao/hold/retorno)
+      -> 779 + 794: ANIMACAO esquematica da trajetoria, 2 s, fundo neutro
+      -> MI 8 s (780; BIPE + tela neutra "AGORA IMAGINE"; sem video real)
+      -> fim MI (781) -> proximo trial.
+    Sessao: 100 trials (4 classes x 25) em 4 blocos de 25, pausa de 3-5 min
+    entre blocos (confirmacao por ESPACO). A calibracao de origem (500/501,
+    10 s, mao apoiada na mesa) acontece uma unica vez antes do primeiro trial.
     """
 
     def __init__(self, window, marker_queue, state, config, **kwargs):
@@ -3126,6 +3361,7 @@ class _ParadigmController(QObject):
         self._baseline_steps = []
         self._trial_index = 0
         self._bloco = 0
+        self._anim_deadline = 0.0          # fim da animacao esquematica (2 s)
         self._video_deadline = 0.0
         self._video_t0_ini = 0.0
         # Playback do clipe CRONOMETRADO (sem congelar): ancora na 1a chegada
@@ -3160,18 +3396,54 @@ class _ParadigmController(QObject):
 
     @staticmethod
     def build_trial_list(trials_por_bloco, blocos, rng):
-        """Lista balanceada das 6 condicoes (objeto x mao) da sessao inteira.
+        """Lista pseudoaleatorizada das 4 classes (2 objetos x 2 maos).
 
-        250 trials / 6 condicoes = 41 de cada + 4 extras (42 para as primeiras),
-        embaralhadas; o controlador corta em blocos de `trials_por_bloco`.
+        Protocolo 2.0-pose: 25 trials por classe por sessao = 100 trials em 4
+        blocos de 25. A distribuicao e' feita BLOCO a bloco (6/6/6/7,
+        rotacionando quem recebe o 7o) para a sessao fechar 25 por classe e
+        cada bloco ficar o mais equilibrado possivel. Dentro do bloco a ordem
+        e' sorteada com a regra "no maximo 2 classes iguais consecutivas"; a
+        regra vale tambem na fronteira entre blocos.
+
+        `trials_por_bloco`/`blocos` continuam valendo para os modos de teste
+        (`--blocos 1 --trials-por-bloco 2`): o total e' o produto e a sobra e'
+        distribuida sem repetir a mesma classe mais de 2 vezes.
         """
-        total = int(trials_por_bloco) * int(blocos)
-        condicoes = [(obj, mao) for obj in OBJECTS for mao in HANDS]
-        base, sobra = divmod(total, len(condicoes))
-        extras = list(condicoes)
-        rng.shuffle(extras)          # quem recebe os extras e' sorteado
-        sorteio = condicoes * base + extras[:sobra]
-        rng.shuffle(sorteio)
+        blocos = max(1, int(blocos))
+        por_bloco = max(0, int(trials_por_bloco))
+        condicoes = list(CONDITIONS)
+        ultimas = []                 # as 2 ultimas classes (fronteira inclusa)
+        sorteio = []
+
+        def _sequencia(quota):
+            restante = {cond: int(q) for cond, q in quota.items() if q > 0}
+            while restante:
+                bloqueada = None
+                if len(ultimas) >= 2 and ultimas[-1] == ultimas[-2]:
+                    bloqueada = ultimas[-1]
+                candidatos = [c for c in restante if c != bloqueada]
+                if not candidatos:           # quota degenerada: libera a regra
+                    candidatos = list(restante)
+                maior = max(restante[c] for c in candidatos)
+                # entre as classes mais "atrasadas" (mais restantes), sorteia:
+                # mantem a distribuicao equilibrada e evita tripla no fim.
+                top = [c for c in candidatos if restante[c] == maior]
+                cond = rng.choice(top)
+                sorteio.append(cond)
+                restante[cond] -= 1
+                if restante[cond] <= 0:
+                    del restante[cond]
+                ultimas.append(cond)
+                del ultimas[:-2]
+
+        for bloco in range(blocos):
+            base, sobra = divmod(por_bloco, len(condicoes))
+            quota = {cond: base for cond in condicoes}
+            if sobra:
+                inicio = (bloco * sobra) % len(condicoes)
+                for k in range(sobra):
+                    quota[condicoes[(inicio + k) % len(condicoes)]] += 1
+            _sequencia(quota)
         return [{"objeto": obj, "mao": mao, "condicao": f"{obj}_{mao}"}
                 for obj, mao in sorteio]
 
@@ -3186,7 +3458,7 @@ class _ParadigmController(QObject):
 
         Nao mexe no trial: so' mexe na espera corrente (preparacao, baseline,
         pausa entre blocos) e o paradigma segue normalmente. Durante a
-        contagem/video nao ha' espera para pular -- para descartar a trial
+        contagem/animacao nao ha' espera para pular -- para descartar a trial
         inteira use `cancel_trial` (tecla C).
 
         PAUSA ENTRE BLOCOS: sao DOIS ESPACOS (relato de 21/10/2026). O 1o
@@ -3491,7 +3763,11 @@ class _ParadigmController(QObject):
             marca = "TODOS OK" if bons == len(valores) else "VER ELETRODOS"
             veredito = (f"ELETRODOS: {bons}/{len(valores)} BONS "
                         f"({marca}, <= {IMPEDANCE_LIMIT_KOHM:g} kOhm)\n\n")
+        rotulo_sessao = (f"SESSAO {self._cfg['sessao']} de "
+                         f"{self._cfg.get('sessoes', SESSIONS)}\n\n"
+                         if self._cfg.get("sessao") else "")
         self._window.show_message(
+            rotulo_sessao +
             "PREPARACAO\n\n"
             "1) Eletrodos / impedancia (abaixo)\n"
             "2) Instrucoes + pratica\n"
@@ -3532,8 +3808,8 @@ class _ParadigmController(QObject):
             lambda: self._show_slide(indice + 1), slides[indice])
 
     def _demo_simbolos(self, indice):
-        """Mostra os 6 cues da sessao em sequencia (1,2 s cada)."""
-        condicoes = [(obj, mao) for obj in OBJECTS for mao in HANDS]
+        """Mostra os 4 cues da sessao em sequencia (1,2 s cada)."""
+        condicoes = list(CONDITIONS)
         if indice >= len(condicoes):
             self._inicio_pratica()
             return
@@ -3601,10 +3877,26 @@ class _ParadigmController(QObject):
                 print(f"[paradigma] aviso: on_session_start falhou ({exc})",
                       flush=True)
         cfg = self._cfg
-        self._emit(CODE_SESSION)
-        print(f"[paradigma] sessao iniciada | {len(cfg['trials'])} trials | "
+        # O evento de inicio leva a SESSAO (1/2) para a analise separar as duas
+        # sessoes do participante sem depender do nome do arquivo.
+        extras_sessao = {}
+        if cfg.get("sessao"):
+            extras_sessao = {"sessao": cfg["sessao"],
+                             "sessoes_por_participante":
+                                 cfg.get("sessoes", SESSIONS),
+                             "protocolo_versao": PROTOCOL_VERSION}
+        self._emit(CODE_SESSION, **extras_sessao)
+        trial_sec = (cfg["home_sec"] + cfg["me_sec"] + cfg["video_sec"]
+                     + cfg["mi_sec"])
+        rotulo_sessao = (f"sessao {cfg['sessao']}/"
+                         f"{cfg.get('sessoes', SESSIONS)} | "
+                         if cfg.get("sessao") else "")
+        print(f"[paradigma] {rotulo_sessao}sessao iniciada | "
+              f"{len(cfg['trials'])} trials | "
               f"{cfg['blocos']} blocos de {cfg['trials_por_bloco']} | "
-              f"trial {cfg['home_sec'] + cfg['me_sec'] + cfg['video_sec'] + cfg['mi_sec']:g} s",
+              f"trial {trial_sec:g} s "
+              f"(home {cfg['home_sec']:g} + ME {cfg['me_sec']:g} + "
+              f"animacao {cfg['video_sec']:g} + MI {cfg['mi_sec']:g})",
               flush=True)
         # 21/10/2026 (pedido do experimentador no trial real): o baseline tem
         # uma TELA DE INSTRUCAO antes de comecar (explica a ordem -- olhos
@@ -3697,7 +3989,7 @@ class _ParadigmController(QObject):
             self._schedule(k * 1000, lambda k=k: self._window.show_countdown(n - k))
         self._schedule(n * 1000, lambda: self._run_trial(0))
 
-    # --- trial (12 s: home 2 + cue/ME 4 + video 2 + MI 4) ---
+    # --- trial (20 s: home 2 + cue/ME 8 + animacao 2 + MI 8) ---
     def _run_trial(self, index):
         cfg = self._cfg
         lista = self._active_trials if self._active_trials is not None \
@@ -3744,9 +4036,61 @@ class _ParadigmController(QObject):
         self._schedule(cfg["me_sec"] * 1000, self._start_video_pause)
 
     def _start_video_pause(self):
-        """Fim da ME -> PAUSA com o video do movimento em camera lenta (0,5x)."""
-        cfg = self._cfg
+        """Fim da ME -> intervalo de 2 s antes da MI.
+
+        Protocolo 2.0-pose: mostra a ANIMACAO ESQUEMATICA da trajetoria
+        (`_start_animacao`) e NAO usa video real da mao. O caminho antigo do
+        clipe em camera lenta continua disponivel apenas como legado
+        (`--video-real`; ver `_start_video_pause_legado`).
+        """
         self._emit(CODE_ME_END)
+        # `video_real` so' chega True no modo legado; o main do protocolo
+        # 2.0-pose sempre passa False. O padrao True mantem compatibilidade
+        # com chamadas antigas/testes que nao conhecem a chave.
+        if self._cfg.get("video_real", True):
+            self._start_video_pause_legado()
+        else:
+            self._start_animacao()
+
+    def _start_animacao(self):
+        """ANIMACAO ESQUEMATICA (2 s) entre a ME e a MI.
+
+        Fundo neutro, mesa, home, alvo (garrafa a direita / bola a esquerda) e
+        ponto percorrendo a trajetoria. A tela NAO mostra a mao do participante
+        nem o video do Kinect: e' um esquema do movimento pedido. O codigo 794
+        e' emitido no inicio (mesmo codigo do antigo video, por compatibilidade
+        das analises).
+        """
+        cfg = self._cfg
+        self._emit(CODE_ANIM_START)
+        if cfg["video_sec"] <= 0:            # --sem-video: pula a animacao
+            self._start_mi()
+            return
+        lista = self._active_trials if self._active_trials is not None \
+            else cfg["trials"]
+        trial = lista[self._trial_index]
+        self._state.set_phase(PHASE_ANIM, cue=trial["condicao"])
+        mostrar = getattr(self._window, "show_animation", None)
+        if mostrar is not None:
+            mostrar(trial["objeto"], trial["mao"], cfg["video_sec"])
+        print(f"[paradigma] animacao esquematica ({trial['condicao']}, "
+              f"{cfg['video_sec']:g} s)", flush=True)
+        self._anim_deadline = time.monotonic() + cfg["video_sec"]
+        self._schedule(max(1, int(1000.0 / ANIM_FPS)), self._anim_tick)
+
+    def _anim_tick(self):
+        """Repinta a animacao ate' a deadline; depois inicia a MI."""
+        if time.monotonic() >= self._anim_deadline:
+            self._start_mi()
+            return
+        tick = getattr(self._window, "anim_tick", None)
+        if tick is not None:
+            tick()
+        self._schedule(max(1, int(1000.0 / ANIM_FPS)), self._anim_tick)
+
+    def _start_video_pause_legado(self):
+        """LEGADO (--video-real): PAUSA com o video real em camera lenta (0,5x)."""
+        cfg = self._cfg
         self._emit(CODE_SLOWMO_START)
         self._state.set_phase(PHASE_VIDEO)
         if cfg["video_sec"] <= 0:
@@ -3754,7 +4098,8 @@ class _ParadigmController(QObject):
             return
         self._state.request_slowmo(
             destino=self._priming_file(self._trial_index))
-        print("[paradigma] pausa + video em camera lenta (0,5x)", flush=True)
+        print("[paradigma] pausa + video em camera lenta (0,5x) [LEGADO]",
+              flush=True)
         self._video_deadline = time.monotonic() + cfg["video_sec"]
         self._video_t0_ini = self._video_deadline - cfg["video_sec"]
         self._video_t0 = None            # ancora quando o clipe CHEGAR
@@ -4593,9 +4938,9 @@ def _impedance_table(values, limite_kohm=IMPEDANCE_LIMIT_KOHM, per_line=8):
 # saber o que cada simbolo significa ANTES da sessao real.
 # =============================================================================
 def build_practice_list(n, rng=None):
-    """Lista de trials de PRATICA: cobre as 6 condicoes e repete se n > 6."""
+    """Lista de trials de PRATICA: cobre as 4 classes e repete se n > 4."""
     rng = rng or random.Random(20261014)
-    condicoes = [(obj, mao) for obj in OBJECTS for mao in HANDS]
+    condicoes = list(CONDITIONS)
     saida = []
     while len(saida) < max(0, int(n)):
         bloco = condicoes[:]
@@ -4610,21 +4955,23 @@ def slides_instrucao():
     return [
         "BEM-VINDO(A) AO EXPERIMENTO\n\n"
         "Você verá símbolos na tela e fará movimentos de alcance e "
-        "preensão com as mãos.\n\nESPAÇO para continuar",
+        "preensão com as mãos.\n\n"
+        "Este estudo tem 2 sessões; hoje você fará uma delas.\n\n"
+        "ESPAÇO para continuar",
         "OS SIMBOLOS\n\n"
         "SIMBOLO DA MAO ESQUERDA = use a MAO ESQUERDA\n"
         "SIMBOLO DA MAO DIREITA = use a MAO DIREITA\n\n"
         "O simbolo da mao diz QUAL MAO usar: ele NAO indica de que lado da "
         "mesa o objeto esta.\n\n"
-        "Objetos: GARRAFA, BOLA e CANETA\n"
-        "(os 3 desenhos aparecem a seguir)\n\nESPACO",
-        "CADA TRIAL (12 s) TEM 4 ETAPAS\n\n"
-        "1) MAO NO HOME (descanse)\n"
-        "2) SIMBOLO DA MAO + OBJETO: EXECUTE o movimento\n"
-        "3) VIDEO: veja seu movimento em camera lenta\n"
-        "4) Um BIPE toca e a tela mostra AGORA IMAGINE: "
+        "Objetos: GARRAFA (a DIREITA da mesa) e BOLA (a ESQUERDA)\n"
+        "(os 2 desenhos aparecem a seguir)\n\nESPACO",
+        "CADA TRIAL (20 s) TEM 4 ETAPAS\n\n"
+        "1) MAO NO HOME por 2 s (descanse)\n"
+        "2) SIMBOLO DA MAO + OBJETO por 8 s: EXECUTE o movimento\n"
+        "3) ANIMACAO de 2 s: veja a trajetoria esquematica do movimento\n"
+        "4) Um BIPE toca e a tela mostra AGORA IMAGINE por 8 s: "
         "IMAGINE o movimento (sem executar)",
-        "NA FASE DE IMAGINACAO (4)\n\n"
+        "NA FASE DE IMAGINACAO (8 s)\n\n"
         "Um BIPE marca o inicio e a tela mostra apenas\n"
         "AGORA IMAGINE.\n\n"
         "NAO mova a mao: apenas IMAGINE o alcance e a "
@@ -4854,6 +5201,14 @@ class ImpedanceMonitor(threading.Thread):
             time.sleep(self._period)
 
 
+def _rotulo_sessao(valor):
+    """Rotulo legivel da sessao: 1 -> 'S1'; 'S2' permanece 'S2'."""
+    texto = str(valor).strip()
+    if texto.upper().startswith("S"):
+        return texto.upper()
+    return f"S{texto}"
+
+
 def _ask_participant(args):
     """Questionario do participante no FIM da gravacao (#2).
 
@@ -4863,7 +5218,7 @@ def _ask_participant(args):
     """
     perguntas = [
         ("participante", "Codigo do participante", args.participante),
-        ("sessao", "Sessao (ex.: S1)", args.sessao),
+        ("sessao", "Sessao (1 ou 2)", _rotulo_sessao(args.sessao)),
         ("idade", "Idade", ""),
         ("sexo", "Sexo (F/M/outro)", ""),
         ("mao_dominante", "Mao dominante (direita/esquerda)",
@@ -4962,6 +5317,8 @@ def _build_session_meta(args, trials, source, csv_name, events_name,
         "protocolo_versao": PROTOCOL_VERSION,
         "participante": args.participante,
         "sessao": args.sessao,
+        "sessao_rotulo": _rotulo_sessao(args.sessao),
+        "sessoes_por_participante": SESSIONS,
         "montagem": args.montagem,
         "mao_declarada": args.mao_dominante,
         "inicio_data_hora": time.strftime("%Y-%m-%d %H:%M:%S"),
@@ -4972,6 +5329,19 @@ def _build_session_meta(args, trials, source, csv_name, events_name,
         "fs_eeg_hz": args.fs,
         "fs_movimento_hz": args.mov_hz,
         "movimento_no_csv_de_eeg": bool(MOTION_IN_EEG_CSV),
+        "classes": [{"objeto": obj, "mao": mao,
+                     "condicao": f"{obj}_{mao}",
+                     "codigo": CODE_CONDITION[(obj, mao)]}
+                    for obj, mao in CONDITIONS],
+        "objetos": list(OBJECTS),
+        "posicao_objetos": dict(OBJECT_SIDE),
+        "trials_por_classe_planejados": TRIALS_PER_CLASS,
+        "trials_por_sessao": len(trials),
+        "trials_por_participante": TRIALS_PER_PARTICIPANT,
+        "planejamento_protocolo": planejamento_protocolo(),
+        "animacao": {"tipo": "esquematica",
+                     "duracao_s": args.video_sec,
+                     "video_real": bool(getattr(args, "video_real", False))},
         "unidades": {
             "EEG_ChNN": "uV (counts do ADC convertidos; sinal CRU, sem filtro)",
             "Time": "s (relogio do pipeline g.Pype)",
@@ -4991,9 +5361,14 @@ def _build_session_meta(args, trials, source, csv_name, events_name,
                      "priming_dir": (str(priming_dir) if priming_dir
                                      else None)},
         "tempos_fase_s": {"home": args.home_sec, "cue_me": args.me_sec,
-                          "video": args.video_sec, "mi": args.mi_sec},
+                          "animacao": args.video_sec,
+                          "video": args.video_sec,   # chave legada
+                          "mi": args.mi_sec},
+        "trial_sec": (args.home_sec + args.me_sec + args.video_sec
+                      + args.mi_sec),
         "trials_por_bloco": args.trials_por_bloco,
         "blocos": args.blocos,
+        "pausa_bloco_sec": args.pausa_bloco_sec,
         "instrucoes": (not getattr(args, "sem_instrucoes", False)),
         "trials_teste_pratica": int(getattr(args, "trials_teste", 0)),
         "mi_desenho": bool(getattr(args, "mi_desenho", False)),
@@ -5150,6 +5525,22 @@ def _fechar_janelas_kinect(tracking, sem_janela):
         pass
 
 
+def _parse_sessao(valor):
+    """`--sessao {1,2}`: aceita 1/2 e tambem S1/S2 (compatibilidade)."""
+    texto = str(valor).strip().upper()
+    if texto.startswith("S"):
+        texto = texto[1:]
+    try:
+        numero = int(texto)
+    except (TypeError, ValueError):
+        raise argparse.ArgumentTypeError(
+            "sessao invalida: use 1 ou 2 (ou S1/S2)") from None
+    if numero not in (1, 2):
+        raise argparse.ArgumentTypeError(
+            "sessao invalida: use 1 ou 2 (ou S1/S2)")
+    return numero
+
+
 def parse_args():
     parser = argparse.ArgumentParser(
         description=__doc__,
@@ -5162,8 +5553,10 @@ def parse_args():
                         help="Formato antigo: movimento embutido no CSV de EEG.")
     parser.add_argument("--participante", default="P01",
                         help="Identificador do participante (vai no JSON).")
-    parser.add_argument("--sessao", default="S1",
-                        help="Identificador da sessao (vai no JSON).")
+    parser.add_argument("--sessao", type=_parse_sessao, choices=(1, 2),
+                        default=1,
+                        help="Sessao do participante (1 ou 2; vai no JSON e "
+                             "no nome dos arquivos)")
     parser.add_argument("--montagem", default="",
                         help="Montagem de eletrodos (ex.: 'C3,Cz,C4,P3,P4').")
     parser.add_argument("--mao-dominante", default="",
@@ -5183,10 +5576,11 @@ def parse_args():
                              "preparacao.")
     parser.add_argument("--sem-instrucoes", action="store_true",
                         help="Pula os slides de instrucao antes da pratica.")
-    parser.add_argument("--trials-teste", type=int, default=6,
+    parser.add_argument("--trials-teste", type=int, default=8,
                         help="Trials de PRATICA antes da sessao real "
-                             "(0 = nenhuma; cada condicao aparece ao menos "
-                             "uma vez; marcadores com pratica=1 + codigo 789)")
+                             "(0 = nenhuma; cada uma das 4 condicoes aparece "
+                             "ao menos uma vez; marcadores com pratica=1 + "
+                             "codigo 789)")
     parser.add_argument("--mi-desenho", action="store_true",
                         help="Durante a MI, pulsa o simbolo da mao (ajuda a "
                              "mentalizacao; padrao desligado para manter a "
@@ -5199,31 +5593,33 @@ def parse_args():
                         help="Segundos de espera pelo onset na MI antes de "
                              "seguir adiante (--mi-auto-onset)")
     parser.add_argument("--sem-priming-arquivo", action="store_true",
-                        help="Nao grava os clipes do priming em disco "
-                             "(mostra na tela, mas nao salva).")
+                        help="LEGADO (--video-real): nao grava os clipes do "
+                             "priming em disco. Sem efeito na animacao.")
     parser.add_argument("--fs", type=float, default=FS)
     parser.add_argument("--channel-count", type=int, default=CHANNEL_COUNT)
     parser.add_argument("--frame-size", type=int, default=FRAME_SIZE)
     parser.add_argument("--blocos", type=int, default=BLOCKS,
-                        help="Blocos por sessao")
+                        help="Blocos por sessao (protocolo: 4)")
     parser.add_argument("--trials-por-bloco", type=int,
                         default=TRIALS_PER_BLOCK,
-                        help="Trials por bloco (o total da sessao e' "
-                             "blocos x trials-por-bloco)")
+                        help="Trials por bloco (protocolo: 25; o total da "
+                             "sessao e' blocos x trials-por-bloco = 100)")
     parser.add_argument("--home-sec", type=float, default=HOME_SEC,
                         help="Repouso com a mao no home (s)")
     parser.add_argument("--me-sec", type=float, default=CUE_ME_SEC,
-                        help="Cue + execucao motora (s)")
+                        help="Cue + execucao motora (ME) (s)")
     parser.add_argument("--video-sec", type=float, default=PAUSE_VIDEO_SEC,
-                        help="Pausa + video do movimento em 0,5x (s)")
+                        help="Duracao da animacao esquematica pos-ME (s; nome "
+                             "legado 'video'; 0 = pula a animacao)")
     parser.add_argument("--mi-sec", type=float, default=MI_SEC,
-                        help="Imaginacao motora (s)")
+                        help="Imaginacao motora (MI) (s)")
     parser.add_argument("--pausa-bloco-sec", type=float,
                         default=BLOCK_PAUSE_SEC,
-                        help="Pausa entre blocos (s). Zerada a contagem, a "
-                             "tela pede ESPACO para iniciar o proximo bloco "
-                             "(nada comeca sozinho); ESPACO durante a "
-                             "contagem encurta os minutos restantes")
+                        help="Pausa entre blocos (s; protocolo: 180-300 s). "
+                             "Zerada a contagem, a tela pede ESPACO para "
+                             "iniciar o proximo bloco (nada comeca sozinho); "
+                             "ESPACO durante a contagem encurta os minutos "
+                             "restantes")
     parser.add_argument("--olhos-abertos", type=float,
                         default=BASELINE_EYES_OPEN_SEC,
                         help="Baseline olhos abertos (s; 0 desativa)")
@@ -5235,7 +5631,11 @@ def parse_args():
     parser.add_argument("--contagem", type=int, default=COUNTDOWN)
     parser.add_argument("--hold-sec", type=float, default=HOLD_SEC)
     parser.add_argument("--sem-video", action="store_true",
-                        help="Desativa o video em camera lenta da pausa")
+                        help="Desativa a animacao esquematica pos-ME "
+                             "(vai direto da ME para a MI)")
+    parser.add_argument("--video-real", action="store_true",
+                        help="LEGADO: usa o video real da mao em camera lenta "
+                             "(0,5x) em vez da animacao esquematica 2.0-pose")
     parser.add_argument("--sem-preparacao", action="store_true",
                         help="Pula a espera da fase de preparacao "
                              "(usado em testes automatizados)")
@@ -5305,7 +5705,8 @@ def parse_args():
                         help="Sensibilidade do ADC em nV (padrao: a do "
                              "aparelho; g.Nautilus 500 Hz = 2250000)")
     parser.add_argument("--csv", default=None,
-                        help="Nome do CSV (padrao: gravacao_MEMI_<data>.csv)")
+                        help="Nome do CSV (padrao: "
+                             "gravacao_MEMI_<participante>_s<sessao>_<data>.csv)")
     parser.add_argument("--seed", type=int, default=42)
     return parser.parse_args()
 
@@ -5662,6 +6063,25 @@ def _make_counts_to_uv(source_node, args):
                               offset=offset)
 
 
+def maior_repeticao_consecutiva(trials, chave="condicao"):
+    """Maior sequencia de trials com a MESMA condicao (protocolo: <= 2)."""
+    maior = atual = 0
+    anterior = None
+    for trial in trials:
+        valor = trial.get(chave) if isinstance(trial, dict) else trial
+        atual = atual + 1 if valor == anterior else 1
+        anterior = valor
+        maior = max(maior, atual)
+    return maior
+
+
+def _slug_arquivo(texto, padrao="P00"):
+    """Trecho seguro para nome de arquivo (participante/sessao)."""
+    limpo = "".join(ch if (ch.isalnum() or ch in "-_") else "_"
+                    for ch in str(texto).strip())
+    return limpo.strip("_") or padrao
+
+
 def main():
     # Console/pipe do Windows pode usar cp1252: o ioiocore imprime uma tabela
     # com caracteres Unicode no monitor da pipeline e morre se nao couber no
@@ -5676,8 +6096,13 @@ def main():
                 pass
 
     args = parse_args()
+    # Autoteste das somas do protocolo (25x4=100/sessao; 2 sessoes=200).
+    validar_planejamento()
     if args.sem_video:
         args.video_sec = 0.0
+    # Protocolo 2.0-pose: animacao esquematica por padrao; --video-real liga o
+    # caminho LEGADO do clipe do Kinect (camera lenta).
+    args.video_real = bool(getattr(args, "video_real", False))
     if args.mov_no_eeg_csv:
         # Formato antigo (movimento embutido no CSV de EEG): util apenas para
         # comparar/compatibilidade. O padrao e' o movimento em arquivo proprio.
@@ -5696,7 +6121,12 @@ def main():
     else:
         pasta_sessoes = args.pasta_sessoes
         os.makedirs(pasta_sessoes, exist_ok=True)
-        csv_name = os.path.join(pasta_sessoes, f"gravacao_MEMI_{stamp}.csv")
+        # Nome com PARTICIPANTE e SESSAO: o protocolo 2.0-pose tem 2 sessoes
+        # por participante e o arquivo precisa dizer qual delas foi gravada.
+        participante = _slug_arquivo(args.participante, "P00")
+        csv_name = os.path.join(
+            pasta_sessoes,
+            f"gravacao_MEMI_{participante}_s{args.sessao}_{stamp}.csv")
     events_name = os.path.splitext(csv_name)[0] + "_eventos.json"
 
     trials = _ParadigmController.build_trial_list(args.trials_por_bloco,
@@ -5707,17 +6137,33 @@ def main():
                  + ORIGIN_CAL_SEC + args.contagem
                  + len(trials) * trial_sec + n_pausas * args.pausa_bloco_sec)
     print(f"Arquivo CSV : {csv_name}\nEventos JSON: {events_name}")
+    print(f"Protocolo   : {PROTOCOL_VERSION} | {SESSIONS} sessoes por "
+          f"participante | esta: sessao {args.sessao}/{SESSIONS}")
     print(f"Sessao      : {len(trials)} trials em {args.blocos} blocos de "
           f"{args.trials_por_bloco} | trial {trial_sec:g} s "
-          f"(home {args.home_sec:g} + cue/ME {args.me_sec:g} + "
-          f"video {args.video_sec:g} + MI {args.mi_sec:g})")
-    contagem = {cond: 0 for cond in
-                [(obj, mao) for obj in OBJECTS for mao in HANDS]}
+          f"(home {args.home_sec:g} + ME {args.me_sec:g} + "
+          f"animacao {args.video_sec:g} + MI {args.mi_sec:g})")
+    contagem = {cond: 0 for cond in CONDITIONS}
     for trial in trials:
         contagem[(trial["objeto"], trial["mao"])] += 1
     detalhe = ", ".join(f"{obj}/{mao}={n}"
                         for (obj, mao), n in sorted(contagem.items()))
     print(f"Condicoes   : {detalhe}")
+    esperado = TRIALS_PER_CLASS * len(CONDITIONS)
+    if len(trials) == esperado:
+        print(f"Planejamento: {TRIALS_PER_CLASS}/classe x {len(CONDITIONS)} "
+              f"classes = {TRIALS_PER_SESSION}/sessao | {SESSIONS} sessoes = "
+              f"{TRIALS_PER_PARTICIPANT}/participante")
+    else:
+        print(f"[protocolo] AVISO: modo reduzido/teste: {len(trials)} trials "
+              f"nesta sessao (protocolo completo = {esperado}/sessao; "
+              f"{TRIALS_PER_PARTICIPANT}/participante em {SESSIONS} sessoes)")
+    repeticao = maior_repeticao_consecutiva(trials)
+    if repeticao > 2:
+        print(f"[protocolo] AVISO: {repeticao} trials seguidos da mesma "
+              "classe (limite do protocolo = 2)")
+    print(f"Animacao    : esquematica ({args.video_sec:g} s) | video real "
+          f"{'LIGADO (legado)' if args.video_real else 'DESLIGADO'}")
     print(f"Duracao estimada ~{estimated / 60:.1f} min "
           f"(+ preparacao e pausas; cada pausa so' termina com ESPACO)")
 
@@ -5769,8 +6215,9 @@ def main():
     notch60 = gp.Bandstop(f_lo=58, f_hi=62)
     # ---- movimento em arquivo proprio (#1) + metadados da sessao (#2) ----
     motion_name = _motion_file_name(csv_name)
-    # Pasta dos clipes do priming (#7): ao lado do CSV da sessao.
-    priming_dir = (None if args.sem_priming_arquivo
+    # Pasta dos clipes do priming (#7, LEGADO): so' faz sentido com --video-real;
+    # na animacao esquematica nao ha' clipe nenhum para gravar.
+    priming_dir = (None if (args.sem_priming_arquivo or not args.video_real)
                    else os.path.splitext(str(csv_name))[0] + "_priming")
     session_meta = _build_session_meta(args, trials, args.source, csv_name,
                                        events_name, motion_name,
@@ -5889,6 +6336,11 @@ def main():
             "me_sec": args.me_sec,
             "video_sec": args.video_sec,
             "mi_sec": args.mi_sec,
+            # Protocolo 2.0-pose: animacao esquematica (False). `video_real`
+            # so' vira True com --video-real (caminho legado do clipe).
+            "video_real": args.video_real,
+            "sessao": args.sessao,
+            "sessoes": SESSIONS,
             "trials_por_bloco": args.trials_por_bloco,
             "blocos": args.blocos,
             "pausa_bloco_sec": args.pausa_bloco_sec,
@@ -5902,9 +6354,10 @@ def main():
             "mi_desenho": args.mi_desenho,
             "mi_auto_onset": args.mi_auto_onset,
             "mi_auto_timeout": args.mi_auto_timeout,
-            # Clipes do priming (#7): pasta ao lado do CSV da sessao.
+            # Clipes do priming (#7, LEGADO): so' com --video-real.
             "priming_dir": priming_dir,
-            "salvar_priming": not args.sem_priming_arquivo,
+            "salvar_priming": (args.video_real
+                               and not args.sem_priming_arquivo),
             # Para o painel de impedancias quando a sessao comeca (nao fica
             # conversando com o aparelho durante a gravacao).
             "on_session_start": (None if impedance_monitor is None
