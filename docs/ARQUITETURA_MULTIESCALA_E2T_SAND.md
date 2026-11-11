@@ -165,9 +165,96 @@ Para o piloto, eu faria:
 Assim você usa a ideia do E2T (velocidade/janelas) e a do SAND (contexto
 longo/pose) sem violar a causalidade nem inflar o resultado da MI.
 
-## 9. O que ainda precisa ser decidido
+## 9. Correção sobre o volume do E2T
 
-- manter MI de 4 s ou estender para 8 s?
+O E2T **informa o número de trials** no texto de métodos:
+
+- 12 participantes destros;
+- 50 trials por tarefa;
+- 4 tarefas (FVM, FLM, FRM, LVM);
+- 200 trials por participante;
+- **2.400 trials no total**.
+
+Além disso, o “trial de 8 s” não é o trial inteiro. A sequência é:
+
+```text
+repouso 5 s + instrução 8 s + ready 2 s
++ ME 8 s + ready 2 s + MI 8 s
+= 33 s por trial
+```
+
+O que tem 8 s é cada fase (ME e MI), não o trial completo. A 500 Hz e 32
+canais, uma fase de 8 s tem:
+
+```text
+8 s × 500 Hz × 32 canais = 128.000 valores
+```
+
+Se contarmos ME + MI por trial: 256.000 valores por trial. Em 2.400 trials:
+614,4 milhões de valores, aproximadamente **2,46 GB em float32**, só das
+fases analisadas.
+
+## 10. Se o nosso MI passar para 8 s
+
+O trial passa a ser:
+
+```text
+HOME 2 s + ME 4 s + animação 2 s + MI 8 s = 16 s
+```
+
+Com 125 trials por sessão:
+
+```text
+125 × 16 s = 2.000 s = 33,3 min de protocolo ativo por sessão
+```
+
+Com 2 sessões (250 trials/participante):
+
+```text
+250 × 16 s = 4.000 s = 66,7 min de protocolo ativo por participante
+```
+
+O tempo de MI por participante será:
+
+```text
+250 × 8 s = 2.000 s = 33,3 min de EEG de MI
+```
+
+Comparação de volume bruto de EEG (32 canais, 500 Hz, float32):
+
+| Desenho | Trials | Tempo/trial | Valores de EEG | Float32 |
+| --- | --- | --- | --- | --- |
+| 5 participantes × 250 | 1.250 | 16 s | 320 milhões | ~1,28 GB |
+| 6 participantes × 250 | 1.500 | 16 s | 384 milhões | ~1,54 GB |
+| E2T (fases ME+MI) | 2.400 | 16 s (2×8 s) | 614 milhões | ~2,46 GB |
+
+Ou seja: **125 trials por sessão × 2 sessões = 250 trials/participante** já
+produz uma quantidade grande de **pontos de EEG**. O gargalo não é o número de
+amostras; é o número de **trials independentes** (1.250–1.500), a qualidade dos
+labels, a fadiga e a divisão treino/teste.
+
+### O que muda na arquitetura
+
+Com MI de 8 s, finalmente é possível treinar o **ramo longo de 8 s também na
+MI**, sem atravessar a ME:
+
+```text
+janela longa: 8 s, começando no MI onset
+janela curta: 2 s deslizante dentro desses 8 s
+```
+
+Isso resolve o problema de vazamento que existia com MI de 4 s. Em
+contrapartida:
+
+- o trial fica 33% mais longo (16 s);
+- a fadiga aumenta;
+- 125 trials/sessão ainda é viável, mas o CEP precisa refletir a duração;
+- o ramo longo de 8 s continua **não causal para online** (só está disponível
+  no fim da MI); o ramo curto de 2 s é o que controla em tempo real.
+
+## 11. O que ainda precisa ser decidido
+
+- manter MI de 4 s ou estender para 8 s? (com 8 s, o trial vira 16 s)
 - contexto longo em 100 Hz ou 500 Hz?
 - pesos das perdas de pose, velocidade e consistência;
 - usar destilação do ramo longo para o curto ou treinar separado;
