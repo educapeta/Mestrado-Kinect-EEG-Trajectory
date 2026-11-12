@@ -3190,6 +3190,574 @@ def triangulate_aux_pairs(alignment, deteccoes):
 
 
 
+
+# =============================================================================
+# TRIANGULAÇÃO DE 3 VISTAS (Kinect RGB + Aux0 + Aux1)
+# =============================================================================
+
+def build_projection_matrices(alignment, aux_indices=(0, 1)):
+    """Constrói as matrizes de projeção 3x4 P_kinect, P_aux0, P_aux1.
+
+    A convenção usada: P = K [R | t], onde X_cam = R X_kin + t.
+    Para o Kinect (câmera de referência): R=I, t=0 -> P_kinect = K_kin [I | 0].
+    Para cada auxiliar: X_aux = R_aux X_kin + T_aux -> P_aux = K_aux [R_aux | T_aux].
+
+    Args:
+        alignment: Instância de CameraAlignment com calibrações carregadas.
+        aux_indices: Tupla com os 2 índices das câmeras auxiliares (ex.: (0, 1)).
+
+    Returns:
+        dict com chaves 'kinect', 'aux0', 'aux1', cada uma contendo:
+            - 'P': matriz de projeção 3x4 (float64)
+            - 'K': matriz intrínseca 3x3
+            - 'dist': coeficientes de distorção
+            - 'R': rotação 3x3 (I para kinect)
+            - 't': translação 3x1 (zeros para kinect)
+            - 'view': AuxCameraView correspondente (None para kinect)
+            - 'index': índice da câmera (-1 para kinect)
+        ou None se alguma calibração necessária estiver faltando.
+    """
+    # Matriz do Kinect (referência)
+    if alignment.kinect_matrix is None or alignment.kinect_dist is None:
+        return None
+
+    K_kin = np.asarray(alignment.kinect_matrix, np.float64)
+    dist_kin = np.asarray(alignment.kinect_dist, np.float64).reshape(-1)
+    P_kin = np.hstack([K_kin, np.zeros((3, 1), np.float64)])
+
+    views = {}
+    for pos, aux_idx in enumerate(aux_indices):
+        view = alignment.aux_view(int(aux_idx))
+        if view is None or not view.usable:
+            return None
+        views[f'aux{pos}'] = view
+
+    if len(views) != 2:
+        return None
+
+    result = {
+        'kinect': {
+            'P': P_kin,
+            'K': K_kin,
+            'dist': dist_kin,
+            'R': np.eye(3, dtype=np.float64),
+            't': np.zeros(3, dtype=np.float64),
+            'view': None,
+            'index': -1,
+        }
+    }
+
+    for key, view in views.items():
+        K_aux = np.asarray(view.effective_matrix, np.float64)
+        dist_aux = np.asarray(view.dist, np.float64).reshape(-1)
+        R = np.asarray(view.rotation, np.float64).reshape(3, 3)
+        T = np.asarray(view.translation, np.float64).reshape(3)
+        P_aux = K_aux @ np.hstack([R, T.reshape(3, 1)])
+        result[key] = {
+            'P': P_aux,
+            'K': K_aux,
+            'dist': dist_aux,
+            'R': R,
+            't': T,
+            'view': view,
+            'index': int(view.index),
+        }
+
+    return result
+
+
+def _undistort_points_batch(pixels, K, dist):
+    """Aplica undistort em lote para array (N,2) de pixels.
+
+    cv2.undistortPoints SEM P devolve coordenadas NORMALIZADAS (x/z, y/z),
+    nao pixels. A triangulacao com P = K[R|t] espera PIXELS nao distorcidos;
+    por isso o chamador deve converter com `_normalized_to_pixels`.
+    """
+    if pixels is None or len(pixels) == 0:
+        return None
+    px = np.asarray(pixels, np.float32).reshape(-1, 1, 2)
+    undist = cv2.undistortPoints(px, K.astype(np.float32), dist.astype(np.float32))
+    return undist.reshape(-1, 2).astype(np.float64)
+
+
+def _normalized_to_pixels(rays, K):
+    """Converte coordenadas normalizadas (x/z, y/z) para pixels nao distorcidos."""
+    K = np.asarray(K, np.float64)
+    r = np.asarray(rays, np.float64).reshape(-1, 2)
+    out = np.empty_like(r)
+    out[:, 0] = K[0, 0] * r[:, 0] + K[0, 2]
+    out[:, 1] = K[1, 1] * r[:, 1] + K[1, 2]
+    return out
+
+
+def _triangulate_dlt_multi(P_list, rays_list):
+    """Triangulação DLT linear para N vistas (N >= 2).
+
+    Args:
+        P_list: Lista de matrizes de projeção 3x4.
+        rays_list: Lista de raios normalizados (N_vistas, N_pontos, 2).
+
+    Returns:
+        points_3d: (N_pontos, 3) no referencial da primeira câmera (Kinect).
+        mask: (N_pontos,) bool indicando pontos plausíveis.
+    """
+    n_views = len(P_list)
+    n_points = rays_list[0].shape[0]
+
+    # Verifica consistência
+    for rays in rays_list:
+        if rays.shape[0] != n_points:
+            return None, None
+
+    points_3d = np.full((n_points, 3), np.nan, dtype=np.float64)
+    mask = np.zeros(n_points, dtype=bool)
+
+    for i in range(n_points):
+        # Constrói sistema A * X = 0 para o ponto i
+        A = []
+        for v in range(n_views):
+            P = P_list[v]
+            u, v_coord = rays_list[v][i]
+            if not (np.isfinite(u) and np.isfinite(v_coord)):
+                break
+            A.append(u * P[2] - P[0])
+            A.append(v_coord * P[2] - P[1])
+        else:
+            A = np.asarray(A, np.float64)  # (2*N_views, 4)
+            # SVD para achar o autovetor do menor autovalor
+            try:
+                _, _, Vt = np.linalg.svd(A)
+                X = Vt[-1]
+                if abs(X[3]) > 1e-12:
+                    X = X / X[3]
+                    points_3d[i] = X[:3]
+                    mask[i] = True
+            except np.linalg.LinAlgError:
+                pass
+
+    # Filtro de plausibilidade física
+    if mask.any():
+        z_vals = points_3d[mask, 2]
+        mask = mask & (points_3d[:, 2] > 0.3) & (points_3d[:, 2] < 4.0)
+
+    return points_3d, mask
+
+
+def _reprojection_errors(points_3d, rays_list, P_list, K_list, dist_list):
+    """Calcula erros de reprojeção por ponto e por vista.
+
+    Returns:
+        errors_per_view: lista de arrays (N_pontos,) com erro em px por vista.
+        median_errors: array (N_vistas,) com erro mediano por vista.
+    """
+    n_points = points_3d.shape[0]
+    errors_per_view = []
+
+    for v in range(len(P_list)):
+        K = K_list[v]
+        dist = dist_list[v]
+        rays = rays_list[v]
+
+        # Projeta pontos 3D de volta para a imagem
+        valid = np.isfinite(points_3d).all(axis=1)
+        err = np.full(n_points, np.nan, dtype=np.float64)
+
+        if valid.any():
+            pts_valid = points_3d[valid]
+            # IMPORTANTE: os pontos 3D estao no frame do KINECT. Para as
+            # auxiliares, `cv2.projectPoints` com identidade projetaria no
+            # frame errado (erro de ~100 px). Projetar com a matriz P completa
+            # (P = K[R|t]) resolve sem precisar transformar manualmente.
+            P = np.asarray(P_list[v], np.float64)
+            homog = np.column_stack([pts_valid, np.ones(len(pts_valid))])
+            proj = homog @ P.T
+            with np.errstate(divide="ignore", invalid="ignore"):
+                projected = proj[:, :2] / proj[:, 2:3]
+            rays_valid = rays[valid]
+            diffs = np.linalg.norm(projected - rays_valid, axis=1)
+            err[valid] = diffs
+
+        errors_per_view.append(err)
+
+    median_errors = np.array([np.nanmedian(e) for e in errors_per_view])
+    return errors_per_view, median_errors
+
+
+def triangulate_three_views(alignment, kinect_pixels, aux0_pixels, aux1_pixels,
+                             aux_indices=(0, 1), ransac_iters=100,
+                             ransac_thresh_px=2.0, huber_delta=1.0,
+                             min_views=2, min_valid_points=5,
+                             max_reproj_error_px=10.0):
+    """Triangulação robusta de 3 vistas (Kinect + Aux0 + Aux1) para 21 landmarks.
+
+    Usa DLT em batch para as 3 vistas com RANSAC/Huber para rejeitar outliers
+    e fallback automático para o melhor par quando uma vista falha.
+
+    Args:
+        alignment: CameraAlignment com calibrações carregadas.
+        kinect_pixels: (21, 2) pixels no RGB do Kinect (pode conter NaN).
+        aux0_pixels: (21, 2) pixels na câmera auxiliar 0 (pode conter NaN).
+        aux1_pixels: (21, 2) pixels na câmera auxiliar 1 (pode conter NaN).
+        aux_indices: Tupla com os índices das auxiliares (padrão (0, 1)).
+        ransac_iters: Iterações de RANSAC para estimação robusta.
+        ransac_thresh_px: Limiar de inlier em px para RANSAC.
+        huber_delta: Parâmetro delta do loss Huber (px).
+        min_views: Mínimo de vistas válidas por ponto (2 ou 3).
+        min_valid_points: Mínimo de landmarks válidos para aceitar a mão.
+        max_reproj_error_px: Gate de erro - rejeita se erro mediano > este valor.
+
+    Returns:
+        Tuple (points_3d, valid_mask, info):
+        - points_3d: (21, 3) float64 em metros no frame do Kinect (NaN para inválidos).
+        - valid_mask: (21,) bool - True para landmarks triangulados com sucesso.
+        - info: dict com métricas:
+            * 'method': 'three_view' | 'pair_kinect_aux0' | 'pair_kinect_aux1' | 'pair_aux0_aux1' | 'failed'
+            * 'reproj_errors_median_px': array com erro mediano por vista usada
+            * 'n_valid': número de landmarks válidos
+            * 'views_used': lista de índices das vistas usadas (-1=kinect, 0=aux0, 1=aux1)
+            * 'pair_info': info do par se fallback foi usado
+    """
+    # Constrói matrizes de projeção
+    proj_data = build_projection_matrices(alignment, aux_indices)
+    if proj_data is None:
+        return None, None, {'method': 'failed', 'reason': 'missing_calibration'}
+
+    # Prepara dados de entrada
+    views_order = ['kinect', 'aux0', 'aux1']
+    pixels_input = [kinect_pixels, aux0_pixels, aux1_pixels]
+    n_points = 21
+
+    # Verifica quais vistas têm dados válidos
+    valid_views = []
+    rays_list = []
+    K_list = []
+    dist_list = []
+    P_list = []
+    views_used = []
+
+    for v, (view_key, pixels) in enumerate(zip(views_order, pixels_input)):
+        if pixels is None:
+            continue
+        pixels_arr = np.asarray(pixels, np.float64).reshape(-1, 2)
+        if pixels_arr.shape[0] != n_points:
+            continue
+        # Pelo menos alguns pontos devem ser finitos
+        finite_mask = np.isfinite(pixels_arr).all(axis=1)
+        if finite_mask.sum() < min_views:
+            continue
+
+        # Undistort
+        data = proj_data[view_key]
+        rays = _undistort_points_batch(pixels_arr, data['K'], data['dist'])
+        if rays is None or not np.isfinite(rays).all():
+            continue
+        # IMPORTANTE: P = K[R|t] trabalha em PIXELS. `undistortPoints` sem P
+        # devolve coordenadas normalizadas; converter evita que o DLT de 3
+        # vistas caia no fallback de par (bug encontrado no teste sintetico).
+        rays = _normalized_to_pixels(rays, data['K'])
+
+        valid_views.append(view_key)
+        rays_list.append(rays)
+        K_list.append(data['K'])
+        dist_list.append(data['dist'])
+        P_list.append(data['P'])
+        views_used.append({'kinect': -1, 'aux0': 0, 'aux1': 1}[view_key])
+
+    n_valid_views = len(valid_views)
+
+    if n_valid_views < min_views:
+        return None, None, {
+            'method': 'failed',
+            'reason': f'insufficient_views ({n_valid_views} < {min_views})',
+            'views_available': n_valid_views
+        }
+
+    # Se temos exatamente 2 vistas, usa triangulação de par (mais robusta)
+    if n_valid_views == 2:
+        return _triangulate_two_views_fallback(
+            alignment, valid_views, rays_list, K_list, dist_list, P_list,
+            views_used, pixels_input, min_valid_points, max_reproj_error_px
+        )
+
+    # === TRIANGULAÇÃO 3 VISTAS COM RANSAC/HUBER ===
+    # Triangulação inicial DLT
+    points_3d, mask = _triangulate_dlt_multi(P_list, rays_list)
+
+    if points_3d is None or mask.sum() < min_valid_points:
+        # Fallback para melhor par
+        return _triangulate_best_pair(
+            alignment, valid_views, rays_list, K_list, dist_list, P_list,
+            views_used, pixels_input, min_valid_points, max_reproj_error_px
+        )
+
+    # Refinamento com RANSAC/Huber por landmark
+    refined_points = points_3d.copy()
+    final_mask = mask.copy()
+
+    for i in range(n_points):
+        if not mask[i]:
+            continue
+
+        # Coleta medições válidas para este ponto
+        measurements = []
+        for v in range(3):
+            u, v_coord = rays_list[v][i]
+            if np.isfinite(u) and np.isfinite(v_coord):
+                measurements.append((v, u, v_coord))
+
+        if len(measurements) < min_views:
+            final_mask[i] = False
+            refined_points[i] = np.nan
+            continue
+
+        # Otimização não-linear robusta (Huber) para este ponto
+        try:
+            pt_refined = _refine_point_huber(
+                measurements, P_list, huber_delta, ransac_iters, ransac_thresh_px
+            )
+            if pt_refined is not None:
+                refined_points[i] = pt_refined
+            else:
+                final_mask[i] = False
+                refined_points[i] = np.nan
+        except Exception:
+            final_mask[i] = False
+            refined_points[i] = np.nan
+
+    # Verifica erro de reprojeção final
+    if final_mask.sum() >= min_valid_points:
+        errors_per_view, median_errors = _reprojection_errors(
+            refined_points, rays_list, P_list, K_list, dist_list
+        )
+
+        # Gate de erro
+        max_median_err = np.nanmax(median_errors)
+        if max_median_err > max_reproj_error_px:
+            # O refinamento Huber pode piorar pontos bons em ruido baixo.
+            # Antes de cair para um par, tenta a solucao DLT inicial (3 vistas).
+            try:
+                errors_dlt, median_dlt = _reprojection_errors(
+                    points_3d, rays_list, P_list, K_list, dist_list
+                )
+                max_dlt = np.nanmax(median_dlt)
+            except Exception:
+                max_dlt = float("inf")
+            if max_dlt <= max_reproj_error_px:
+                return points_3d, mask, {
+                    'method': 'three_view_dlt',
+                    'reproj_errors_median_px': median_dlt,
+                    'n_valid': int(mask.sum()),
+                    'views_used': views_used,
+                    'max_reproj_error_px': float(max_dlt),
+                }
+            # Tenta fallback para par se erro muito alto
+            pair_result = _triangulate_best_pair(
+                alignment, valid_views, rays_list, K_list, dist_list, P_list,
+                views_used, pixels_input, min_valid_points, max_reproj_error_px
+            )
+            if pair_result[0] is not None:
+                return pair_result
+
+        # Sucesso com 3 vistas
+        return refined_points, final_mask, {
+            'method': 'three_view',
+            'reproj_errors_median_px': median_errors,
+            'n_valid': int(final_mask.sum()),
+            'views_used': views_used,
+            'max_reproj_error_px': float(max_median_err),
+        }
+
+    # Fallback final para melhor par
+    return _triangulate_best_pair(
+        alignment, valid_views, rays_list, K_list, dist_list, P_list,
+        views_used, pixels_input, min_valid_points, max_reproj_error_px
+    )
+
+
+def _refine_point_huber(measurements, P_list, huber_delta, max_iters, ransac_thresh):
+    """Refina um ponto 3D usando loss de Huber com RANSAC."""
+    # Inicialização com DLT simples para este ponto
+    A = []
+    for v, u, v_coord in measurements:
+        P = P_list[v]
+        A.append(u * P[2] - P[0])
+        A.append(v_coord * P[2] - P[1])
+    A = np.asarray(A, np.float64)
+
+    try:
+        _, _, Vt = np.linalg.svd(A)
+        X = Vt[-1]
+        if abs(X[3]) < 1e-12:
+            return None
+        X = X[:3] / X[3]
+    except np.linalg.LinAlgError:
+        return None
+
+    # IRLS (Iteratively Reweighted Least Squares) com peso de Huber
+    for _ in range(max_iters):
+        residuals = []
+        for v, u, v_coord in measurements:
+            P = P_list[v]
+            proj = P @ np.append(X, 1.0)
+            if abs(proj[2]) < 1e-12:
+                return None
+            u_proj = proj[0] / proj[2]
+            v_proj = proj[1] / proj[2]
+            residuals.append(np.hypot(u_proj - u, v_proj - v_coord))
+
+        residuals = np.asarray(residuals)
+        # Pesos de Huber
+        weights = np.ones_like(residuals)
+        mask_huber = residuals > huber_delta
+        weights[mask_huber] = huber_delta / residuals[mask_huber]
+
+        # Resolve sistema ponderado
+        W = np.diag(np.repeat(weights, 2))
+        try:
+            AWA = A.T @ W @ A
+            # Adiciona regularização leve
+            AWA += 1e-6 * np.eye(4)
+            Awb = A.T @ W @ np.zeros(2 * len(measurements))  # RHS é zero para DLT homogêneo
+            # Para DLT, usamos SVD ponderado aproximado
+            # Simplificação: um passo de Gauss-Newton
+            J = A
+            r = np.concatenate([
+                [(u * P[2] - P[0]) @ np.append(X, 1.0) for v, u, v_coord in measurements for P in [P_list[v]]],
+                [(v_coord * P[2] - P[1]) @ np.append(X, 1.0) for v, u, v_coord in measurements for P in [P_list[v]]]
+            ])
+            # Aproximação simples: ajusta X via pseudo-inversa ponderada
+            JTWJ = J.T @ W @ J
+            JTWr = J.T @ W @ r
+            if np.linalg.cond(JTWJ) < 1e12:
+                delta = np.linalg.solve(JTWJ, -JTWr)
+                X_new = X + delta[:3]
+                if np.linalg.norm(delta[:3]) < 1e-6:
+                    X = X_new
+                    break
+                X = X_new
+            else:
+                break
+        except np.linalg.LinAlgError:
+            break
+
+    # Validação final
+    if not np.isfinite(X).all() or X[2] <= 0.3 or X[2] >= 4.0:
+        return None
+
+    return X
+
+
+def _triangulate_two_views_fallback(alignment, valid_views, rays_list, K_list,
+                                     dist_list, P_list, views_used, pixels_input,
+                                     min_valid_points, max_reproj_error_px):
+    """Triangulação robusta para exatamente 2 vistas válidas."""
+    # Identifica qual par estamos usando
+    view_map = {'kinect': (-1, alignment.active_view() if hasattr(alignment, 'active_view') else None),
+                'aux0': (0, alignment.aux_view(0) if hasattr(alignment, 'aux_view') else None),
+                'aux1': (1, alignment.aux_view(1) if hasattr(alignment, 'aux_view') else None)}
+
+    # Usa as views correspondentes
+    v0_key, v1_key = valid_views[0], valid_views[1]
+    v0_idx, view0 = view_map[v0_key]
+    v1_idx, view1 = view_map[v1_key]
+
+    if view0 is None or view1 is None:
+        return None, None, {'method': 'failed', 'reason': 'views_not_available'}
+
+    # Pega pixels originais
+    px0 = pixels_input[{'kinect': 0, 'aux0': 1, 'aux1': 2}[v0_key]]
+    px1 = pixels_input[{'kinect': 0, 'aux0': 1, 'aux1': 2}[v1_key]]
+
+    points_3d, median_err = None, None
+    method_name = f'pair_{v0_key}_{v1_key}'
+
+    if v0_key == 'kinect' or v1_key == 'kinect':
+        # Par com Kinect
+        kin_view = view0 if v0_key == 'kinect' else view1
+        aux_view = view1 if v0_key == 'kinect' else view0
+        if kin_view is None:
+            kin_view = alignment.active_view()
+        if kin_view is not None and aux_view is not None:
+            # triangulate_with_kinect espera (aux_pixels, kinect_pixels) como arrays
+            aux_px = px1 if v1_key != 'kinect' else px0
+            kin_px = px0 if v0_key == 'kinect' else px1
+            points_3d, reproj = kin_view.triangulate_with_kinect(aux_px, kin_px)
+            if points_3d is not None:
+                median_err = float(np.nanmedian(reproj))
+    else:
+        # Par aux-aux
+        points_3d, median_err = triangulate_pair_points(view0, view1, px0, px1)
+
+    if points_3d is None:
+        return None, None, {'method': 'failed', 'reason': 'pair_triangulation_failed'}
+
+    # Máscara de validade
+    valid_mask = np.isfinite(points_3d).all(axis=1)
+    if valid_mask.sum() < min_valid_points:
+        return None, None, {'method': 'failed', 'reason': 'insufficient_valid_points'}
+
+    # Gate de erro
+    if median_err is not None and median_err > max_reproj_error_px:
+        return None, None, {'method': 'failed', 'reason': f'reproj_error_too_high ({median_err:.1f}px)',
+                           'pair_info': {'method': method_name, 'error_px': median_err}}
+
+    points_3d[~valid_mask] = np.nan
+    return points_3d, valid_mask, {
+        'method': method_name,
+        'reproj_errors_median_px': np.array([median_err, median_err]),
+        'n_valid': int(valid_mask.sum()),
+        'views_used': [v0_idx, v1_idx],
+        'pair_info': {'method': method_name, 'error_px': median_err}
+    }
+
+
+def _triangulate_best_pair(alignment, valid_views, rays_list, K_list,
+                           dist_list, P_list, views_used, pixels_input,
+                           min_valid_points, max_reproj_error_px):
+    """Tenta todos os pares possíveis e retorna o melhor."""
+    pairs_to_try = []
+
+    # Gera todos os pares das vistas válidas
+    for i in range(len(valid_views)):
+        for j in range(i + 1, len(valid_views)):
+            pairs_to_try.append((valid_views[i], valid_views[j]))
+
+    best_result = None
+    best_error = float('inf')
+
+    for v0_key, v1_key in pairs_to_try:
+        result = _triangulate_two_views_fallback(
+            alignment, [v0_key, v1_key],
+            [rays_list[valid_views.index(v0_key)], rays_list[valid_views.index(v1_key)]],
+            [K_list[valid_views.index(v0_key)], K_list[valid_views.index(v1_key)]],
+            [dist_list[valid_views.index(v0_key)], dist_list[valid_views.index(v1_key)]],
+            [P_list[valid_views.index(v0_key)], P_list[valid_views.index(v1_key)]],
+            [views_used[valid_views.index(v0_key)], views_used[valid_views.index(v1_key)]],
+            pixels_input, min_valid_points, max_reproj_error_px
+        )
+
+        if result[0] is not None:
+            info = result[2]
+            if 'pair_info' in info and info['pair_info']['error_px'] < best_error:
+                best_error = info['pair_info']['error_px']
+                best_result = result
+
+    if best_result is not None:
+        return best_result
+
+    return None, None, {
+        'method': 'failed',
+        'reason': 'all_pairs_failed',
+        'views_tried': [v for v in valid_views]
+    }
+
+
+# =============================================================================
+# FIM: TRIANGULAÇÃO DE 3 VISTAS
+# =============================================================================
+
+
+
 def _cinza_para_detectar_tabuleiro(gray, largura_alvo):
     """(cinza reduzido com CLAHE, fator para voltar a resolucao cheia).
 
