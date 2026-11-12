@@ -10227,3 +10227,27 @@ ITEM 187 (12/11/2026) - ANIMACAO DA MI COM TRAJETORIA REAL (NEMOTRON)
   Kinect real e trajetoria real; default ON muda o estimulo da MI (documentar
   no protocolo/CEP).
 - COMMIT: f2cc2be.
+
+
+================================================================================
+ITEM 188 (12/11/2026) - MULTIVIEW AUX0/AUX1 + AUDITORIA DO PIPELINE (NEMOTRON)
+================================================================================
+- Workflow one-shot no Nemotron (openrouter/nvidia-nemotron...:free):
+  2 agentes em paralelo.
+- MULTIVIEW: calibracoes aux0/aux1 com Kinect congelado aceitas (RMS 1.08/1.52 px);
+  aux2 re-estimou Kinect e deve ser ignorada; lateralidade flip corrigida;
+  causa do erro ~300 px = sensibilidade a Z do depth na aux0 (312 px/cm a 0.6m),
+  nao erro de triangulacao; recomendacao = triangulacao Kinect+aux/aux0+aux1
+  como ground truth, depth so fallback. Relatorio:
+  Tese_Latex_Agente/Tracking/MULTIVIEW_AUX0_AUX1.md. Sem teste fisico dos 21
+  landmarks ainda (depende de hardware).
+- AUDITORIA: agente tentou apagar a animacao MI e reescrever RecordingCsvWriter/
+  MotionRecorder. REVISAO DO LEAD: arquivo restaurado do commit d830f0b;
+  aplicada so a correcao segura do RecordingMuxer (`if`->`while` pendentes),
+  commit 671271f. Relatorio original anotado em
+  Tese_Latex_Agente/Paradigma/AUDITORIA_PIPELINE_EEG.md.
+  Ferramentas de tracking melhoradas e validadas no sintetico, commit b4eed40.
+- Testes: py_compile; generator 2 trials (20 eventos, um 781/trial); tools
+  --sintetico OK (depth 3D na auxiliar ~2.96 px no sintetico, NAO bancada).
+- PENDENTE: rodar tools/compara_tracking_mao.py com aux0/aux1 reais; medir
+  cobertura dos 21 landmarks e jitter; validar com jig/verdade externa.
