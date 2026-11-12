@@ -135,6 +135,23 @@ def read_aux_frames(caps):
     return frames
 
 
+
+
+def _landmarks_de_entrada(entrada):
+    """Aceita landmark list do MediaPipe OU dict {'landmarks': [...]}.
+
+    `detect_hands_all` (Kinect) devolve dict com 'side'/'landmarks'; 
+    `detect_auxiliary_hands_all` devolve diretamente listas de landmarks.
+    O demo antigo assumia dict para as auxiliares e quebrava com 
+    'list indices must be integers'.
+    """
+    if entrada is None:
+        return None
+    if isinstance(entrada, dict):
+        return entrada.get('landmarks')
+    return entrada
+
+
 def get_landmarks_pixels(tracker, color_frame, depth_frame, aux_frames, alignment, want_side=None):
     """Detecta landmarks em todas as câmeras e retorna pixels (21,2) por câmera."""
     
@@ -147,10 +164,10 @@ def get_landmarks_pixels(tracker, color_frame, depth_frame, aux_frames, alignmen
         if want_side:
             for hand in kinect_hands:
                 if hand['side'] == want_side:
-                    kinect_landmarks = hand['landmarks']
+                    kinect_landmarks = _landmarks_de_entrada(hand)
                     break
         if kinect_landmarks is None and kinect_hands:
-            kinect_landmarks = kinect_hands[0]['landmarks']
+            kinect_landmarks = _landmarks_de_entrada(kinect_hands[0])
     
     kinect_pixels = None
     if kinect_landmarks:
@@ -171,7 +188,7 @@ def get_landmarks_pixels(tracker, color_frame, depth_frame, aux_frames, alignmen
         
         if hands.get(idx):
             # Usa a primeira mão detectada (ou filtra por lado se necessário)
-            landmarks = hands[idx][0]['landmarks']
+            landmarks = _landmarks_de_entrada(hands[idx][0])
             view = alignment.aux_view(idx)
             if view:
                 aux_pixels[idx] = view.pixels(landmarks)
@@ -211,7 +228,7 @@ def draw_overlay(kinect_color, detections, triang_info, alignment, tracker, fps)
         if view is None:
             continue
         
-        landmarks = hands[0]['landmarks']
+            landmarks = _landmarks_de_entrada(hands[0])
         aux_px = view.pixels(landmarks)
         
         # Projeta para Kinect usando a triangulação 3D se disponível

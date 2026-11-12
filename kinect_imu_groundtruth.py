@@ -5064,6 +5064,46 @@ def desenhar_esqueleto_projetado(frame, pixels, cor_nos=(0, 0, 255),
             cv2.putText(frame, rotulo, (x + 8, y - 8),
                         cv2.FONT_HERSHEY_SIMPLEX, 0.6, cor_linhas, 2)
     return dentro
+def _mediapipe_gpu_requested():
+    """True se o usuario pediu GPU via ambiente (DSH_MEDIAPIPE_GPU=1)."""
+    return str(os.environ.get("DSH_MEDIAPIPE_GPU", "0")).strip().lower() in (
+        "1", "true", "yes", "on", "gpu")
+
+
+def criar_hand_landmarker(model_asset_path, gpu=False, **kwargs):
+    """Cria HandLandmarker tentando GPU e caindo para CPU com aviso.
+
+    O wheel oficial do MediaPipe no Windows pode ser compilado SEM GPU
+    (`ImageCloneCalculator: GPU processing is disabled in build flags`).
+    Nesse caso o delegate GPU lanca NotImplementedError na criacao; o
+    fallback para CPU mantem o pipeline funcional e deixa o motivo impresso.
+    Retorna (landmarker, "GPU"|"CPU").
+    """
+    tentativas = ["GPU", "CPU"] if gpu else ["CPU"]
+    ultimo_erro = None
+    for delegate_nome in tentativas:
+        try:
+            delegate = (mp.tasks.BaseOptions.Delegate.GPU
+                        if delegate_nome == "GPU"
+                        else mp.tasks.BaseOptions.Delegate.CPU)
+            base = mp.tasks.BaseOptions(
+                model_asset_path=str(model_asset_path), delegate=delegate)
+            options = mp.tasks.vision.HandLandmarkerOptions(
+                base_options=base, **kwargs)
+            landmarker = mp.tasks.vision.HandLandmarker.create_from_options(
+                options)
+            if delegate_nome == "GPU":
+                print("[mediapipe] delegate GPU ativo", flush=True)
+            elif gpu:
+                print("[mediapipe] GPU indisponivel; usando CPU "
+                      f"({ultimo_erro})", flush=True)
+            return landmarker, delegate_nome
+        except Exception as exc:          # build sem GPU, driver, modelo...
+            ultimo_erro = f"{type(exc).__name__}: {exc}"
+            continue
+    raise RuntimeError(f"nao foi possivel criar o HandLandmarker: {ultimo_erro}")
+
+
 class KinectHandTracker:
     """Wrapper do Kinect v2: frames de cor/depth/body + MediaPipe por camera."""
 
@@ -5095,8 +5135,11 @@ class KinectHandTracker:
         self.color_height = self.kinect.color_frame_desc.Height
         self.depth_width = self.kinect.depth_frame_desc.Width
         self.depth_height = self.kinect.depth_frame_desc.Height
-        self.hand_options_kinect = mp.tasks.vision.HandLandmarkerOptions(
-            base_options=mp.tasks.BaseOptions(model_asset_path=str(ensure_hand_model())),
+        # GPU e' opt-in por ambiente (DSH_MEDIAPIPE_GPU=1). No wheel CPU-only
+        # o helper tenta GPU, imprime o motivo e cai para CPU automaticamente.
+        self.mediapipe_gpu = _mediapipe_gpu_requested()
+        self.hands, self.mediapipe_delegate = criar_hand_landmarker(
+            ensure_hand_model(), gpu=self.mediapipe_gpu,
             running_mode=mp.tasks.vision.RunningMode.VIDEO,
             num_hands=2,
             # Kinect 1920x1080: mao fica pequena longe -> limiar baixo p/ detectar.
@@ -5105,25 +5148,29 @@ class KinectHandTracker:
             min_hand_presence_confidence=0.35,
             min_tracking_confidence=0.5,
         )
-        self.hand_options_aux = mp.tasks.vision.HandLandmarkerOptions(
-            base_options=mp.tasks.BaseOptions(model_asset_path=str(ensure_hand_model())),
+        self.auxiliary_hands, _ = criar_hand_landmarker(
+            ensure_hand_model(), gpu=(self.mediapipe_delegate == "GPU"),
             running_mode=mp.tasks.vision.RunningMode.VIDEO,
             num_hands=2,
             min_hand_detection_confidence=0.5,
             min_hand_presence_confidence=0.5,
             min_tracking_confidence=0.5,
         )
-        self.hands = mp.tasks.vision.HandLandmarker.create_from_options(self.hand_options_kinect)
-        self.auxiliary_hands = mp.tasks.vision.HandLandmarker.create_from_options(self.hand_options_aux)
         # Detector por camera auxiliar (0=laptop, 1=usb, ...): cada stream usa o
         # SEU detector/timestamp (o VideoMode do MediaPipe nao admite intercalar
         # dois fluxos no mesmo landmarker sem derrubar o tracking por aparicao).
         self.auxiliary_detectors = {}
         self.auxiliary_timestamps_ms = {}
         for index in self.aux_indices:
-            self.auxiliary_detectors[int(index)] = (
-                mp.tasks.vision.HandLandmarker.create_from_options(
-                    self.hand_options_aux))
+            detector, _ = criar_hand_landmarker(
+                ensure_hand_model(), gpu=(self.mediapipe_delegate == "GPU"),
+                running_mode=mp.tasks.vision.RunningMode.VIDEO,
+                num_hands=2,
+                min_hand_detection_confidence=0.5,
+                min_hand_presence_confidence=0.5,
+                min_tracking_confidence=0.5,
+            )
+            self.auxiliary_detectors[int(index)] = detector
             self.auxiliary_timestamps_ms[int(index)] = 0
         self.kinect_frame_timestamp_ms = 0
         self.auxiliary_frame_timestamp_ms = 0
