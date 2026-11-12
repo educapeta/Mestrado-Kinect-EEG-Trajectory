@@ -359,6 +359,12 @@ CODE_PAUSE_END = 793
 #: real no protocolo 2.0-pose. Mantem o codigo 794 do protocolo anterior para
 #: que as analises que recortam [794, 780) continuem funcionando.
 CODE_ANIM_START = 794
+#: Inicio da ANIMACAO DA MI baseada na trajetoria REAL da ME (8 s).
+#: Novo codigo para distinguir da animacao pos-ME (794) e permitir analises
+#: especificas da imaginacao com trajetoria real.
+CODE_MI_ANIM_START = 798
+#: Fim da ANIMACAO DA MI baseada na trajetoria REAL da ME.
+CODE_MI_ANIM_END = 799
 #: Nome legado do MESMO codigo (video em camera lenta, --video-real).
 CODE_SLOWMO_START = CODE_ANIM_START
 #: INICIO DO MOVIMENTO (onset) detectado pelo Kinect durante a ME. Usado para
@@ -426,6 +432,8 @@ CODE_NAMES = {
     CODE_PAUSE_START: "inicio pausa entre blocos",
     CODE_PAUSE_END: "fim pausa entre blocos",
     CODE_ANIM_START: "inicio da animacao esquematica (4 s; 794 legado do video)",
+    CODE_MI_ANIM_START: "inicio animacao MI com trajetoria real da ME (8 s)",
+    CODE_MI_ANIM_END: "fim animacao MI com trajetoria real da ME",
     769: "cue mao esquerda",
     770: "cue mao direita",
     811: "condicao garrafa + mao direita",
@@ -692,6 +700,8 @@ class SharedState:
             "palm_elev": np.nan, "palm_azim": np.nan,
             "palm_pitch": np.nan, "palm_yaw": np.nan, "palm_valid": 0,
         }
+        # --- MI animation: trajectory from ME (t, pos) captured during ME ---
+        self.mi_traj = None              # list of (t, np.array([x,y,z])) or None
         self.origin_xyz = None           # (x, y, z) absoluto da origem (m)
         self.origin_rpy = None           # (roll, pitch, yaw) da origem (deg)
         self.origin_ready = False
@@ -874,6 +884,16 @@ class SharedState:
     def origin_snapshot(self):
         with self.lock:
             return self.origin_xyz, self.origin_rpy
+
+    def set_mi_traj(self, traj):
+        """Publish the ME trajectory for MI animation (list of (t, pos) or None)."""
+        with self.lock:
+            self.mi_traj = traj
+
+    def get_mi_traj(self):
+        """Get the ME trajectory for MI animation."""
+        with self.lock:
+            return self.mi_traj
 
     def request_quit(self):
         with self.lock:
@@ -1577,6 +1597,8 @@ class TrackingThread(threading.Thread):
                 # onset_time (ele continua valendo como fallback). Vale tambem
                 # na animacao esquematica (sem clipe, mas com o rearme da MI).
                 self._me_track = list(self.onset_detector.track)
+                # Publish trajectory for MI animation (real trajectory from ME)
+                self.state.set_mi_traj(self._me_track)
                 self.onset_detector.reset()
             onset_ativo = phase == PHASE_ME or (
                 phase == PHASE_MI and self.state.mi_auto_onset)
@@ -2754,9 +2776,30 @@ class _StimulusCanvas(QWidget):
         self.image = None
         self.update()
 
+    def show_mi_animation(self, object_name, hand, trajectory, duration=MI_SEC):
+        """ANIMACAO DA MI baseada na trajetoria REAL da ME.
+
+        Desenha: mesa, home, alvo, caminho da trajetoria real (linha),
+        marcador movel (ponto), e objeto acompanhando nas fases de
+        levantamento/retorno. Fundo neutro, SEM video real da mao.
+        """
+        self.mode = "mi_anim"
+        self.object_name = object_name
+        self.hand = hand
+        self._mi_anim_traj = trajectory  # list of (t, np.array([x,y,z]))
+        self._mi_anim_t0 = time.monotonic()
+        self._mi_anim_dur = max(0.0, float(duration))
+        self.image = None
+        self.update()
+
     def anim_tick(self):
         """Repinta a animacao (chamada pelo controlador a ~ANIM_FPS)."""
         if self.mode == "anim":
+            self.update()
+
+    def mi_anim_tick(self):
+        """Repinta a animacao da MI (chamada pelo controlador a ~ANIM_FPS)."""
+        if self.mode == "mi_anim":
             self.update()
 
     def show_message(self, text):
@@ -2795,7 +2838,7 @@ class _StimulusCanvas(QWidget):
         # Protocolo 2.0-pose: animacao e MI usam fundo NEUTRO (cinza escuro),
         # sem imagem da mao; os demais modos mantem o fundo preto.
         painter.fillRect(self.rect(),
-                         self.NEUTRAL if self.mode in ("anim", "mi")
+                         self.NEUTRAL if self.mode in ("anim", "mi", "mi_anim")
                          else Qt.black)
         width, height = self.width(), self.height()
         if self.mode == "video" and self.image is not None:
@@ -2803,6 +2846,9 @@ class _StimulusCanvas(QWidget):
             return
         if self.mode == "anim":
             self._paint_animation(painter, width, height)
+            return
+        if self.mode == "mi_anim":
+            self._paint_mi_animation(painter, width, height)
             return
         if self.mode == "cue":
             if getattr(self, "_pulsante", False):
@@ -3002,6 +3048,179 @@ class _StimulusCanvas(QWidget):
                                 width * 0.80, height * 0.07),
                          Qt.AlignHCenter | Qt.AlignVCenter,
                          "ANIMACAO ESQUEMATICA DA TRAJETORIA")
+
+
+    def _paint_mi_animation(self, painter, width, height):
+        """Animacao da MI baseada na trajetoria REAL da ME.
+
+        Projeta os pontos 3D em 2D (normalizando bounds, ignorando outliers/saltos).
+        Desenha: mesa, home, alvo, caminho (linha continua), marcador movel (ponto),
+        objeto acompanhando nas fases de levantamento/retorno.
+        Fallback para esquema generico se nao houver trajetoria valida.
+        """
+        # Get trajectory data
+        traj = getattr(self, "_mi_anim_traj", None)
+        if not traj or len(traj) < 2:
+            # Fallback: draw generic 4-phase animation like _paint_animation
+            self._paint_animation(painter, width, height)
+            return
+
+        # Extract positions (ignore times, use only 3D positions)
+        positions = []
+        for t, pos in traj:
+            if pos is not None and np.isfinite(pos).all():
+                positions.append(np.asarray(pos, np.float64))
+
+        if len(positions) < 2:
+            self._paint_animation(painter, width, height)
+            return
+
+        positions = np.array(positions)  # (n, 3)
+
+        # Normalize bounds: center and scale to fit in view
+        # Remove outliers (points beyond 3 std from median)
+        med = np.median(positions, axis=0)
+        std = np.std(positions, axis=0)
+        mask = np.all(np.abs(positions - med) <= 3 * std, axis=1)
+        if np.sum(mask) < 2:
+            self._paint_animation(painter, width, height)
+            return
+        positions = positions[mask]
+
+        # Project to 2D: use X (left-right) and Z (depth) as horizontal/vertical
+        # Y is height (up-down), we'll use it for lift visualization
+        x_vals = positions[:, 0]
+        z_vals = positions[:, 2]
+        y_vals = positions[:, 1]
+
+        # Normalize to [0, 1] range
+        x_min, x_max = np.min(x_vals), np.max(x_vals)
+        z_min, z_max = np.min(z_vals), np.max(z_vals)
+        y_min, y_max = np.min(y_vals), np.max(y_vals)
+
+        # Avoid division by zero
+        x_range = max(x_max - x_min, 1e-3)
+        z_range = max(z_max - z_min, 1e-3)
+        y_range = max(y_max - y_min, 1e-3)
+
+        # Map to screen coordinates (table area)
+        # Table area: left=6%, right=94%, top=20%, bottom=92% of screen
+        table_left = width * 0.06
+        table_right = width * 0.94
+        table_top = height * 0.20
+        table_bottom = height * 0.92
+        table_w = table_right - table_left
+        table_h = table_bottom - table_top
+
+        # Home position (center bottom of table)
+        home_x = width * 0.5
+        home_y = height * 0.80
+
+        # Target position (object side)
+        lado = OBJECT_SIDE.get(self.object_name, "direita")
+        alvo_x = width * (0.76 if lado == "direita" else 0.24)
+        alvo_y = height * 0.38
+
+        # Convert trajectory to screen coordinates
+        screen_points = []
+        for i in range(len(positions)):
+            # Normalize X to table width (relative to home)
+            norm_x = (x_vals[i] - x_min) / x_range
+            # Normalize Z to table depth (relative to home at back)
+            norm_z = 1.0 - (z_vals[i] - z_min) / z_range  # flip so depth goes up
+            # Screen position
+            sx = table_left + norm_x * table_w
+            sy = table_top + norm_z * table_h
+            screen_points.append(QPointF(sx, sy))
+
+        # Draw table
+        esp = max(2.0, min(width, height) * 0.004)
+        mesa = QRectF(table_left, table_top, table_w, table_h)
+        painter.setPen(QPen(self.TABLE, esp))
+        painter.setBrush(Qt.NoBrush)
+        painter.drawRoundedRect(mesa, 18, 18)
+
+        # Draw full trajectory path (dashed)
+        path_full = QPainterPath()
+        if screen_points:
+            path_full.moveTo(screen_points[0])
+            for pt in screen_points[1:]:
+                path_full.lineTo(pt)
+
+        painter.setPen(QPen(self.PATH, esp * 1.2, Qt.DashLine, Qt.RoundCap))
+        painter.setBrush(Qt.NoBrush)
+        painter.drawPath(path_full)
+
+        # Animation progress
+        duracao = max(1e-3, float(getattr(self, "_mi_anim_dur", MI_SEC)))
+        decorrido = time.monotonic() - getattr(self, "_mi_anim_t0", time.monotonic())
+        progresso = min(1.0, max(0.0, decorrido / duracao))
+        suave = progresso * progresso * (3.0 - 2.0 * progresso)  # smoothstep
+
+        # Draw partial path (solid) up to current progress
+        n_pts = len(screen_points)
+        if n_pts >= 2:
+            idx = max(1, min(n_pts - 1, int(suave * (n_pts - 1))))
+            path_partial = QPainterPath()
+            path_partial.moveTo(screen_points[0])
+            for i in range(1, idx + 1):
+                path_partial.lineTo(screen_points[i])
+            painter.setPen(QPen(self.WHITE, esp * 1.8, Qt.SolidLine, Qt.RoundCap))
+            painter.drawPath(path_partial)
+
+            # Current position marker
+            current_pt = screen_points[idx]
+            raio_ponto = max(8.0, min(width, height) * 0.014)
+            painter.setPen(QPen(QColor(20, 20, 22), esp))
+            painter.setBrush(self.WHITE)
+            painter.drawEllipse(current_pt, raio_ponto, raio_ponto)
+
+        # Draw target (alvo)
+        raio = max(24.0, min(width, height) * 0.05)
+        painter.setPen(QPen(self.TARGET, esp * 1.4))
+        painter.setBrush(Qt.NoBrush)
+        painter.drawEllipse(QPointF(alvo_x, alvo_y), raio, raio)
+
+        # Object follows hand during transport (approximate: middle 40% of trajectory)
+        em_transporte = 0.30 <= suave <= 0.70
+        pos_obj = QPointF(current_pt) if (em_transporte and n_pts >= 2) else QPointF(alvo_x, alvo_y)
+        caixa = QRectF(pos_obj.x() - raio * 0.62,
+                       pos_obj.y() - raio * 0.62,
+                       raio * 1.24, raio * 1.24)
+        painter.setPen(QPen(self.WHITE, max(4.0, esp * 2.0)))
+        painter.setBrush(Qt.NoBrush)
+        if self.object_name == "garrafa":
+            self._draw_bottle(painter, caixa)
+        else:
+            self._draw_ball(painter, caixa)
+
+        # Home position
+        raio_home = max(16.0, min(width, height) * 0.028)
+        painter.setPen(QPen(self.DIM, esp * 1.2))
+        painter.drawEllipse(QPointF(home_x, home_y), raio_home, raio_home)
+
+        # Labels
+        fonte = QFont("Arial", max(12, int(min(width, height) * 0.026)), QFont.Bold)
+        painter.setFont(fonte)
+        painter.setPen(QPen(self.WHITE))
+        mao = "DIREITA" if self.hand == "direita" else "ESQUERDA"
+        painter.drawText(
+            QRectF(home_x - width * 0.20, home_y + raio_home * 1.4,
+                   width * 0.40, height * 0.08),
+            Qt.AlignHCenter | Qt.AlignTop, f"MAO {mao} (home)")
+        painter.drawText(
+            QRectF(alvo_x - width * 0.22, alvo_y - raio * 2.4,
+                   width * 0.44, height * 0.08),
+            Qt.AlignHCenter | Qt.AlignBottom,
+            f"{str(self.object_name).upper()} ({lado.upper()})")
+        painter.setPen(QPen(self.DIM))
+        painter.setFont(QFont("Arial",
+                              max(10, int(fonte.pointSize() * 0.72)),
+                              QFont.Bold))
+        painter.drawText(QRectF(width * 0.10, height * 0.045,
+                                width * 0.80, height * 0.07),
+                         Qt.AlignHCenter | Qt.AlignVCenter,
+                         "ANIMACAO MI: TRAJETORIA REAL DA ME")
 
     def _paint_object(self, painter, width, height):
         """Objeto alvo, grande e centralizado (garrafa / bola; caneta=legado)."""
@@ -3252,13 +3471,17 @@ class StimulusWindow(QMainWindow):
     def show_mi(self, pulsante=False):
         self.canvas.show_mi(pulsante=pulsante)
 
+    def show_mi_animation(self, object_name, hand, trajectory, duration=MI_SEC):
+        """Animacao da MI baseada na trajetoria REAL da ME."""
+        self.canvas.show_mi_animation(object_name, hand, trajectory, duration=duration)
+
     def show_animation(self, object_name, hand, duration=ANIM_SEC):
         """Animacao esquematica da trajetoria (protocolo 2.0-pose)."""
         self.canvas.show_animation(object_name, hand, duration=duration)
 
-    def anim_tick(self):
-        """Repinta a animacao esquematica (chamada pelo controlador)."""
-        self.canvas.anim_tick()
+    def mi_anim_tick(self):
+        """Repinta a animacao da MI (chamada pelo controlador)."""
+        self.canvas.mi_anim_tick()
 
     def pulse_tick(self):
         self.canvas.pulse_tick()
@@ -4269,8 +4492,15 @@ class _ParadigmController(QObject):
                            maioria dos estudos de MI usa e mantem o alvo
                            epocado no tempo (com auto o onset e' que ancora
                            a epoca; janela de reacao varia).
+        --mi-animacao   -> anima a trajetoria REAL da ME durante a MI (8 s):
+                           caminho (linha), marcador movel, home/alvo, objeto
+                           acompanhando nas fases de levantamento/retorno.
+                           Padrao LIGADO (o usuario pediu). Use --sem-mi-animacao
+                           para desligar (cai no esquema generico de 4 fases).
         """
         cfg = self._cfg
+        self._mi_ending = False
+        self._mi_anim_deadline = 0.0
         self._emit(CODE_MI_START)
         trial = (self._active_trials if self._active_trials is not None
                  else cfg["trials"])[self._trial_index]
@@ -4283,11 +4513,32 @@ class _ParadigmController(QObject):
         # --mi-auto-onset ele so' toca quando o Kinect ve o MOVIMENTO
         # (o inicio real da janela da imaginacao).
         self._mi_pulse_active = bool(cfg.get("mi_desenho", False))
+
+        # Check if MI animation with real trajectory is enabled
+        mi_anim_enabled = bool(cfg.get("mi_animacao", True))
+        if mi_anim_enabled:
+            # Get the real trajectory from ME
+            mi_traj = self._state.get_mi_traj()
+            if mi_traj and len(mi_traj) >= 2:
+                # Start MI animation with real trajectory
+                self._emit(CODE_MI_ANIM_START, trial=self._trial_index + 1,
+                           condicao=trial["condicao"], bloco=self._bloco + 1)
+                self._window.show_mi_animation(
+                    trial["objeto"], trial["mao"], mi_traj, cfg["mi_sec"])
+                self._mi_anim_deadline = time.monotonic() + cfg["mi_sec"]
+                self._schedule(max(1, int(1000.0 / ANIM_FPS)), self._mi_anim_tick)
+            else:
+                # Fallback: no real trajectory, use generic text display
+                mi_anim_enabled = False
+
         if not cfg.get("mi_auto_onset", False):
             _beep_async(MI_BEEP_FREQ, MI_BEEP_MS)
-        self._window.show_mi(pulsante=self._mi_pulse_active)
-        if self._mi_pulse_active:
-            self._mi_pulse_tick()
+
+        if not mi_anim_enabled:
+            # Standard MI: just text display
+            self._window.show_mi(pulsante=self._mi_pulse_active)
+            if self._mi_pulse_active:
+                self._mi_pulse_tick()
         if cfg.get("mi_auto_onset", False):
             _ = self._state.take_mi_onset()      # limpa marca velha
             self._mi_deadline = (time.monotonic()
@@ -4324,10 +4575,37 @@ class _ParadigmController(QObject):
         self._window.pulse_tick()
         self._schedule(120, self._mi_pulse_tick)
 
+    def _mi_anim_tick(self):
+        """Repinta a animacao da MI (trajetoria real) ate' a deadline.
+
+        NAO encerra a MI: o fim e' do timer normal (`_schedule(mi_sec,
+        _end_mi)`) ou do `_mi_onset_tick` no modo auto-onset. Antes este tick
+        tambem chamava `_end_mi`, e o timer normal chamava de novo: a MI
+        avancava DOIS trials.
+        """
+        if time.monotonic() >= self._mi_anim_deadline:
+            return
+        tick = getattr(self._window, "mi_anim_tick", None)
+        if tick is not None:
+            tick()
+        self._schedule(max(1, int(1000.0 / ANIM_FPS)), self._mi_anim_tick)
+
     def _end_mi(self):
+        if getattr(self, "_mi_ending", False):
+            return
+        self._mi_ending = True
         cfg = self._cfg
         self._mi_pulse_active = False
         self._emit(CODE_MI_END)
+        # Emit MI animation end event if animation was running
+        if hasattr(self, "_mi_anim_deadline") and self._mi_anim_deadline > 0:
+            lista = (self._active_trials if self._active_trials is not None
+                     else cfg["trials"])
+            condicao = (lista[self._trial_index]["condicao"]
+                        if 0 <= self._trial_index < len(lista) else "")
+            self._emit(CODE_MI_ANIM_END, trial=self._trial_index + 1,
+                       condicao=condicao, bloco=self._bloco + 1)
+            self._mi_anim_deadline = 0
         self._state.set_phase(PHASE_IDLE, cue="")
         self._window.show_home()
         proximo = self._trial_index + 1
@@ -5664,6 +5942,14 @@ def parse_args():
     parser.add_argument("--mi-auto-timeout", type=float, default=4.0,
                         help="Segundos de espera pelo onset na MI antes de "
                              "seguir adiante (--mi-auto-onset)")
+    parser.add_argument("--mi-animacao", action="store_true", default=True,
+                        help="MI: anima a trajetoria REAL da ME (caminho + marcador "
+                             "movel + home/alvo). Padrao LIGADO (o usuario pediu). "
+                             "Use --sem-mi-animacao para desligar (cai no esquema "
+                             "generico de 4 fases).")
+    parser.add_argument("--sem-mi-animacao", action="store_false",
+                        dest="mi_animacao",
+                        help="Desliga a animacao da trajetoria REAL na MI.")
     parser.add_argument("--sem-priming-arquivo", action="store_true",
                         help="LEGADO (--video-real): nao grava os clipes do "
                              "priming em disco. Sem efeito na animacao.")
@@ -6426,6 +6712,7 @@ def main():
             "mi_desenho": args.mi_desenho,
             "mi_auto_onset": args.mi_auto_onset,
             "mi_auto_timeout": args.mi_auto_timeout,
+            "mi_animacao": args.mi_animacao,
             # Clipes do priming (#7, LEGADO): so' com --video-real.
             "priming_dir": priming_dir,
             "salvar_priming": (args.video_real
@@ -6655,4 +6942,3 @@ def _align_event_json(writer, events_name, csv_name):
 
 if __name__ == "__main__":
     main()
-
