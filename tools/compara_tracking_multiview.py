@@ -353,19 +353,23 @@ def main():
             
             if not paused:
                 # Captura frames
+                t_cap0 = time.perf_counter()
                 color_frame, depth_frame = tracker.frames()
                 if color_frame is None:
                     time.sleep(0.01)
                     continue
                 
                 aux_frames = read_aux_frames(aux_caps)
+                t_cap = time.perf_counter() - t_cap0
                 
                 # Detecta landmarks
                 want_side = None  # None = primeira mão detectada
+                t_det0 = time.perf_counter()
                 detections = get_landmarks_pixels(
                     tracker, color_frame, depth_frame, aux_frames, alignment, want_side
                 )
                 
+                t_det = time.perf_counter() - t_det0
                 # Prepara pixels para triangulação
                 kinect_px = detections['kinect']
                 aux0_px = detections['aux'].get(aux_indices[0]) if len(aux_indices) > 0 else None
@@ -374,17 +378,20 @@ def main():
                 # Triangulação 3 vistas
                 triang_info = {'method': 'no_detection', 'n_valid': 0, 'views_used': []}
                 
+                t_tri0 = time.perf_counter()
                 if kinect_px is not None or aux0_px is not None or aux1_px is not None:
                     pts3d, mask, info = triangulate_three_views(
                         alignment, kinect_px, aux0_px, aux1_px,
                         aux_indices=aux_indices,
                         min_valid_points=5,
-                        max_reproj_error_px=15.0
+                        max_reproj_error_px=15.0,
+                        ransac_iters=5
                     )
                     triang_info = info
                     if pts3d is not None:
                         triang_info['triang_3d'] = pts3d
                         triang_info['valid_mask'] = mask
+                t_tri = time.perf_counter() - t_tri0
                 
                 # Calcula FPS
                 now = time.time()
@@ -393,21 +400,42 @@ def main():
                 fps = 1.0 / dt if dt > 0 else 0
                 fps_history.append(fps)
                 avg_fps = np.mean(fps_history) if fps_history else fps
+                if frame_idx % 30 == 0:
+                    rois = getattr(tracker, "_roi_mediapipe", {})
+                    print(f"[demo] frame={frame_idx} fps_inst={fps:.1f} "
+                          f"fps_medio={avg_fps:.1f} metodo={triang_info.get('method')} "
+                          f"validos={triang_info.get('n_valid', 0)} "
+                          f"cap={t_cap*1000:.1f}ms det={t_det*1000:.1f}ms "
+                          f"tri={t_tri*1000:.1f}ms "
+                          f"roi={ {k: (int(v[2]-v[0]), int(v[3]-v[1])) for k,v in rois.items()} }", flush=True)
                 
                 # Desenha overlay
+                t_over0 = time.perf_counter()
                 display_frame = draw_overlay(
                     detections['kinect_color'], detections, triang_info, alignment, tracker, avg_fps
                 )
+                t_over = time.perf_counter() - t_over0
                 
                 # Log
+                t_log0 = time.perf_counter()
                 logger.log(frame_idx, time.time(), triang_info, avg_fps)
+                t_log = time.perf_counter() - t_log0
                 frame_idx += 1
             
             # Mostra frame
+            t_show0 = time.perf_counter()
             cv2.imshow(WINDOW_NAME, display_frame)
+            t_show = time.perf_counter() - t_show0
             
             # Teclas
+            t_wait0 = time.perf_counter()
             key = cv2.waitKey(1 if not paused else 100) & 0xFF
+            t_wait = time.perf_counter() - t_wait0
+            if frame_idx % 30 == 0:
+                print(f"[perf] cap={t_cap*1000:.1f} det={t_det*1000:.1f} "
+                      f"tri={t_tri*1000:.1f} over={t_over*1000:.1f} "
+                      f"log={t_log*1000:.1f} show={t_show*1000:.1f} "
+                      f"wait={t_wait*1000:.1f}", flush=True)
             if key in (ord('q'), ord('Q'), 27):  # Q ou ESC
                 break
             elif key == ord(' '):  # Espaço - pausa
