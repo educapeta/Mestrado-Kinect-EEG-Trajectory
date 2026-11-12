@@ -5058,8 +5058,14 @@ def desenhar_esqueleto_projetado(frame, pixels, cor_nos=(0, 0, 255),
                      espessura)
     if rotulo is not None and dentro.any():
         # Rotulo junto da palma (no 9), para o experimentador saber de QUE
-        # camera e' cada esqueleto sem consultar o terminal.
-        ancora = pixels[9] if dentro.size > 9 else pixels[int(np.argmax(dentro))]
+        # camera e' cada esqueleto sem consultar o terminal. Se o no 9 for
+        # NaN/fora do frame (comum quando a triangulacao tem buracos), usa o
+        # primeiro no VALIDO -- antes `ancora[0]` podia ser NaN e derrubar o
+        # demo no finally com ValueError.
+        if dentro.size > 9 and bool(dentro[9]):
+            ancora = pixels[9]
+        else:
+            ancora = pixels[int(np.argmax(dentro))]
         x, y = int(round(ancora[0])), int(round(ancora[1]))
         if 0 <= x < largura and 0 <= y < altura:
             cv2.putText(frame, rotulo, (x + 8, y - 8),
