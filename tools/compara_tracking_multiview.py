@@ -20,6 +20,7 @@ Teclas:
 
 import os
 import sys
+import argparse
 import time
 import csv
 import threading
@@ -103,16 +104,16 @@ class MetricsLogger:
             self.file.close()
 
 
-def open_aux_cameras(indices):
+def open_aux_cameras(indices, largura=1280, altura=720, fps=30):
     """Abre as câmeras auxiliares pelo índice."""
     caps = {}
     for idx in indices:
         cap = cv2.VideoCapture(idx, cv2.CAP_DSHOW)
         if cap.isOpened():
             # Configura resolução 1280x720 @ 30fps
-            cap.set(cv2.CAP_PROP_FRAME_WIDTH, 1280)
-            cap.set(cv2.CAP_PROP_FRAME_HEIGHT, 720)
-            cap.set(cv2.CAP_PROP_FPS, 30)
+            cap.set(cv2.CAP_PROP_FRAME_WIDTH, int(largura))
+            cap.set(cv2.CAP_PROP_FRAME_HEIGHT, int(altura))
+            cap.set(cv2.CAP_PROP_FPS, int(fps))
             cap.set(cv2.CAP_PROP_BUFFERSIZE, 1)
             actual_w = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
             actual_h = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
@@ -348,7 +349,20 @@ def draw_overlay(kinect_color, detections, triang_info, alignment, tracker, fps)
     return frame
 
 
+def parse_args():
+    ap = argparse.ArgumentParser(description="Demo triangulacao 3 vistas")
+    ap.add_argument("--aux-width", type=int,
+                    default=int(os.environ.get("DSH_AUX_WIDTH", "1280")))
+    ap.add_argument("--aux-height", type=int,
+                    default=int(os.environ.get("DSH_AUX_HEIGHT", "720")))
+    ap.add_argument("--aux-fps", type=int,
+                    default=int(os.environ.get("DSH_AUX_FPS", "30")))
+    ap.add_argument("--duracao", type=float, default=0.0)
+    return ap.parse_args()
+
+
 def main():
+    args = parse_args()
     print("=" * 60)
     print("DEMONSTRAÇÃO: Triangulação 3 Vistas (Kinect + Aux0 + Aux1)")
     print("=" * 60)
@@ -386,8 +400,8 @@ def main():
         return 1
     
     # 3. Abre câmeras auxiliares
-    print("\n[3/4] Abrindo câmeras auxiliares...")
-    aux_caps = open_aux_cameras(aux_indices)
+    print(f"\n[3/4] Abrindo câmeras auxiliares ({args.aux_width}x{args.aux_height} @ {args.aux_fps} fps)...")
+    aux_caps = open_aux_cameras(aux_indices, args.aux_width, args.aux_height, args.aux_fps)
 
     # Threads de deteccao das auxiliares: o Kinect fica no loop principal.
     aux_workers = {}
@@ -413,6 +427,7 @@ def main():
     frame_idx = 0
     fps_history = deque(maxlen=MAX_FPS_HISTORY)
     last_time = time.time()
+    t_loop_start = time.perf_counter()
     
     cv2.namedWindow(WINDOW_NAME, cv2.WINDOW_NORMAL)
     cv2.resizeWindow(WINDOW_NAME, 1280, 720)
@@ -500,6 +515,9 @@ def main():
                 logger.log(frame_idx, time.time(), triang_info, avg_fps)
                 t_log = time.perf_counter() - t_log0
                 frame_idx += 1
+                if args.duracao > 0 and (time.perf_counter() - t_loop_start) >= args.duracao:
+                    print(f"[demo] duracao {args.duracao:g}s atingida", flush=True)
+                    break
             
             # Mostra frame
             t_show0 = time.perf_counter()
