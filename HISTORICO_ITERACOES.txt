@@ -10204,3 +10204,26 @@ MODELO: tentativa de rodar subagente no opencode/nemotron-3-ultra-free
   retornou null no workflow; implementacao feita no modelo atual.
 G.NAUTILUS: teste real abriu depois de encerrar processo antigo PID 4072 que
   segurava a sessao exclusiva do GDS; 15.530 linhas de EEG gravadas.
+
+
+================================================================================
+ITEM 187 (12/11/2026) - ANIMACAO DA MI COM TRAJETORIA REAL (NEMOTRON)
+================================================================================
+- Subagente one-shot rodou via workflow no provider openrouter /
+  nvidia/nemotron-3-ultra-550b-a55b:free; implementou:
+  * --mi-animacao (padrao ON) / --sem-mi-animacao;
+  * SharedState.mi_traj + set/get; TrackingThread publica a trajetoria da ME
+    quando a fase vira ANIM;
+  * _start_mi anima a trajetoria real durante os 8 s da MI (projecao X/Z,
+    normalizacao, remocao de outliers, fallback para o esquema de 4 fases);
+  * eventos 798/799 (inicio/fim da animacao MI).
+- REVISAO DO LEAD: corrigido bug critico em que _mi_anim_tick e o timer normal
+  chamavam _end_mi duas vezes, avancando dois trials; _end_mi agora e
+  idempotente (_mi_ending) e _mi_anim_tick nao encerra a MI.
+- Testes: py_compile OK; generator sem Kinect OK (781 uma vez; fallback);
+  render offscreen da MI com trajetoria sintetica em 0/50/95% OK; _end_mi
+  chamado duas vezes avanca apenas um trial.
+- LIMITACOES: projecao simples X/Z; altura Y nao visualizada; falta teste com
+  Kinect real e trajetoria real; default ON muda o estimulo da MI (documentar
+  no protocolo/CEP).
+- COMMIT: f2cc2be.
