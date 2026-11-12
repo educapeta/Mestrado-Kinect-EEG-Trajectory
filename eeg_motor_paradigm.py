@@ -15,12 +15,12 @@ Programa 1 (gravacao offline). Um UNICO processo integra:
      SESSAO: 100 trials = 25 por classe x 4 classes. Cada participante faz
      2 sessoes (`--sessao {1,2}`) = 200 trials/participante; a sessao vai no
      JSON de metadados e no nome dos arquivos (gravacao_MEMI_<P>_s<N>_...).
-     Cada trial tem 20 s:
+     Cada trial tem 22 s:
        REPOUSO/HOME 2 s (mao no home + ponto de fixacao)
        CUE + ME 8 s (garrafa a DIREITA ou bola a ESQUERDA da mesa + simbolo
          da MAO esquerda/direita; o participante EXECUTA alcance/preensao/
          hold/retorno)
-       ANIMACAO 2 s (animacao ESQUEMATICA da trajetoria: mesa, home, alvo e
+       ANIMACAO 4 s (animacao ESQUEMATICA da trajetoria: mesa, home, alvo e
          ponto em movimento; fundo neutro, SEM video real da mao)
        MI 8 s (BIPE sonoro no onset + tela neutra "AGORA IMAGINE";
          --mi-desenho pulsa o texto e --mi-auto-onset inicia o timer no onset
@@ -87,7 +87,7 @@ Codigos de marcador (convensao BCI Competition IV 2a estendida):
   780/781 = inicio/fim da MI
   790/791 = inicio/fim do bloco      792/793 = inicio/fim da PAUSA ENTRE
                                      BLOCOS (contagem + espera do ESPACO)
-  794   = inicio da ANIMACAO esquematica (2 s; nome legado: video em 0,5x)
+  794   = inicio da ANIMACAO esquematica (4 s; nome legado: video em 0,5x)
   796 = TRIAL CANCELADO pelo experimentador
   789 = trial de PRATICA (instrucoes; TODOS os eventos da pratica levam pratica=1 no JSON)
 
@@ -198,16 +198,16 @@ MOTION_HZ = 30.0
 MOTION_IN_EEG_CSV = False
 #: Versao do protocolo/arquivo. Gravada no JSON da sessao: se o protocolo
 #: mudar, as sessoes antigas continuam identificaveis.
-PROTOCOL_VERSION = "2.0-pose"
+PROTOCOL_VERSION = "2.1-pose-anim"
 TRIALS_PER_CLASS = 25      # trials por classe EM CADA SESSAO (protocolo 2.0-pose)
 SESSIONS = 2               # sessoes por participante (`--sessao {1,2}`)
 
 # --- Protocolo 2.0-pose -----------------------------------------------------
-# Cada trial tem 20 s:
+# Cada trial tem 22 s:
 #   [REPOUSO/HOME 2 s: mao na posicao inicial (home) + ponto de fixacao]
 #   [CUE + ME 8 s: objeto (garrafa a direita / bola a esquerda da mesa) +
 #    lado da mao; o participante EXECUTA alcance/preensao/hold/retorno]
-#   [ANIMACAO 2 s: animacao ESQUEMATICA da trajetoria (mesa/home/alvo/ponto),
+#   [ANIMACAO 4 s: animacao ESQUEMATICA da trajetoria (mesa/home/alvo/ponto),
 #    fundo neutro; SUBSTITUI o video real da mao]
 #   [MI 8 s: IMAGINA o mesmo movimento; BIPE no onset + tela neutra;
 #    apenas EEG e' registrado]
@@ -215,10 +215,10 @@ SESSIONS = 2               # sessoes por participante (`--sessao {1,2}`)
 # participante = 2 sessoes x 100 = 200 trials.
 HOME_SEC = 2.0
 CUE_ME_SEC = 8.0
-ANIM_SEC = 2.0
+ANIM_SEC = 4.0
 PAUSE_VIDEO_SEC = ANIM_SEC        # nome legado (--video-sec) = animacao
 MI_SEC = 8.0
-TRIAL_SEC = HOME_SEC + CUE_ME_SEC + ANIM_SEC + MI_SEC             # 20 s
+TRIAL_SEC = HOME_SEC + CUE_ME_SEC + ANIM_SEC + MI_SEC             # 22 s
 ANIM_FPS = 30.0                   # repintura da animacao esquematica
 
 BLOCKS = 4                        # blocos por sessao
@@ -355,7 +355,7 @@ CODE_BLOCK_START = 790
 CODE_BLOCK_END = 791
 CODE_PAUSE_START = 792
 CODE_PAUSE_END = 793
-#: Inicio da ANIMACAO ESQUEMATICA da trajetoria (2 s) que substitui o video
+#: Inicio da ANIMACAO ESQUEMATICA da trajetoria (4 s) que substitui o video
 #: real no protocolo 2.0-pose. Mantem o codigo 794 do protocolo anterior para
 #: que as analises que recortam [794, 780) continuem funcionando.
 CODE_ANIM_START = 794
@@ -425,7 +425,7 @@ CODE_NAMES = {
     CODE_BLOCK_END: "fim do bloco",
     CODE_PAUSE_START: "inicio pausa entre blocos",
     CODE_PAUSE_END: "fim pausa entre blocos",
-    CODE_ANIM_START: "inicio da animacao esquematica (2 s; 794 legado do video)",
+    CODE_ANIM_START: "inicio da animacao esquematica (4 s; 794 legado do video)",
     769: "cue mao esquerda",
     770: "cue mao direita",
     811: "condicao garrafa + mao direita",
@@ -479,7 +479,7 @@ def validar_planejamento():
     """Confere as somas do protocolo; devolve o resumo ou levanta ValueError.
 
     Autoteste: 25 trials/classe x 4 classes = 100/sessao; 4 blocos x 25 = 100;
-    2 sessoes x 100 = 200/participante; trial de 20 s.
+    2 sessoes x 100 = 200/participante; trial de 22 s.
     """
     plano = planejamento_protocolo()
     if plano["trials_por_classe_por_sessao"] * plano["classes"] \
@@ -645,6 +645,7 @@ def lado_publicado(lado_cue, lado_detector):
 #: quem aperta a tecla, e garante que haja bytecode Python rodando na thread
 #: principal com frequencia suficiente para o Ctrl+C ser percebido.
 HOTKEY_POLL_MS = 50
+HOTKEY_REPEAT_GUARD_SEC = 0.30   # Qt + hotkey global podem disparar a MESMA tecla
 #: Tempo MAXIMO (s) que o teardown de emergencia (ESC/Ctrl+C/botao ABORTAR)
 #: espera as paradas "graciosas" (pipeline, gravador, IMU). Passado o limite, o
 #: processo sai de qualquer forma: era exatamente isso que faltava quando o
@@ -2889,50 +2890,89 @@ class _StimulusCanvas(QWidget):
         painter.setBrush(Qt.NoBrush)
         painter.drawRoundedRect(mesa, 18, 18)
 
+        # Percurso completo (4 fases): home -> objeto -> levanta no ar ->
+        # devolve o objeto -> volta ao home. A linha tracejada mostra o
+        # percurso inteiro; a linha cheia, o trecho ja percorrido.
         desvio = width * (0.10 if lado == "direita" else -0.10)
-        controle = QPointF((home.x() + alvo.x()) * 0.5 + desvio,
-                           min(home.y(), alvo.y()) - height * 0.05)
+        lift = QPointF(alvo.x(), max(height * 0.15, alvo.y() - height * 0.22))
+        controle_ida = QPointF(
+            (home.x() + alvo.x()) * 0.5 + desvio,
+            min(home.y(), alvo.y()) - height * 0.05)
+        controle_volta = QPointF(
+            (home.x() + alvo.x()) * 0.5 - desvio,
+            min(home.y(), alvo.y()) - height * 0.02)
 
-        # trajetoria planejada (pontilhada): fica visivel desde o inicio.
-        caminho = QPainterPath(home)
-        caminho.quadTo(controle, alvo)
+        ida = QPainterPath(home)
+        ida.quadTo(controle_ida, alvo)
+        levanta = QPainterPath(alvo)
+        levanta.lineTo(lift)
+        desce = QPainterPath(lift)
+        desce.lineTo(alvo)
+        volta = QPainterPath(alvo)
+        volta.quadTo(controle_volta, home)
+        fases = [(ida, 0.30), (levanta, 0.20), (desce, 0.20), (volta, 0.30)]
+
         painter.setPen(QPen(self.PATH, esp * 1.2, Qt.DashLine, Qt.RoundCap))
         painter.setBrush(Qt.NoBrush)
-        painter.drawPath(caminho)
+        for caminho_fase, _ in fases:
+            painter.drawPath(caminho_fase)
 
-        # progresso CRONOMETRADO (independe da taxa de repintura).
         duracao = max(1e-3, float(getattr(self, "_anim_dur", ANIM_SEC)))
         decorrido = time.monotonic() - getattr(self, "_anim_t0",
                                                time.monotonic())
-        t = min(1.0, max(0.0, decorrido / duracao))
-        suave = t * t * (3.0 - 2.0 * t)          # ease-in/ease-out
-
-        # trecho ja percorrido (linha cheia) + ponto na posicao atual.
-        passos = max(2, int(80 * suave))
+        progresso = min(1.0, max(0.0, decorrido / duracao))
+        suave = progresso * progresso * (3.0 - 2.0 * progresso)
+        restante = suave
+        ponto = home
         parcial = QPainterPath(home)
-        for k in range(1, passos + 1):
-            parcial.lineTo(self._bezier_point(home, controle, alvo,
-                                              suave * k / passos))
+        for caminho_fase, fracao in fases:
+            if restante <= 0.0:
+                break
+            u = min(1.0, restante / fracao)
+            passos = max(2, int(48 * u))
+            for k in range(1, passos + 1):
+                parcial.lineTo(caminho_fase.pointAtPercent(u * k / passos))
+            if u >= 1.0:
+                ponto = caminho_fase.pointAtPercent(1.0)
+            else:
+                ponto = caminho_fase.pointAtPercent(u)
+            restante -= fracao
         painter.setPen(QPen(self.WHITE, esp * 1.8, Qt.SolidLine, Qt.RoundCap))
         painter.drawPath(parcial)
-        ponto = self._bezier_point(home, controle, alvo, suave)
+
         raio_ponto = max(8.0, min(width, height) * 0.014)
         painter.setPen(QPen(QColor(20, 20, 22), esp))
         painter.setBrush(self.WHITE)
         painter.drawEllipse(ponto, raio_ponto, raio_ponto)
-        painter.setBrush(Qt.NoBrush)
 
-        # alvo: anel + objeto na posicao fisica da mesa.
         raio = max(24.0, min(width, height) * 0.05)
         painter.setPen(QPen(self.TARGET, esp * 1.4))
+        painter.setBrush(Qt.NoBrush)
         painter.drawEllipse(alvo, raio, raio)
-        caixa = QRectF(alvo.x() - raio * 0.62, alvo.y() - raio * 0.62,
+        em_transporte = 0.30 <= suave <= 0.70
+        pos_obj = ponto if em_transporte else alvo
+        caixa = QRectF(pos_obj.x() - raio * 0.62,
+                       pos_obj.y() - raio * 0.62,
                        raio * 1.24, raio * 1.24)
         painter.setPen(QPen(self.WHITE, max(4.0, esp * 2.0)))
+        painter.setBrush(Qt.NoBrush)
         if self.object_name == "garrafa":
             self._draw_bottle(painter, caixa)
         else:
             self._draw_ball(painter, caixa)
+
+        fonte_fase = QFont("Arial", max(9, int(min(width, height) * 0.020)),
+                           QFont.Bold)
+        painter.setFont(fonte_fase)
+        painter.setPen(QPen(self.DIM))
+        painter.drawText(QRectF(width * 0.06, height * 0.60,
+                                width * 0.24, height * 0.06),
+                         Qt.AlignLeft | Qt.AlignVCenter,
+                         "1 alcanca  ->  2 levanta")
+        painter.drawText(QRectF(width * 0.70, height * 0.60,
+                                width * 0.24, height * 0.06),
+                         Qt.AlignRight | Qt.AlignVCenter,
+                         "3 devolve  ->  4 home")
 
         # home (ponto de partida).
         raio_home = max(16.0, min(width, height) * 0.028)
@@ -3235,8 +3275,9 @@ class StimulusWindow(QMainWindow):
     def show_video_aviso(self, texto):
         self.canvas.show_video_aviso(texto)
 
-    def show_trial_progress(self, done, total):
-        self._progress.setText(f"Trial {done}/{total}")
+    def show_trial_progress(self, done, total, pratica=False):
+        rotulo = "PRATICA " if pratica else "Trial "
+        self._progress.setText(f"{rotulo}{done}/{total}")
 
     def closeEvent(self, event):
         if self._on_close is not None:
@@ -3318,11 +3359,11 @@ class ExperimenterPanel(QMainWindow):
 class _ParadigmController(QObject):
     """Maquina de estados do paradigma ME/MI (roda na thread principal do Qt).
 
-    Protocolo 2.0-pose. Sequencia por trial (20 s):
+    Protocolo 2.1. Sequencia por trial (22 s):
       768 home/repouso 2 s (ponto de fixacao)
       -> cue + ME 8 s (769/770 + 778 + 811-814; o simbolo permanece e o
          participante EXECUTA alcance/preensao/hold/retorno)
-      -> 779 + 794: ANIMACAO esquematica da trajetoria, 2 s, fundo neutro
+      -> 779 + 794: ANIMACAO esquematica da trajetoria, 4 s, fundo neutro
       -> MI 8 s (780; BIPE + tela neutra "AGORA IMAGINE"; sem video real)
       -> fim MI (781) -> proximo trial.
     Sessao: 100 trials (4 classes x 25) em 4 blocos de 25, pausa de 3-5 min
@@ -3361,7 +3402,10 @@ class _ParadigmController(QObject):
         self._baseline_steps = []
         self._trial_index = 0
         self._bloco = 0
-        self._anim_deadline = 0.0          # fim da animacao esquematica (2 s)
+        #: guarda contra a MESMA tecla fisica chegar por dois caminhos
+        #: (QShortcut do Qt + hotkey global) e cancelar/pular duas vezes.
+        self._ultima_acao = {}
+        self._anim_deadline = 0.0          # fim da animacao esquematica (4 s)
         self._video_deadline = 0.0
         self._video_t0_ini = 0.0
         # Playback do clipe CRONOMETRADO (sem congelar): ancora na 1a chegada
@@ -3453,6 +3497,20 @@ class _ParadigmController(QObject):
         self._finished = False
         QTimer.singleShot(int(delay_ms), self._begin_preparation)
 
+    def _acao_repetida(self, nome, intervalo=None):
+        """True se a MESMA acao chegou de novo em menos de `intervalo` s."""
+        intervalo = (HOTKEY_REPEAT_GUARD_SEC if intervalo is None
+                     else float(intervalo))
+        agora = time.monotonic()
+        ultimo = self._ultima_acao.get(nome)
+        if ultimo is not None and (agora - ultimo) < intervalo:
+            print(f"[paradigma] {nome} ignorado: repeticao em "
+                  f"{agora - ultimo:.2f} s (mesma tecla por dois caminhos)",
+                  flush=True)
+            return True
+        self._ultima_acao[nome] = agora
+        return False
+
     def skip(self):
         """ESPACO do experimentador: encerra/encurta a espera atual.
 
@@ -3465,8 +3523,17 @@ class _ParadigmController(QObject):
         encurta a contagem e a tela PARA em "PRESSIONE ESPACO PARA CONTINUAR";
         o 2o inicia o proximo bloco. Zerar o timer nao inicia nada sozinho.
         """
+        if self._acao_repetida("pular", 0.20):
+            return
         if self._pause_on_end is not None:
             self._pause_skip = True
+            # Aplica JA' (nao espera o proximo tick de 250 ms): o botao do
+            # painel precisa responder na hora, mesmo se o Qt estiver ocupado.
+            self._pause_tick()
+        else:
+            print("[paradigma] ESPACO ignorado: nenhuma espera/pausa ativa "
+                  f"(fase {self._state.phase or 'idle'}); use C para "
+                  "cancelar a trial", flush=True)
 
     def cancel_trial(self):
         """CANCELA o trial atual (tecla C / botao do painel) e vai ao proximo.
@@ -3482,6 +3549,8 @@ class _ParadigmController(QObject):
         exatamente ela em vez de adivinhar pelo buraco no tempo.
         """
         if self._finished or self._aborting:
+            return
+        if self._acao_repetida("cancelar", 0.35):
             return
         if self._pause_on_end is not None:
             # Nao ha' trial em andamento: a tela e' uma espera/pausa (e o
@@ -3540,7 +3609,10 @@ class _ParadigmController(QObject):
     def info(self):
         """Linha de status para o painel: fase, trial e o que cada tecla faz."""
         cfg = self._cfg
-        total = len(cfg["trials"])
+        lista = self._active_trials if self._active_trials is not None \
+            else cfg["trials"]
+        total = len(lista)
+        rotulo = "PRATICA " if self._pratica else ""
         if self._pause_esperando:
             # A pausa entre blocos so' termina com o ESPACO: o painel avisa
             # (e' o caminho "a prova de foco" do experimentador).
@@ -3550,7 +3622,7 @@ class _ParadigmController(QObject):
         else:
             fase = f"fase {self._state.phase or 'idle'}"
         return (f"bloco {self._bloco + 1}/{cfg['blocos']} | "
-                f"trial {self._trial_index + 1}/{total} | {fase}")
+                f"{rotulo}trial {self._trial_index + 1}/{total} | {fase}")
 
     def set_panel(self, panel):
         """Liga (ou desliga, com None) o painel do experimentador.
@@ -3989,7 +4061,7 @@ class _ParadigmController(QObject):
             self._schedule(k * 1000, lambda k=k: self._window.show_countdown(n - k))
         self._schedule(n * 1000, lambda: self._run_trial(0))
 
-    # --- trial (20 s: home 2 + cue/ME 8 + animacao 2 + MI 8) ---
+    # --- trial (22 s: home 2 + cue/ME 8 + animacao 4 + MI 8) ---
     def _run_trial(self, index):
         cfg = self._cfg
         lista = self._active_trials if self._active_trials is not None \
@@ -4003,7 +4075,7 @@ class _ParadigmController(QObject):
             return
         self._trial_index = index
         trial = lista[index]
-        self._window.show_trial_progress(index + 1, total)
+        self._window.show_trial_progress(index + 1, total, pratica=self._pratica)
         self._window.show_home()
         self._state.set_phase(PHASE_HOME, cue="")
         self._emit(CODE_TRIAL_PRACTICE if self._pratica else CODE_TRIAL,
@@ -4036,7 +4108,7 @@ class _ParadigmController(QObject):
         self._schedule(cfg["me_sec"] * 1000, self._start_video_pause)
 
     def _start_video_pause(self):
-        """Fim da ME -> intervalo de 2 s antes da MI.
+        """Fim da ME -> intervalo de 4 s antes da MI.
 
         Protocolo 2.0-pose: mostra a ANIMACAO ESQUEMATICA da trajetoria
         (`_start_animacao`) e NAO usa video real da mao. O caminho antigo do
@@ -4053,7 +4125,7 @@ class _ParadigmController(QObject):
             self._start_animacao()
 
     def _start_animacao(self):
-        """ANIMACAO ESQUEMATICA (2 s) entre a ME e a MI.
+        """ANIMACAO ESQUEMATICA (4 s) entre a ME e a MI.
 
         Fundo neutro, mesa, home, alvo (garrafa a direita / bola a esquerda) e
         ponto percorrendo a trajetoria. A tela NAO mostra a mao do participante
@@ -4965,10 +5037,10 @@ def slides_instrucao():
         "mesa o objeto esta.\n\n"
         "Objetos: GARRAFA (a DIREITA da mesa) e BOLA (a ESQUERDA)\n"
         "(os 2 desenhos aparecem a seguir)\n\nESPACO",
-        "CADA TRIAL (20 s) TEM 4 ETAPAS\n\n"
+        "CADA TRIAL (22 s) TEM 4 ETAPAS\n\n"
         "1) MAO NO HOME por 2 s (descanse)\n"
         "2) SIMBOLO DA MAO + OBJETO por 8 s: EXECUTE o movimento\n"
-        "3) ANIMACAO de 2 s: veja a trajetoria esquematica do movimento\n"
+        "3) ANIMACAO de 4 s: veja a trajetoria completa do movimento (alcance, levantamento, retorno e volta ao home)\n"
         "4) Um BIPE toca e a tela mostra AGORA IMAGINE por 8 s: "
         "IMAGINE o movimento (sem executar)",
         "NA FASE DE IMAGINACAO (8 s)\n\n"
