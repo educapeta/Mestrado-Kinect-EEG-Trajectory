@@ -228,7 +228,7 @@ def draw_overlay(kinect_color, detections, triang_info, alignment, tracker, fps)
         if view is None:
             continue
         
-            landmarks = _landmarks_de_entrada(hands[0])
+        landmarks = _landmarks_de_entrada(hands[0])
         aux_px = view.pixels(landmarks)
         
         # Projeta para Kinect usando a triangulação 3D se disponível

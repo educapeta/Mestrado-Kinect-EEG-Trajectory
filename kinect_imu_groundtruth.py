@@ -34,6 +34,7 @@ os.environ.setdefault("TF_CPP_MIN_LOG_LEVEL", "3")
 
 import csv
 import json
+import types
 import math
 import socket
 import threading
@@ -5174,6 +5175,17 @@ class KinectHandTracker:
             self.auxiliary_timestamps_ms[int(index)] = 0
         self.kinect_frame_timestamp_ms = 0
         self.auxiliary_frame_timestamp_ms = 0
+        # ROI DINAMICO: depois da primeira deteccao, envia ao MediaPipe apenas
+        # a regiao da mesa em volta da mao (nao o quadro 1920x1080 inteiro).
+        # O primeiro frame (e o fallback apos perdas) continua no quadro cheio.
+        self._usar_roi_mediapipe = str(
+            os.environ.get("DSH_MEDIAPIPE_ROI", "1")).strip().lower() in (
+                "1", "true", "yes", "on")
+        self._roi_mediapipe = {}       # chave -> (x0,y0,x1,y1) em px
+        self._roi_mediapipe_miss = {}  # chave -> frames sem deteccao
+        if self._usar_roi_mediapipe:
+            print("[mediapipe] ROI dinamico ligado (crop em volta da mao)",
+                  flush=True)
 
     def frames(self):
         # Contadores de diagnostico do frame (log do vetor da palma, item 111).
@@ -5983,6 +5995,76 @@ class KinectHandTracker:
             hands.insert(0, hands.pop(index))
         return hands
 
+    # ---------------------------------------------------- ROI do MediaPipe
+    def _roi_mediapipe_para(self, chave, largura, altura):
+        """(x0,y0,x1,y1) do crop atual; quadro cheio no primeiro frame."""
+        if not getattr(self, "_usar_roi_mediapipe", False):
+            return 0, 0, int(largura), int(altura)
+        roi = self._roi_mediapipe.get(chave)
+        if roi is None:
+            return 0, 0, int(largura), int(altura)
+        x0, y0, x1, y1 = [int(round(v)) for v in roi]
+        x0 = max(0, min(x0, largura - 2)); x1 = max(x0 + 2, min(x1, largura))
+        y0 = max(0, min(y0, altura - 2)); y1 = max(y0 + 2, min(y1, altura))
+        return x0, y0, x1, y1
+
+    def _recorta_mediapipe(self, frame, chave):
+        h, w = frame.shape[:2]
+        x0, y0, x1, y1 = self._roi_mediapipe_para(chave, w, h)
+        return frame[y0:y1, x0:x1], (x0, y0, x1, y1)
+
+    def _mapeia_resultado_roi(self, result, roi, largura, altura):
+        """Converte landmarks normalizados do crop para o quadro completo."""
+        x0, y0, x1, y1 = roi
+        cw, ch = max(1, x1 - x0), max(1, y1 - y0)
+        maos = []
+        for hand in list(getattr(result, "hand_landmarks", None) or []):
+            nova = []
+            for lm in hand:
+                lm2 = types.SimpleNamespace(
+                    x=(x0 + float(lm.x) * cw) / float(largura),
+                    y=(y0 + float(lm.y) * ch) / float(altura),
+                    z=float(getattr(lm, "z", 0.0)),
+                    visibility=getattr(lm, "visibility", None),
+                    presence=getattr(lm, "presence", None),
+                    name=getattr(lm, "name", None))
+                nova.append(lm2)
+            maos.append(nova)
+        return types.SimpleNamespace(
+            hand_landmarks=maos,
+            handedness=getattr(result, "handedness", None))
+
+    def _atualiza_roi_mediapipe(self, chave, maos, largura, altura):
+        """Atualiza o crop com a bbox da mao + margem; perdeu -> quadro cheio."""
+        if not getattr(self, "_usar_roi_mediapipe", False):
+            return
+        pontos = []
+        for hand in (maos or []):
+            for lm in hand:
+                x, y = float(lm.x) * largura, float(lm.y) * altura
+                if np.isfinite(x) and np.isfinite(y):
+                    pontos.append((x, y))
+        if len(pontos) < 5:
+            self._roi_mediapipe_miss[chave] = self._roi_mediapipe_miss.get(chave, 0) + 1
+            if self._roi_mediapipe_miss[chave] >= 5:
+                self._roi_mediapipe.pop(chave, None)
+                self._roi_mediapipe_miss[chave] = 0
+            return
+        self._roi_mediapipe_miss[chave] = 0
+        xs = [p[0] for p in pontos]; ys = [p[1] for p in pontos]
+        bx0, bx1 = min(xs), max(xs)
+        by0, by1 = min(ys), max(ys)
+        mx = max(80.0, 0.35 * (bx1 - bx0))
+        my = max(80.0, 0.35 * (by1 - by0))
+        x0 = max(0.0, bx0 - mx); x1 = min(float(largura), bx1 + mx)
+        y0 = max(0.0, by0 - my); y1 = min(float(altura), by1 + my)
+        # nunca menor que 320x240: evita crop degenerado quando a mao esta' longe
+        if x1 - x0 < 320:
+            c = 0.5 * (x0 + x1); x0, x1 = c - 160, c + 160
+        if y1 - y0 < 240:
+            c = 0.5 * (y0 + y1); y0, y1 = c - 120, c + 120
+        self._roi_mediapipe[chave] = (x0, y0, x1, y1)
+
     def detect_auxiliary_hands(self, auxiliary_frame, aux_index=None,
                                want_side=None, flip=None):
         """Detecta maos na webcam auxiliar.
@@ -6001,22 +6083,30 @@ class KinectHandTracker:
         """
         if auxiliary_frame is None:
             return []
+        altura, largura = auxiliary_frame.shape[:2]
         if aux_index is not None:
             index = int(aux_index)
             detector = self.auxiliary_detectors.get(index)
             if detector is None:
                 raise KeyError(f"Sem detector para a camera auxiliar "
                                f"{index}.")
-            rgb = cv2.cvtColor(auxiliary_frame, cv2.COLOR_BGR2RGB)
+            chave = f"aux{index}"
+            crop, roi = self._recorta_mediapipe(auxiliary_frame, chave)
+            rgb = cv2.cvtColor(crop, cv2.COLOR_BGR2RGB)
             image = mp.Image(image_format=mp.ImageFormat.SRGB, data=rgb)
             stamp = max(self.auxiliary_timestamps_ms[index] + 1,
                         int(time.monotonic() * 1000))
             self.auxiliary_timestamps_ms[index] = stamp
             result = detector.detect_for_video(image, stamp)
+            result = self._mapeia_resultado_roi(result, roi, largura, altura)
+            self._atualiza_roi_mediapipe(chave, result.hand_landmarks,
+                                         largura, altura)
             if flip is None:
                 flip = aux_handedness_flip(index)
             return self._order_hands(result, want_side, flip)
-        rgb = cv2.cvtColor(auxiliary_frame, cv2.COLOR_BGR2RGB)
+        chave = "aux_primary"
+        crop, roi = self._recorta_mediapipe(auxiliary_frame, chave)
+        rgb = cv2.cvtColor(crop, cv2.COLOR_BGR2RGB)
         image = mp.Image(image_format=mp.ImageFormat.SRGB, data=rgb)
         self.auxiliary_frame_timestamp_ms = max(
             self.auxiliary_frame_timestamp_ms + 1, int(time.monotonic() * 1000)
@@ -6024,6 +6114,9 @@ class KinectHandTracker:
         result = self.auxiliary_hands.detect_for_video(
             image, self.auxiliary_frame_timestamp_ms
         )
+        result = self._mapeia_resultado_roi(result, roi, largura, altura)
+        self._atualiza_roi_mediapipe(chave, result.hand_landmarks,
+                                     largura, altura)
         return self._order_hands(result, want_side)
 
     def detect_auxiliary_hands_all(self, frames):
@@ -6537,13 +6630,18 @@ class KinectHandTracker:
             flip = MEDIAPIPE_KINECT_HANDEDNESS_FLIP
         raw_color_frame = color_frame.copy()
         self._draw_skeleton(color_frame)
-        rgb = cv2.cvtColor(raw_color_frame, cv2.COLOR_BGRA2RGB)
+        altura, largura = raw_color_frame.shape[:2]
+        chave = "kinect"
+        crop, roi = self._recorta_mediapipe(raw_color_frame, chave)
+        rgb = cv2.cvtColor(crop, cv2.COLOR_BGRA2RGB)
         image = mp.Image(image_format=mp.ImageFormat.SRGB, data=rgb)
         self.kinect_frame_timestamp_ms = max(
             self.kinect_frame_timestamp_ms + 1, int(time.monotonic() * 1000)
         )
         result = self.hands.detect_for_video(image, self.kinect_frame_timestamp_ms)
+        result = self._mapeia_resultado_roi(result, roi, largura, altura)
         detected = list(getattr(result, "hand_landmarks", None) or [])
+        self._atualiza_roi_mediapipe(chave, detected, largura, altura)
         self.last_kinect_hands = detected
         maos = []
         lados_usados = set()
@@ -6666,12 +6764,17 @@ class KinectHandTracker:
         self.last_hand_side = ""
         raw_color_frame = color_frame.copy()
         self._draw_skeleton(color_frame)
-        rgb = cv2.cvtColor(raw_color_frame, cv2.COLOR_BGRA2RGB)
+        altura, largura = raw_color_frame.shape[:2]
+        crop, roi = self._recorta_mediapipe(raw_color_frame, "kinect")
+        rgb = cv2.cvtColor(crop, cv2.COLOR_BGRA2RGB)
         image = mp.Image(image_format=mp.ImageFormat.SRGB, data=rgb)
         self.kinect_frame_timestamp_ms = max(
             self.kinect_frame_timestamp_ms + 1, int(time.monotonic() * 1000)
         )
         result = self.hands.detect_for_video(image, self.kinect_frame_timestamp_ms)
+        result = self._mapeia_resultado_roi(result, roi, largura, altura)
+        self._atualiza_roi_mediapipe("kinect", result.hand_landmarks,
+                                     largura, altura)
         index = self._pick_hand_index(
             result, want_side, MEDIAPIPE_KINECT_HANDEDNESS_FLIP,
             ancora_px=ancora_px, raio_px=raio_px,
