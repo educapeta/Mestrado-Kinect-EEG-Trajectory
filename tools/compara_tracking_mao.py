@@ -468,6 +468,17 @@ def prepara_contexto(args) -> Contexto:
             f"{gt.CHECKERBOARD_SIZE[0]}x{gt.CHECKERBOARD_SIZE[1]} cantos, "
             f"{gt.SQUARE_SIZE_M*1000:.0f} mm) e confira com "
             "tools\\diagnostico_cameras.py.")
+    elif str(estado).startswith("rejeitada"):
+        # `aux_usable` olha so' o RMS; a placa/quadrado gravados no npz tambem
+        # importam. Com o tabuleiro trocado, o RMS pode ser otimo e a geometria
+        # NAO ser do par de agora -> aviso alto (o teste continua, mas o
+        # relatorio registra o estado).
+        print(f"[AVISO] calibracao da auxiliar {aux_index} esta' REJEITADA por "
+              f"compatibilidade ({motivo}).\n"
+              "        O RMS pode parecer bom e a geometria nao ser a do par "
+              "atual: RECALIBRE antes de confiar nas posicoes.",
+              flush=True)
+        calibracao["aviso"] = f"rejeitada: {motivo}"
 
     # ---- tamanho calibrado da auxiliar ---------------------------------
     cal_w, cal_h = (calibracao["aux_size"] or [1280, 720])[:2]
@@ -1014,12 +1025,28 @@ def _jitter(posicoes: dict) -> float:
 # --------------------------------------------------------------------------
 # Sessao de aquisicao
 # --------------------------------------------------------------------------
+def _comando_reproduzivel() -> str:
+    """Comando para o usuario repetir a sessao (com o Python do .venv).
+
+    `sys.executable` e' `...\\.venv\\Scripts\\python.exe`; mostrar o caminho
+    absoluto nao ajuda, mas mostrar so' `python.exe` faz o usuario rodar o
+    Python do Windows Store e quebrar por falta de cv2/mediapipe.
+    """
+    executavel = Path(sys.executable)
+    if ".venv" in executavel.parts:
+        prefixo = r".venv\Scripts\python.exe"
+    else:
+        prefixo = str(executavel)
+    argumentos = [a for a in sys.argv[1:]]
+    return " ".join([prefixo] + argumentos)
+
+
 def _meta_sessao(ctx, args, origem, extra=None):
     meta = {
         "schema": 1,
         "gerado_em": datetime.now().isoformat(timespec="seconds"),
         "origem": origem,
-        "comando": " ".join([Path(sys.executable).name] + sys.argv),
+        "comando": _comando_reproduzivel(),
         "aux_index": ctx.aux_index,
         "aux_camera_nome": ctx.aux_nome,
         "aux_resolucao_usada": list(ctx.aux_resolucao),
@@ -1713,7 +1740,7 @@ def roda_sintetico(args) -> dict:
         "schema": 1,
         "gerado_em": datetime.now().isoformat(timespec="seconds"),
         "origem": "sintetico",
-        "comando": " ".join([Path(sys.executable).name] + sys.argv),
+        "comando": _comando_reproduzivel(),
         "aux_index": 0, "aux_camera_nome": "(sintetica)",
         "aux_resolucao_usada": [1280, 720], "kinect_resolucao": [1920, 1080],
         "espelhamento": "(sintetico)",

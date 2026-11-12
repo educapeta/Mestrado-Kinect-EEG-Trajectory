@@ -506,8 +506,8 @@ def _referencia_palm9(sessao: Sessao, lado: str) -> Optional[np.ndarray]:
 
 def segmentos_estaticos(sessao: Sessao, lado: str, fps: float,
                         limiar_mm_s: float = 30.0,
-                        janela_s: float = 0.6,
-                        minimo_s: float = 0.5) -> list[tuple[float, float]]:
+                        janela_s: float = 0.3,
+                        minimo_s: float = 0.4) -> list[tuple[float, float]]:
     """Segmentos (t0, t1) em segundos onde a mao ficou parada.
 
     Duas fontes, nesta ordem de prioridade:
@@ -1424,8 +1424,10 @@ def gera_pngs(sessao: Sessao, cobertura: dict, jitter: dict, reproj: dict,
                 transform=ax.transAxes)
     ax.axhline(CRITERIOS["reproj_max_px"], color="g", ls="--", lw=1,
                label=f"gate {CRITERIOS['reproj_max_px']:g} px")
+    ax.set_ylim(-0.2, CRITERIOS["reproj_max_px"] * 1.08)
     ax.set_ylabel("reprojecao no Kinect (px)")
-    ax.set_title("Erro de reprojecao do multi-view por landmark")
+    ax.set_title("Erro de reprojecao do multi-view por landmark\n"
+                 "(so' os pontos que passaram no gate entram no grafico)")
     ax.legend(fontsize=7)
     ax.grid(axis="y", alpha=0.25)
     fig.tight_layout()
@@ -1560,7 +1562,12 @@ def _setup_markdown(sessao: Sessao) -> list[str]:
 
 def gera_relatorio(sessao: Sessao, dir_saida: Path, arquivos: dict,
                    prefixo: str = "tracking") -> Path:
-    """Escreve `relatorio_tracking.md` (ou `<prefixo>_...`) a partir dos CSV."""
+    """Escreve o relatorio em Markdown a partir dos CSV.
+
+    Nome: `relatorio_tracking.md` (o pedido da tese). No modo SINTETICO o nome
+    carrega o prefixo (`SINTETICO_..._relatorio_tracking.md`) para um relatorio
+    de validacao de codigo nunca se confundir com o de bancada.
+    """
     dir_saida = Path(dir_saida)
     dir_saida.mkdir(parents=True, exist_ok=True)
     fps = _fps_da_sessao(sessao.frames)
@@ -1739,34 +1746,39 @@ def gera_relatorio(sessao: Sessao, dir_saida: Path, arquivos: dict,
                   "descrevem o mesmo ponto fisico -- e nenhuma triangulacao "
                   "conserta isso.")
     linhas.append("")
+    achados = []
     for lado, d in reproj["por_lado"].items():
         valor = d.get("kd_aux_mediana")
         if valor is None or not math.isfinite(float(valor)):
             continue
         if float(valor) > 20.0:
-            linhas.append(
-                f"> **Achado deste teste (`{lado}`):** o 3D do depth projetado na "
-                f"auxiliar cai a {_num(valor, 0, ' px')} de onde a MediaPipe ve o "
-                "mesmo landmark (mediana), enquanto a triangulacao tem residuo de "
-                f"{_num(d.get('mv_kin_mediana'), 1, ' px')} nos pixels que ela "
-                "propria usou. Isso NAO e' ruido: e' incompatibilidade geometrica "
-                "entre as duas vistas (extrinseca desatualizada/montagem deslocada "
-                "ou correspondencia de pixels sistematicamente enviesada). "
-                "Enquanto esse numero nao cair para a ordem de ~10-20 px, "
-                "**nenhuma metrica de posicao do multi-view pode ser lida como "
-                "qualidade do metodo multi-view**: o 3D dele e' consistente com os "
-                "proprios pixels e errado em relacao a cena. Check-list: "
-                "(1) recalibrar `stereo_calibration` com o tabuleiro na MESMA "
-                "distancia em que a mao trabalha (1,0-1,4 m); "
-                "(2) repetir este tool e olhar `depth 3D na AUXILIAR`; "
-                "(3) so' depois comparar cobertura/jitter entre metodos.")
+            achados.append((lado, float(valor), d.get("mv_kin_mediana")))
         elif float(valor) <= 20.0:
             linhas.append(
                 f"- `{lado}`: o 3D do depth projetado na auxiliar cai a "
                 f"{_num(valor, 1, ' px')} do landmark da auxiliar -- as duas vistas "
                 "estao geometricamente consistentes nesta montagem (o esperado "
                 "para uma calibracao boa e uma mao de ~10 cm de espessura).")
-    linhas.append("")
+            linhas.append("")
+    if achados:
+        detalhe = "; ".join(
+            f"`{lado}`: {_num(valor, 0, ' px')} (triangulacao com residuo de "
+            f"{_num(res, 1, ' px')} nos proprios pixels)"
+            for lado, valor, res in achados)
+        linhas.append(
+            "> **Achado deste teste.** O 3D do DEPTH projetado na auxiliar cai "
+            f"a centenas de px de onde a MediaPipe ve o mesmo landmark -- {detalhe}. "
+            "Isso NAO e' ruido: e' incompatibilidade geometrica entre as duas "
+            "vistas (extrinseca desatualizada/montagem deslocada ou "
+            "correspondencia de pixels sistematicamente enviesada). Enquanto esse "
+            "numero nao cair para a ordem de ~10-20 px, **nenhuma metrica de "
+            "posicao do multi-view pode ser lida como qualidade do metodo "
+            "multi-view**: o 3D dele e' consistente com os proprios pixels e "
+            "errado em relacao a cena. Check-list: (1) recalibrar "
+            "`stereo_calibration` com o tabuleiro na MESMA distancia em que a mao "
+            "trabalha (1,0-1,4 m); (2) repetir este tool e olhar `depth 3D na "
+            "AUXILIAR`; (3) so' depois comparar cobertura/jitter entre metodos.")
+        linhas.append("")
 
     linhas.append("### 3.4 Jitter em pose estatica")
     linhas.append("")
@@ -1793,6 +1805,25 @@ def gera_relatorio(sessao: Sessao, dir_saida: Path, arquivos: dict,
         else:
             linhas.append(f"- `{lado}`: nenhum segmento estatico detectado "
                           "(movimento continuo ou mao ausente) -> jitter NAO MEDIDO.")
+    fonte_fase = any(str(r.get("fase") or "").strip().lower() in
+                     ("estatico", "static", "parado")
+                     for r in sessao.frames)
+    linhas.append("")
+    linhas.append("Segmentos: "
+                  + ("**rotulados pelo operador** (tecla E na janela)."
+                     if fonte_fase else
+                     "**detectados automaticamente** por velocidade da "
+                     "trajetoria suavizada (limiar 30 mm/s, pausa minima 0,4 s) "
+                     "-- o operador nao marcou a fase nesta sessao."))
+    n_amostras = [d["n_amostras"] for d in jitter["por_lado"].values()]
+    if n_amostras and max(n_amostras) and max(n_amostras) < 30:
+        linhas.append("")
+        linhas.append(f"**Atencao:** o maior segmento tem {max(n_amostras)} "
+                      "amostras. Desvio-padrao com tao poucas amostras e' "
+                      "estimativa FRACA (a incerteza relativa e' ~1/sqrt(2n)): "
+                      "para o jitter ser conclusivo, rode uma sessao dedicada "
+                      "segurando a mao parada por 5 s com a tecla `E` "
+                      "pressionada.")
     linhas.append("")
 
     linhas.append("### 3.5 Continuidade e outliers")
@@ -1882,8 +1913,11 @@ def gera_relatorio(sessao: Sessao, dir_saida: Path, arquivos: dict,
                   "disponivel depois do trial (`docs/"
                   "ARQUITETURA_MULTIESCALA_E2T_SAND.md`, secao sobre causalidade).")
     linhas.append("")
-    linhas.append("Numeros desta sessao (dorso, landmark 9, trecho continuo mais "
-                  "longo):")
+    linhas.append("Numeros desta sessao (dorso, landmark 9, maior trecho continuo "
+                  "da trajetoria -- buracos de ate 5 frames preenchidos por "
+                  "interpolacao; o jitter AQUI e' a RMS da 2a diferenca no MESMO "
+                  "trecho, para comparar FILTROS entre si, e nao o jitter de pose "
+                  "estatica da secao 3.4):")
     linhas.append("")
     cab = ["metodo", "causal?", "jitter (mm)", "reducao do jitter",
            "atraso medido (frames)", "atraso DC teorico (frames)",
@@ -2038,17 +2072,38 @@ def gera_relatorio(sessao: Sessao, dir_saida: Path, arquivos: dict,
                       f"{', ' + str(contagem.get('NA') or 0) + ' NA' if contagem.get('NA') else ''}.")
     linhas.append("")
     # Comparacao direta de cobertura do dorso, que e' o alvo do pedido.
-    if len(sessao.lados) == 1 and cobertura["por_lado"]:
-        lado = sessao.lados[0]
-        d = cobertura["por_lado"][lado]
+    for lado, d in cobertura["por_lado"].items():
         cob_k = d.get("cobertura_kinect_dorso", float("nan"))
         cob_mv = d.get("cobertura_mv_dorso", float("nan"))
-        if math.isfinite(cob_k) and math.isfinite(cob_mv):
-            vencedor = "Kinect depth" if cob_k >= cob_mv else "multi-view"
-            linhas.append(f"Para o **dorso (landmark 9)** deste `{lado}`, a maior "
-                          f"cobertura foi de **{vencedor}** "
-                          f"({_pct(max(cob_k, cob_mv))} vs {_pct(min(cob_k, cob_mv))}).")
-            linhas.append("")
+        if not (math.isfinite(cob_k) and math.isfinite(cob_mv)):
+            continue
+        vencedor = "Kinect depth" if cob_k >= cob_mv else "multi-view"
+        linhas.append(f"Para o **dorso (landmark 9)** do lado `{lado}`, a maior "
+                      f"cobertura foi de **{vencedor}** "
+                      f"({_pct(max(cob_k, cob_mv))} vs {_pct(min(cob_k, cob_mv))}); "
+                      f"nos 21 landmarks a media foi "
+                      f"{_pct(d.get('cobertura_kinect'))} (Kinect) x "
+                      f"{_pct(d.get('cobertura_mv'))} (multi-view).")
+    # Continuidade: e' onde o caminho de DEPTH perde -- vale dizer por extenso.
+    for lado, d in saltos["por_lado"].items():
+        k = d.get("kinect", {})
+        m = d.get("mv", {})
+        frac_k = k.get("fracao")
+        frac_m = m.get("fracao")
+        if frac_k is None or not math.isfinite(float(frac_k)):
+            continue
+        linhas.append(
+            f"Continuidade do lado `{lado}`: o Kinect depth salta "
+            f"{_pct(frac_k)} das transicoes (maior salto "
+            f"{_num(k.get('maior_mm'), 0, ' mm')}) contra "
+            f"{_pct(frac_m)} do multi-view (maior salto "
+            f"{_num(m.get('maior_mm'), 0, ' mm')}). O salto do depth e' o modo de "
+            "falha classico do sensor no contorno da mao/na mesa: por um frame o "
+            "ponto cai no FUNDO e volta. Nao e' erro de suavizacao: e' outlier de "
+            "medida, e um filtro causal so' o amortece depois de alguns frames. "
+            "(As duas fracoes NAO tem o mesmo denominador: o multi-view so' entra "
+            "nos frames em que triangulou.)")
+    linhas.append("")
     linhas.append("**Isto e' preliminar.** Uma sessao curta, um sujeito, sem "
                   "verdade externa (jig A4/nivel) e sem repeticao entre dias nao "
                   "autoriza arquivar um dos metodos. O veredito de cobertura e "
@@ -2108,6 +2163,10 @@ def gera_relatorio(sessao: Sessao, dir_saida: Path, arquivos: dict,
         "mede-se o custo de parede por chamada, que e' um piso.",
         "Sem verdade externa de posicao (jig A4/nivel) nao ha' erro absoluto em "
         "mm -- so' comparacao relativa entre os dois metodos e auto-consistencia.",
+        "A comparacao de POSICAO entre os metodos so' vale se a secao 3.3 "
+        "(depth 3D na AUXILIAR) estiver na casa de dezenas de px: com centenas "
+        "de px a geometria das duas vistas nao descreve a mesma cena e o "
+        "multi-view fica deslocado por mais que a triangulacao seja 'limpa'.",
         "Nao foi gravado video nem frame algum (privacidade): o CSV tem apenas "
         "landmarks, posicoes 3D e metricas.",
     ]
@@ -2127,21 +2186,58 @@ def gera_relatorio(sessao: Sessao, dir_saida: Path, arquivos: dict,
     linhas.append(meta_comando(sessao))
     linhas.append("```")
     linhas.append("")
+    linhas.append("Se o comando acima aparecer como `python.exe`, rode-o com "
+                  "`.venv\\Scripts\\python.exe` (o Python do sistema nao tem "
+                  "cv2/mediapipe).")
+    linhas.append("")
     linhas.append("Teclas na janela: `ESC`/`Q` sai; `E` marca fase estatica; "
                   "`M` marca movimento; `R` marca repouso; `D` liga/desliga o "
                   "desenho dos pontos de depth. O CSV e o relatorio sao gravados "
                   "ao final da sessao.")
     linhas.append("")
 
+    # --- 10. anexo: colunas -----------------------------------------------
+    linhas.append("## 10. Anexo: colunas dos CSV")
+    linhas.append("")
+    linhas.append("O cabecalho e' o contrato com este relatorio; a documentacao "
+                  "de cada coluna (unidade e significado) vive nos comentarios de "
+                  "`CABECALHO_FRAMES` e `CABECALHO_LANDMARKS` em "
+                  "`tools/compara_tracking_mao.py`. Resumo das unidades: metros "
+                  "(posicoes), mm (distancias), px (reprojecao), ms (tempos), "
+                  "1/0 (booleanos) e vazio = nao medido.")
+    linhas.append("")
+    if sessao.frames:
+        linhas.append("`" + Path(arquivos.get("frames", "frames")).name + "`:")
+        linhas.append("")
+        linhas.append("```text")
+        linhas.append(",".join(sessao.frames[0].keys()))
+        linhas.append("```")
+        linhas.append("")
+    algum = next(iter(sessao.rastros.values()), None)
+    if algum is not None:
+        linhas.append("`" + Path(arquivos.get("landmarks", "landmarks")).name + "`:")
+        linhas.append("")
+        linhas.append("```text")
+        linhas.append(
+            "seq,t_unix,t_mono,origem,hand,landmark_id,is_dorso,k_valid,k_conf,"
+            "k_map_fail,k_depth_fail,k_depth_rescue,k_depth_m,k_x_m,k_y_m,k_z_m,"
+            "k_reproj_px,mv_valid,mv_implausivel,mv_conf,mv_x_m,mv_y_m,mv_z_m,"
+            "mv_reproj_kin_px,mv_reproj_aux_px,kin_px_x,kin_px_y,aux_px_x,"
+            "aux_px_y,kd_aux_err_px")
+        linhas.append("```")
+        linhas.append("")
+
     # --- arquivos ---------------------------------------------------------
-    linhas.append("## 10. Arquivos gerados")
+    linhas.append("## 11. Arquivos gerados")
     linhas.append("")
     for nome, caminho in arquivos.items():
         linhas.append(f"- **{nome}**: `{caminho}`")
     linhas.append("")
 
     texto = "\n".join(linhas) + "\n"
-    destino = dir_saida / f"{prefixo}_relatorio_tracking.md"
+    nome = ("relatorio_tracking.md" if not sessao.sintetica
+            else f"{prefixo}_relatorio_tracking.md")
+    destino = dir_saida / nome
     destino.write_text(texto, encoding="utf-8")
     return destino
 
