@@ -261,10 +261,18 @@ def calibra_imu(participante="", sessao="", portas=(4210, 4211),
     avisar("=" * 72)
     if confirmar:
         try:
-            input("  Deixe as luvas PARADAS e DEITADAS e tecle ENTER para reiniciar "
-                  "(ou 'n' para pular): ").strip().lower()
+            resposta = input(
+                "  Deixe as luvas PARADAS e DEITADAS e tecle ENTER para "
+                "reiniciar (ou 'n' para pular): ").strip().lower()
         except EOFError:
+            resposta = ""
             avisar("  (sem terminal interativo: seguindo automaticamente)")
+        if resposta == "n":
+            resultado["motivo"] = "calibracao pulada pelo operador"
+            resultado["ok"] = True
+            resultado["mensagens"].append("calibracao dos IMUs pulada pelo operador")
+            avisar("  Calibracao dos IMUs PULADA a pedido do operador.")
+            return resultado
     reinicio = reiniciar_luvas(porta=porta_serial, segundos=segundos_boot,
                                serial_factory=serial_factory,
                                listar_portas=listar_portas)
