@@ -358,6 +358,8 @@ def parse_args():
     ap.add_argument("--aux-fps", type=int,
                     default=int(os.environ.get("DSH_AUX_FPS", "30")))
     ap.add_argument("--duracao", type=float, default=0.0)
+    ap.add_argument("--tri-iter", type=int, default=1,
+                    help="iteracoes do refinamento Huber da triangulacao (0=DLT puro)")
     return ap.parse_args()
 
 
@@ -479,7 +481,7 @@ def main():
                         aux_indices=aux_indices,
                         min_valid_points=5,
                         max_reproj_error_px=15.0,
-                        ransac_iters=5
+                        ransac_iters=args.tri_iter
                     )
                     triang_info = info
                     if pts3d is not None:
