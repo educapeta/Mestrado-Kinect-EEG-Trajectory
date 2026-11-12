@@ -4956,10 +4956,12 @@ class RecordingMuxer(IONode):
             return None
         n = block.shape[0]
         # --- eventos (drain) ---
-        # 1) um evento adiado por colisao entra QUANDO o hold do anterior
+        # 1) eventos adiados por colisao entram QUANDO o hold do anterior
         #    termina (self._remaining <= 0): cada codigo preserva a janela
-        #    inteira no Marker, sem ser engolido pelo proximo.
-        if self._pending and self._remaining <= 0:
+        #    inteira no Marker, sem ser engolido pelo proximo. Processa TODOS
+        #    os pendentes prontos (antes era um por step e os demais ficavam
+        #    atrasados indefinidamente numa colisao multipla).
+        while self._pending and self._remaining <= 0:
             event = self._pending.pop(0)
             event["sample_index"] = self._counter
             self._apply_event(event)
