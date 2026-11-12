@@ -18,9 +18,11 @@ Teclas:
     S - Salva frame atual
 """
 
+import os
 import sys
 import time
 import csv
+import threading
 from pathlib import Path
 from collections import deque
 
@@ -121,6 +123,69 @@ def open_aux_cameras(indices):
     return caps
 
 
+class AuxDetectionWorker:
+    """Thread propria para detectar uma camera auxiliar.
+
+    Cada thread tem o SEU detector/timestamp do MediaPipe (o detector nao e'
+    reentrante). O loop principal envia o frame mais novo; se ainda nao houver
+    resultado, usa o ultimo disponivel (zero-order hold). O Kinect continua na
+    thread principal, evitando disputa pelo mapper/depth.
+    """
+
+    def __init__(self, tracker, index):
+        self.tracker = tracker
+        self.index = int(index)
+        self._frame = None
+        self._latest = []
+        self._lock = threading.Lock()
+        self._event = threading.Event()
+        self._ready = threading.Event()
+        self._running = True
+        self._erro = None
+        self.thread = threading.Thread(target=self._run, daemon=True,
+                                       name=f"aux-detect-{self.index}")
+        self.thread.start()
+
+    def submit(self, frame):
+        if frame is None:
+            return
+        with self._lock:
+            self._frame = frame
+        self._event.set()
+
+    def _run(self):
+        while self._running:
+            self._event.wait(0.05)
+            with self._lock:
+                frame = self._frame
+                self._frame = None
+                self._event.clear()
+            if frame is None:
+                continue
+            try:
+                resultado = self.tracker.detect_auxiliary_hands(
+                    frame, aux_index=self.index)
+                with self._lock:
+                    self._latest = list(resultado or [])
+            except Exception as exc:
+                self._erro = f"{type(exc).__name__}: {exc}"
+                with self._lock:
+                    self._latest = []
+            self._ready.set()
+
+    def latest(self):
+        with self._lock:
+            return list(self._latest or [])
+
+    def wait_ready(self, timeout=1.0):
+        return self._ready.wait(timeout)
+
+    def stop(self):
+        self._running = False
+        self._event.set()
+        self.thread.join(timeout=1.0)
+
+
 def read_aux_frames(caps):
     """Lê frames de todas as câmeras auxiliares."""
     frames = {}
@@ -152,8 +217,8 @@ def _landmarks_de_entrada(entrada):
     return entrada
 
 
-def get_landmarks_pixels(tracker, color_frame, depth_frame, aux_frames, alignment, want_side=None):
-    """Detecta landmarks em todas as câmeras e retorna pixels (21,2) por câmera."""
+def get_landmarks_pixels(tracker, color_frame, depth_frame, aux_frames,
+                         alignment, want_side=None, aux_hands_override=None):
     
     # Kinect
     kinect_color, kinect_hands = tracker.detect_hands_all(color_frame, depth_frame)
@@ -178,21 +243,19 @@ def get_landmarks_pixels(tracker, color_frame, depth_frame, aux_frames, alignmen
     
     # Auxiliares
     aux_pixels = {}
-    aux_hands_all = {}
-    
-    for idx, frame in aux_frames.items():
-        if frame is None:
-            continue
-        hands = tracker.detect_auxiliary_hands_all({idx: frame})
-        aux_hands_all[idx] = hands.get(idx, [])
-        
-        if hands.get(idx):
-            # Usa a primeira mão detectada (ou filtra por lado se necessário)
-            landmarks = _landmarks_de_entrada(hands[idx][0])
+    aux_hands_all = dict(aux_hands_override or {})
+    if not aux_hands_all:
+        for idx, frame in aux_frames.items():
+            if frame is None:
+                continue
+            hands = tracker.detect_auxiliary_hands_all({idx: frame})
+            aux_hands_all[idx] = hands.get(idx, [])
+    for idx, hands in aux_hands_all.items():
+        if hands:
+            landmarks = _landmarks_de_entrada(hands[0])
             view = alignment.aux_view(idx)
-            if view:
+            if view and landmarks:
                 aux_pixels[idx] = view.pixels(landmarks)
-    
     return {
         'kinect': kinect_pixels,
         'aux': aux_pixels,
@@ -325,6 +388,13 @@ def main():
     # 3. Abre câmeras auxiliares
     print("\n[3/4] Abrindo câmeras auxiliares...")
     aux_caps = open_aux_cameras(aux_indices)
+
+    # Threads de deteccao das auxiliares: o Kinect fica no loop principal.
+    aux_workers = {}
+    if str(os.environ.get("DSH_DEMO_AUX_THREADS", "1")).strip().lower() not in ("0", "false", "no", "off"):
+        for idx in aux_indices:
+            aux_workers[int(idx)] = AuxDetectionWorker(tracker, int(idx))
+        print(f"  Deteccao paralela: {len(aux_workers)} threads auxiliares", flush=True)
     if len(aux_caps) < 2:
         print("  AVISO: Menos de 2 auxiliares abertas - funcionalidade limitada")
     
@@ -360,13 +430,22 @@ def main():
                     continue
                 
                 aux_frames = read_aux_frames(aux_caps)
+                for idx, frame in aux_frames.items():
+                    if idx in aux_workers:
+                        aux_workers[idx].submit(frame)
+                aux_hands_override = None
+                if aux_workers:
+                    for worker in aux_workers.values():
+                        worker.wait_ready(0.5)
+                    aux_hands_override = {i: w.latest() for i, w in aux_workers.items()}
                 t_cap = time.perf_counter() - t_cap0
                 
                 # Detecta landmarks
                 want_side = None  # None = primeira mão detectada
                 t_det0 = time.perf_counter()
                 detections = get_landmarks_pixels(
-                    tracker, color_frame, depth_frame, aux_frames, alignment, want_side
+                    tracker, color_frame, depth_frame, aux_frames, alignment, want_side,
+                    aux_hands_override=aux_hands_override
                 )
                 
                 t_det = time.perf_counter() - t_det0
@@ -449,6 +528,8 @@ def main():
     finally:
         # Cleanup
         print("\nFinalizando...")
+        for worker in aux_workers.values():
+            worker.stop()
         tracker.close()
         for cap in aux_caps.values():
             cap.release()
