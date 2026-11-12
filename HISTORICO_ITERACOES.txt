@@ -10174,3 +10174,33 @@ piloto tecnico; qualquer auto-teste deve ser avaliado com o CEP/orientador.
 PROXIMO: confirmar CAAE, decidir via, converter docs para PDF/DOCX, recalibrar
 stereo na distancia de trabalho, atualizar testes antigos e submeter ate 19/11.
 
+
+
+================================================================================
+ITEM 186 (12/11/2026) - CORRECOES DO PARADIGMA (HOTKEYS, PRATICA, ANIMACAO)
+================================================================================
+ARQUIVO: eeg_motor_paradigm.py (protocolo agora 2.1-pose-anim).
+  - C cancelava 2 trials: o Qt (QShortcut/keyPressEvent) e o hotkey global
+    entregavam a MESMA tecla fisica. Adicionado debounce por acao no
+    controlador (0.35 s para cancelar, 0.20 s para pular).
+  - Pular/continuar parecia nao fazer nada: `skip` agora aplica
+    `_pause_tick()` imediatamente (nao espera o timer de 250 ms) e registra no
+    console quando nao ha espera ativa.
+  - Trials de pratica apareciam no contador de 100: `info()`/progresso agora
+    usam `_active_trials` e rotulo "PRATICA x/n"; a sessao real continua x/100.
+  - Animacao: ANIM_SEC 2.0 -> 4.0 s; desenho do ciclo completo
+    home -> objeto -> levanta no ar -> devolve objeto -> home; linha tracejada
+    do percurso, linha cheia do trecho e ponto movel; trial passa a 22 s
+    (home 2 + ME 8 + animacao 4 + MI 8). PROTOCOL_VERSION=2.1-pose-anim.
+  - Correcao separada em imu_reset.py: resposta 'n' agora pula de fato a
+    calibracao (o retorno do input era descartado), commit 04bf3bd.
+  - Testes: py_compile OK; generator 1 bloco/2 trials OK; render offscreen da
+    animacao em 0/50/90% OK; skip com controller fake dispara callback 1 vez;
+    cancelamento duplo ignorado; info mostra PRATICA trial 1/2.
+  - PENDENTE: replay da trajetoria REAL da ME (Kinect) durante a animacao/MI;
+    o desenho atual e' esquematico (fallback), nao os pontos medidos.
+  - NOTA: trial de 22 s muda o protocolo/CEP; atualizar documentos e CEP.
+MODELO: tentativa de rodar subagente no opencode/nemotron-3-ultra-free
+  retornou null no workflow; implementacao feita no modelo atual.
+G.NAUTILUS: teste real abriu depois de encerrar processo antigo PID 4072 que
+  segurava a sessao exclusiva do GDS; 15.530 linhas de EEG gravadas.
