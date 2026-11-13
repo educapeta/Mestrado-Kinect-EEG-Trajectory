@@ -98,6 +98,8 @@ CSV_COLUNAS = [
     "lateralidade_kinect", "lateralidade_aux0", "lateralidade_aux1",
     # Tempos
     "t_hold_inicio_s", "t_hold_fim_s", "t_decorrido_s",
+    # lateralidade confirmada pelo resolvedor
+    "lado_confirmado_kinect", "fonte_lado_kinect",
 ]
 
 # ============================================================================
@@ -128,6 +130,13 @@ class FrameData:
     lateralidade_kinect: str = ""
     lateralidade_aux0: str = ""
     lateralidade_aux1: str = ""
+    lado_confirmado_kinect: bool = False
+    fonte_lado_kinect: str = ""
+    # 21 landmarks 3D por método (opcional; salvo em CSV longo)
+    lms_kinect_3d: Optional[np.ndarray] = None
+    lms_aux0_3d: Optional[np.ndarray] = None
+    lms_aux1_3d: Optional[np.ndarray] = None
+    lms_3view_3d: Optional[np.ndarray] = None
     # Tempos de hold
     t_hold_inicio: Optional[float] = None
     t_hold_fim: Optional[float] = None
@@ -616,6 +625,63 @@ def _lado_pt(side_en: str) -> str:
         "esquerda" if side_en == "left" else "")
 
 
+class HandednessResolver:
+    """Resolve o lado da mão usando o esqueleto 3D do Kinect.
+
+    O MediaPipe devolve um rótulo de aparência que pode espelhar; o Kinect
+    entrega HandLeft/HandRight em coordenadas de câmera. Para cada detecção,
+    escolhemos a junta mais próxima (até max_dist_m). Se não houver junta
+    confiável, mantemos o rótulo do tracker como "não confirmado" e usamos a
+    última posição conhecida para evitar troca de lado por um frame.
+    """
+
+    def __init__(self, max_dist_m: float = 0.20):
+        self.max_dist_m = float(max_dist_m)
+        self._last = []  # [(posicao(3,), side, timestamp)]
+
+    def resolve(self, maos, skeleton_points):
+        skeleton_points = skeleton_points or {}
+        resultado = []
+        usados = set()
+        for mao in maos or []:
+            copia = dict(mao)
+            pos = copia.get("position")
+            melhor_side, melhor_dist = None, None
+            if pos is not None and np.isfinite(pos).all():
+                for side, ponto in skeleton_points.items():
+                    if side in usados:
+                        continue
+                    d = float(np.linalg.norm(np.asarray(pos, float)
+                                             - np.asarray(ponto, float)))
+                    if melhor_dist is None or d < melhor_dist:
+                        melhor_side, melhor_dist = side, d
+            if melhor_side is not None and melhor_dist <= self.max_dist_m:
+                copia["side"] = melhor_side
+                copia["side_source"] = "skeleton"
+                copia["side_confirmed"] = True
+                usados.add(melhor_side)
+            else:
+                # fallback temporal: mesma posição do frame anterior
+                anterior = None
+                if pos is not None and np.isfinite(pos).all():
+                    for p_old, s_old, _t in reversed(self._last):
+                        if np.isfinite(p_old).all() and np.linalg.norm(
+                                np.asarray(pos) - p_old) < self.max_dist_m:
+                            anterior = s_old
+                            break
+                copia["side"] = anterior or copia.get("side", "")
+                copia["side_source"] = "temporal" if anterior else "mediapipe"
+                copia["side_confirmed"] = False
+            resultado.append(copia)
+        # guarda posições para o fallback temporal
+        agora = time.monotonic()
+        self._last = [(np.asarray(m.get("position"), float), m.get("side", ""), agora)
+                      for m in resultado
+                      if m.get("position") is not None
+                      and np.isfinite(np.asarray(m.get("position"), float)).all()]
+        return resultado
+
+
 class ValidacaoHardware:
     """Executa validação com hardware real (Kinect + auxiliares)."""
     
@@ -627,6 +693,7 @@ class ValidacaoHardware:
         saida_dir: Path,
         sem_janela: bool = False,
         tempo_movimento: Optional[float] = None,
+        salvar_landmarks: bool = False,
     ):
         self.mao = mao
         self.velocidade = velocidade
@@ -635,6 +702,7 @@ class ValidacaoHardware:
         self.sem_janela = sem_janela
         self.tempo_movimento = (float(tempo_movimento) if tempo_movimento
                                 else TEMPO_ESPERADO[velocidade])
+        self.salvar_landmarks = bool(salvar_landmarks)
         
         self.saida_dir.mkdir(parents=True, exist_ok=True)
         
@@ -649,6 +717,7 @@ class ValidacaoHardware:
         # hardware nunca triangulava de verdade)
         self.aux_caps = {}
         self._abrir_cameras_auxiliares()
+        self.handedness = HandednessResolver()
 
         # Estado da coleta
         self.repeticoes_data: list[RepeticaoData] = []
@@ -856,20 +925,27 @@ class ValidacaoHardware:
         # Extrai posição da palma (landmark 9) para o lado atual
         mao_alvo = None
         for mao in maos_kinect:
-            if mao.get("side") == lado_en:
+            if mao.get("side") == lado_en and mao.get("side_confirmed"):
                 mao_alvo = mao
                 break
+        if mao_alvo is None:
+            for mao in maos_kinect:
+                if mao.get("side") == lado_en:
+                    mao_alvo = mao
+                    break
         if mao_alvo is None and maos_kinect:
-            # Fallback explícito: não descarta a coleta se o classificador de
-            # lateralidade errar/omitir o rótulo; registra o lado detectado.
             mao_alvo = maos_kinect[0]
-            print(f"[lado] mão {lado} não rotulada; usando {mao_alvo.get('side')} "
-                  f"({len(maos_kinect)} detectadas) -- verificar lateralidade")
+            print(f"[lado] mão {lado} não confirmada; usando "
+                  f"{mao_alvo.get('side')} ({mao_alvo.get('side_source')}) "
+                  f"-- frame será marcado como não confirmado")
         
         # Triangulação multi-view (se auxiliares disponíveis)
         mv_aux0_pos = None
         mv_aux1_pos = None
         mv_3view_pos = None
+        lms_aux0_3d = None
+        lms_aux1_3d = None
+        lms_3view_3d = None
         
         # Triangulação 3-view (se ambos aux disponíveis e têm landmarks)
         aux0_landmarks = None
@@ -885,6 +961,16 @@ class ValidacaoHardware:
         # Kinect landmarks
         kinect_landmarks = mao_alvo["landmarks"] if mao_alvo else None
         kinect_pos = mao_alvo["position"] if mao_alvo else None
+        lms_kinect_3d = None
+        if kinect_landmarks:
+            pontos_lms = []
+            for lm in kinect_landmarks:
+                try:
+                    p3 = self.tracker._landmark_camera_point(lm, lado=lado_en)
+                except Exception:
+                    p3 = None
+                pontos_lms.append(p3 if p3 is not None else [np.nan]*3)
+            lms_kinect_3d = np.asarray(pontos_lms, np.float64)
         
         # Cobertura de landmarks
         cobertura_kinect = 100.0 if kinect_landmarks else 0.0
@@ -920,8 +1006,10 @@ class ValidacaoHardware:
                 points_3d, mask, info = gt.triangulate_three_views(
                     self.alignment, kinect_pixels_px, aux0_pixels_px, aux1_pixels_px
                 )
-                if points_3d is not None and mask[9]:  # landmark 9 = palma
-                    mv_3view_pos = points_3d[9]
+                if points_3d is not None:
+                    lms_3view_3d = np.asarray(points_3d, np.float64)
+                    if mask[9]:
+                        mv_3view_pos = points_3d[9]
             except Exception as e:
                 print(f"[3-view] Erro: {e}")
         
@@ -939,6 +1027,8 @@ class ValidacaoHardware:
                         kinect_depth_m = float(kinect_pos[2])
                     
                     points_3d, reproj = view_aux0.triangulate_with_kinect(aux0_px, kinect_px)
+                    if points_3d is not None:
+                        lms_aux0_3d = np.asarray(points_3d, np.float64)
                     if points_3d is not None and np.isfinite(points_3d[9]).all():
                         mv_aux0_pos = points_3d[9]
             except Exception as e:
@@ -957,6 +1047,8 @@ class ValidacaoHardware:
                         kinect_depth_m = float(kinect_pos[2])
                     
                     points_3d, reproj = view_aux1.triangulate_with_kinect(aux1_px, kinect_px)
+                    if points_3d is not None:
+                        lms_aux1_3d = np.asarray(points_3d, np.float64)
                     if points_3d is not None and np.isfinite(points_3d[9]).all():
                         mv_aux1_pos = points_3d[9]
             except Exception as e:
@@ -981,6 +1073,12 @@ class ValidacaoHardware:
             lateralidade_kinect=lat_kinect,
             lateralidade_aux0=lat_aux0,
             lateralidade_aux1=lat_aux1,
+            lado_confirmado_kinect=bool(mao_alvo and mao_alvo.get("side_confirmed")),
+            fonte_lado_kinect=str(mao_alvo.get("side_source", "")) if mao_alvo else "",
+            lms_kinect_3d=lms_kinect_3d,
+            lms_aux0_3d=lms_aux0_3d,
+            lms_aux1_3d=lms_aux1_3d,
+            lms_3view_3d=lms_3view_3d,
         )
         
         # Anotações visuais
@@ -1155,9 +1253,35 @@ def salvar_csv(repeticoes: list[RepeticaoData], caminho: Path):
                     f"{frame.t_hold_inicio:.6f}" if frame.t_hold_inicio is not None else "",
                     f"{frame.t_hold_fim:.6f}" if frame.t_hold_fim is not None else "",
                     f"{frame.timestamp_s:.6f}",
+                    "1" if frame.lado_confirmado_kinect else "0",
+                    frame.fonte_lado_kinect,
                 ]
                 writer.writerow(row)
     print(f"CSV salvo: {caminho}")
+
+
+def salvar_landmarks_csv(repeticoes: list[RepeticaoData], caminho: Path):
+    """Salva os 21 landmarks 3D em formato longo (frame, método, landmark)."""
+    metodos = (("kinect", "lms_kinect_3d"),
+               ("mv_aux0", "lms_aux0_3d"),
+               ("mv_aux1", "lms_aux1_3d"),
+               ("mv_3view", "lms_3view_3d"))
+    with open(caminho, "w", newline="", encoding="utf-8") as f:
+        w = csv.writer(f)
+        w.writerow(["repeticoes", "lado", "estado", "timestamp_s",
+                    "metodo", "landmark", "x_m", "y_m", "z_m"])
+        for rep_idx, rep in enumerate(repeticoes):
+            for frame in rep.frames:
+                for metodo, attr in metodos:
+                    arr = getattr(frame, attr, None)
+                    if arr is None or len(arr) != 21:
+                        continue
+                    for lm_idx in range(21):
+                        p = arr[lm_idx]
+                        w.writerow([rep_idx, rep.lado, frame.estado,
+                                    f"{frame.timestamp_s:.6f}", metodo, lm_idx,
+                                    f"{p[0]:.6f}", f"{p[1]:.6f}", f"{p[2]:.6f}"])
+    print(f"Landmarks 3D salvos: {caminho}")
 
 
 def salvar_relatorio_json(resultado: dict, caminho: Path):
@@ -1204,6 +1328,8 @@ Exemplos:
                        help="Modo sintético: gera dados com ground truth 0,500 m + ruído, sem câmeras")
     parser.add_argument("--tempo-movimento", type=float, default=None,
                        help="Duração alvo do movimento em s (default: 2,0/1,0/0,5 conforme velocidade)")
+    parser.add_argument("--salvar-landmarks", action="store_true",
+                       help="Salva os 21 landmarks 3D por frame em CSV longo (Kinect/MV)")
     
     args = parser.parse_args()
     
@@ -1252,6 +1378,7 @@ Exemplos:
                 saida_dir=saida_dir,
                 sem_janela=args.sem_janela,
                 tempo_movimento=args.tempo_movimento,
+                salvar_landmarks=args.salvar_landmarks,
             )
             todas_repeticoes.extend(validador.executar())
         
@@ -1269,6 +1396,9 @@ Exemplos:
     
     # Salva CSV consolidado
     salvar_csv(todas_repeticoes, csv_path)
+    if args.salvar_landmarks:
+        lms_path = saida_dir / f"landmarks_{sufixo}.csv"
+        salvar_landmarks_csv(todas_repeticoes, lms_path)
     
     # Salva relatórios JSON por condição
     for (lado, vel), reps in resultados_finais.items():
