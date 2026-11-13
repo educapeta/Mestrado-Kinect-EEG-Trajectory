@@ -1084,13 +1084,26 @@ def main() -> int:
             if (not nomes or all(n.lower().startswith("ch") for n in nomes)):
                 nomes = list(metadata.get("channel_names") or [])
             desejados = [c.strip() for c in args.canais.split(",") if c.strip()]
-            faltando = [c for c in desejados if c not in nomes]
-            if faltando:
-                raise SystemExit(f"Canais nao encontrados no CSV/JSON: {faltando}; "
-                                 f"disponiveis: {nomes}")
-            indices = [nomes.index(c) for c in desejados]
+            indices = []
+            nao_encontrados = []
+            for token in desejados:
+                if token in nomes:
+                    indices.append(nomes.index(token))
+                elif token.isdigit():
+                    # índice 1-based do canal físico (como no g.recorder)
+                    idx = int(token) - 1
+                    if 0 <= idx < len(nomes):
+                        indices.append(idx)
+                    else:
+                        nao_encontrados.append(token)
+                else:
+                    nao_encontrados.append(token)
+            if nao_encontrados:
+                raise SystemExit(f"Canais nao encontrados no CSV/JSON: "
+                                 f"{nao_encontrados}; disponiveis: {nomes}")
             eeg_data = eeg_data[:, indices]
-            print(f"[INFO] Canais selecionados: {desejados} -> shape {eeg_data.shape}")
+            print(f"[INFO] Canais selecionados: {desejados} -> indices "
+                  f"{[i+1 for i in indices]} -> shape {eeg_data.shape}")
     except Exception as e:
         print(f"[ERRO] Falha ao carregar dados: {e}")
         return 1
