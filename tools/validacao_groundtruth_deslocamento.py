@@ -734,9 +734,18 @@ class ValidacaoHardware:
         # Detecta mãos no Kinect (todas, para lateralidade)
         color_annotated, maos_kinect = self.tracker.detect_hands_all(color_frame, depth_frame)
         
-        # Detecta nas auxiliares reais
+        # Detecta nas auxiliares reais. Usamos `_sides` (dict com side +
+        # landmarks), nao `_all` (lista de landmarks): o ArbitroDeLateralidade
+        # espera entradas com "side".
         aux_frames = self._ler_auxiliares()
-        maos_aux = self.tracker.detect_auxiliary_hands_all(aux_frames)
+        maos_aux = {}
+        for aux_idx, frame in aux_frames.items():
+            try:
+                maos_aux[int(aux_idx)] = self.tracker.detect_auxiliary_hands_sides(
+                    frame, aux_index=int(aux_idx))
+            except Exception as exc:
+                print(f"[aux {aux_idx}] deteccao falhou: {exc}")
+                maos_aux[int(aux_idx)] = []
         
         # Árbitro de lateralidade
         arbitro = gt.ArbitroDeLateralidade()
