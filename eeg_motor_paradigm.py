@@ -151,6 +151,7 @@ from gpype.backend.core.io_node import IONode
 
 from gpype.common.constants import Constants
 from imu import ImuBank, ImuReceiver, parse_portas_imu
+from body_joints_recorder import BodyJointsRecorder
 
 # Ritual de CALIBRACAO DOS IMUs no inicio de cada sessao (item 101): aviso por
 # participante + reset do ESP32 pela serial (luvas paradas) + conferencia do
@@ -6020,6 +6021,12 @@ def parse_args():
                         help=("Desliga a cinematica inversa de elos rigidos: "
                               "ARM_* vem do esqueleto cru do SDK (sem "
                               "arm_model.json)"))
+    parser.add_argument("--corpo", action="store_true",
+                        help=("Liga o logging dos nos 3D do esqueleto do Kinect "
+                              "(corpo inteiro) em camera space bruto. Arquivo: "
+                              "corpo_<sessao>_<timestamp>.csv a ~30 Hz."))
+    parser.add_argument("--sem-corpo", action="store_true",
+                        help="Desliga o logging do corpo (default: ligado se Kinect ativo).")
     parser.add_argument("--aux-cameras", default="",
                         help=("Indices (OpenCV) das webcams auxiliares usadas "
                               "com o Kinect, separados por virgula. O indice do "
@@ -6763,6 +6770,20 @@ def main():
     motion_recorder = MotionRecorder(state, motion_name, hz=args.mov_hz,
                                      fs=args.fs)
     motion_recorder.start()
+    
+    # Body joints recorder (corpo inteiro em camera space bruto)
+    body_recorder = None
+    enable_body = (not args.sem_kinect and not args.sem_corpo) or args.corpo
+    if enable_body:
+        participante = _slug_arquivo(args.participante, "P00")
+        body_name = os.path.join(
+            pasta_sessoes,
+            f"corpo_{participante}_s{args.sessao}_{stamp}.csv")
+        body_recorder = BodyJointsRecorder(state, body_name, hz=args.mov_hz,
+                                           tracker_ref=tracking)
+        body_recorder.start()
+        print(f"[corpo] logging ativado: {os.path.basename(body_name)}", flush=True)
+    
     # Ordem da parada de EMERGENCIA (ver `CancelamentoGarantido`). Fica AQUI
     # (depois de tudo existir) porque as funcoes de parada sao resolvidas na hora
     # do `extend`: referenciar `motion_recorder` antes da criacao daria NameError.
@@ -6772,6 +6793,8 @@ def main():
         ("vigia de link", watchdog.stop),
         ("imu (UDP)", imu.stop),
     ])
+    if body_recorder is not None:
+        paradas.append(("gravador de corpo", body_recorder.stop))
     if args.source == "gnautilus" and args.impedancia:
         _impedance_report(source, args.impedancia_tentativas,
                           args.impedancia_sec)
@@ -6789,6 +6812,8 @@ def main():
         watchdog.stop()
         if impedance_monitor is not None:
             impedance_monitor.stop()
+        if body_recorder is not None:
+            body_recorder.stop()
         vigia_hotkeys.stop()
         tracking.running = False
         tracking.join(timeout=3.0)
@@ -6799,10 +6824,15 @@ def main():
         # em disco (antes o resumo anunciava o nome PEDIDO, inexistente).
         events_name = _align_event_json(writer, events_name, csv_name)
         actual_csv = _caminho_real_csv(writer)
+        body_info = ""
+        if body_recorder is not None:
+            body_info = (f"  Corpo      -> {os.path.abspath(body_recorder.path)} "
+                         f"({body_recorder.rows} linhas)\n")
         print(f"\nGravacao finalizada:\n"
               f"  EEG        -> {os.path.abspath(actual_csv or csv_name)}\n"
               f"  Movimento  -> {os.path.abspath(motion_name)} "
               f"({motion_recorder.rows} linhas)\n"
+              f"{body_info}"
               f"  Eventos    -> {os.path.abspath(events_name)}\n"
               f"  Priming    -> {priming_dir or '(nao salvo)'} "
               f"({tracking.clips_saved} clipes, "
