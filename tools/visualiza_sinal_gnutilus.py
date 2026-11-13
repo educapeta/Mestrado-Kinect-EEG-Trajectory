@@ -73,6 +73,10 @@ def main():
     ap.add_argument("--fs", type=float, default=500.0)
     ap.add_argument("--sem-uv", action="store_true",
                     help="Mostra counts brutos (default: escala aproximada µV)")
+    ap.add_argument("--escala", type=float, default=0.0,
+                    help="Faixa fixa do topo em µV (0 = robusta automática)")
+    ap.add_argument("--sem-normalizar", action="store_true",
+                    help="Não normaliza cada canal no painel dos 32")
     args = ap.parse_args()
 
     import pyqtgraph as pg
@@ -153,6 +157,8 @@ def main():
     # eixo X comum: [-janela, 0]
     for p in (plot_top, plot_all):
         p.setXRange(-args.janela, 0, padding=0)
+    plot_top.enableAutoRange(y=False)
+    plot_all.enableAutoRange(y=False)
 
     estado = {"ultimo": 0.0}
 
@@ -170,18 +176,40 @@ def main():
         t = t - t[-1]
         # escala aproximada counts -> uV (só para visualização)
         shown = dados if args.sem_uv else dados * 0.000134
+        # Topo: faixa robusta COMUM aos canais selecionados. Se um canal tem
+        # amplitude muito maior, ainda dá para ver os menores; escala fixa
+        # opcional evita o "achatamento" causado por outliers.
+        vals = []
+        for idx in indices_topo:
+            y = np.nan_to_num(shown[:, idx], nan=0.0)
+            vals.append(y)
+        if vals:
+            todos = np.concatenate(vals)
+            if args.escala > 0:
+                ymax = float(args.escala)
+            else:
+                ymax = float(np.percentile(np.abs(todos), 99.0)) * 1.25
+                ymax = max(ymax, 10.0)
+            plot_top.setYRange(-ymax, ymax, padding=0)
         for k, idx in enumerate(indices_topo):
-            y = shown[:, idx]
-            # remove NaN para o plot
-            y = np.nan_to_num(y, nan=0.0)
+            y = np.nan_to_num(shown[:, idx], nan=0.0)
             curvas_topo[k].setData(t, y)
-        # 32 canais empilhados; normaliza cada um para visualização
-        for i in range(len(CHANNEL_NAMES)):
-            y = np.nan_to_num(shown[:, i], nan=0.0)
-            scale = np.nanmax(np.abs(y)) if np.isfinite(y).any() else 1.0
-            if scale <= 0:
-                scale = 1.0
-            curvas_all[i].setData(t, y / scale - i * 1.5)
+        # 32 canais empilhados: por padrão normaliza cada um; sem normalizar
+        # mantém a amplitude e usa offsets fixos.
+        if args.sem_normalizar:
+            escala = max(float(np.percentile(np.abs(shown), 99.0)), 1e-9)
+            for i in range(len(CHANNEL_NAMES)):
+                y = np.nan_to_num(shown[:, i], nan=0.0) / escala
+                curvas_all[i].setData(t, y - i * 1.5)
+            plot_all.setYRange(-2.5, 1.5, padding=0)
+        else:
+            for i in range(len(CHANNEL_NAMES)):
+                y = np.nan_to_num(shown[:, i], nan=0.0)
+                scale = np.percentile(np.abs(y), 99.0) if np.isfinite(y).any() else 1.0
+                if scale <= 0:
+                    scale = 1.0
+                curvas_all[i].setData(t, y / scale - i * 1.5)
+            plot_all.setYRange(-len(CHANNEL_NAMES) * 1.5, 1.5, padding=0)
         agora = time.strftime("%H:%M:%S")
         plot_top.setTitle(f"Canais {', '.join(CHANNEL_NAMES[i] for i in indices_topo)} "
                           f"— janela {args.janela:.1f}s — {agora}")
