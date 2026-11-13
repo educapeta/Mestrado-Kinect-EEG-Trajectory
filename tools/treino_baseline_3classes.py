@@ -883,6 +883,20 @@ def load_eeg_csv(csv_path: Path) -> Tuple[np.ndarray, np.ndarray, np.ndarray]:
     return eeg_data, markers, timestamps
 
 
+def ler_nomes_canais(csv_path: Path) -> list:
+    """Lê os nomes de canais do header do CSV de EEG."""
+    with open(csv_path, "r", encoding="utf-8") as f:
+        for linha in f:
+            linha = linha.strip()
+            if not linha or linha.startswith("#"):
+                continue
+            if "," in linha and not linha.split(",")[0].replace(".", "", 1).isdigit():
+                nomes = [x.strip() for x in linha.split(",")]
+                return nomes[1:-1]
+            return []
+    return []
+
+
 def load_events_json(json_path: Path) -> Dict[str, Any]:
     """Carrega JSON de eventos/metadados."""
     print(f"[INFO] Carregando JSON: {json_path}")
@@ -1023,6 +1037,8 @@ def main() -> int:
     parser.add_argument("--bp-low", type=float, default=0.5, help="Highpass (Hz)")
     parser.add_argument("--bp-high", type=float, default=40.0, help="Lowpass (Hz)")
     parser.add_argument("--notch", type=float, default=60.0, help="Notch frequency (Hz)")
+    parser.add_argument("--canais", type=str, default="todos",
+                        help="Canais a usar, ex.: C3,Cz,C4 (default: todos)")
     parser.add_argument("--features", choices=["bandpower", "csp"],
                         default="bandpower",
                         help="Features: bandpower (robusto) ou csp (experimental)")
@@ -1043,6 +1059,16 @@ def main() -> int:
     # Carrega dados
     try:
         eeg_data, markers, timestamps = load_eeg_csv(args.csv)
+        if args.canais and args.canais.strip().lower() not in ("todos", "all"):
+            nomes = ler_nomes_canais(args.csv)
+            desejados = [c.strip() for c in args.canais.split(",") if c.strip()]
+            faltando = [c for c in desejados if c not in nomes]
+            if faltando:
+                raise SystemExit(f"Canais nao encontrados no CSV: {faltando}; "
+                                 f"disponiveis: {nomes}")
+            indices = [nomes.index(c) for c in desejados]
+            eeg_data = eeg_data[:, indices]
+            print(f"[INFO] Canais selecionados: {desejados} -> shape {eeg_data.shape}")
         metadata = load_events_json(args.json)
     except Exception as e:
         print(f"[ERRO] Falha ao carregar dados: {e}")
