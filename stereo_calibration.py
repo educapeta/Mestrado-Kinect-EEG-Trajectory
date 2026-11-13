@@ -1,7 +1,7 @@
 """Calibracao stereo Kinect RGB + camera auxiliar.
 
-Tabuleiro (placa atual, impressa em 23/09/2026): 6 x 4 QUADRADOS de 57 mm ->
-5 x 3 CANTOS INTERNOS. Os valores ficam nas constantes do arquivo
+Tabuleiro (placa atual, impressa em 01/10/2026): 8 x 6 QUADRADOS de 45 mm ->
+7 x 5 CANTOS INTERNOS. Os valores ficam nas constantes do arquivo
 (CHECKERBOARD_COLS/ROWS e SQUARE_SIZE_M) e precisam casar com
 kinect_imu_groundtruth.py: o npz grava placa e quadrado, e um npz de placa
 diferente e' RECUSADO com o motivo por extenso (CameraAlignment.stereo_status).
@@ -180,14 +180,14 @@ APLICATIVOS_QUE_SEGURAM_O_KINECT = (
 #: exato (`KINECT_INTRINSICS_FILE`), entao este sufixo aposenta um npz sem
 #: apagar nada e sem que ele volte a ser carregado por engano.
 SUFIXO_ARQUIVADO = ".arquivado"
-# Tabuleiro: PLACA ATUAL (impressa 23/09/2026) = 6 x 4 QUADRADOS de 57 mm ->
-# 5 x 3 CANTOS internos (a regra do cv2 e' sempre quadrados - 1 por lado).
+# Tabuleiro: PLACA ATUAL (impressa 01/10/2026) = 8 x 6 QUADRADOS de 45 mm ->
+# 7 x 5 CANTOS internos (a regra do cv2 e' sempre quadrados - 1 por lado).
 # Precisa casar com CHECKERBOARD_SIZE/SQUARE_SIZE_M em
 # kinect_imu_groundtruth.py: o stereo salvo guarda estes dois valores e a
 # biblioteca RECUSA (stereo_ready=False, com o motivo dito em
 # CameraAlignment.stereo_status) qualquer npz de placa/quadrado diferente.
 # Historico: 4x3/52 mm (subgrade, geometria 2x grande) -> 12x8 quadrados/26 mm
-# (11x7 cantos, a placa antiga) -> 6x4/57 mm (a atual).
+# (11x7 cantos, a placa antiga) -> 7x5/45 mm (a atual).
 # Sobrescrevivel na linha de comando com --checkerboard CxR e --quadrado MM.
 CHECKERBOARD_COLS = 7
 CHECKERBOARD_ROWS = 5

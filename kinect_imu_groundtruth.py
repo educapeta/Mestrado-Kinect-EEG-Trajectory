@@ -4126,8 +4126,8 @@ class CameraAlignment:
         """(estado, motivo) do stereo de uma auxiliar -- com o motivo POR EXTENSO.
 
         Motivo de existir: a mensagem antiga so' dizia "RMS alto", e desde a
-        troca do tabuleiro (placa nova = 6x4 quadrados de 57 mm; os npz de
-        aux1/aux2 foram gravados com a placa de 52 mm) a recusa NAO e' de
+        troca do tabuleiro (placa atual = 8x6 quadrados de 45 mm; os npz de
+        aux1/aux2 antigos foram gravados com outra placa) a recusa NAO e' de
         qualidade -- e' de COMPATIBILIDADE com a placa. Sem separar as duas
         causas, o dia da recalibracao comeca com um diagnostico enganoso.
         `aux_index` None consulta a camera ATIVA.
