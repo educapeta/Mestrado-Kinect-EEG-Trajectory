@@ -103,9 +103,25 @@ def preprocess_eeg(
     Returns:
         Dados filtrados, shape (n_samples, n_channels)
     """
+    # Robustez para dados reais do g.Nautilus: counts grandes e eventuais
+    # amostras invalidas. Sem isso o filtfilt propaga NaN por todo o canal.
+    data = np.asarray(eeg_data, np.float64).copy()
+    for ch in range(data.shape[1]):
+        x = data[:, ch]
+        bons = np.isfinite(x)
+        if bons.sum() < 3:
+            data[:, ch] = 0.0
+            continue
+        if not bons.all():
+            idx = np.arange(len(x))
+            x[~bons] = np.interp(idx[~bons], idx[bons], x[bons])
+            data[:, ch] = x
+        if np.std(x) < 1e-12:
+            data[:, ch] = 0.0
+
     # Bandpass
     b_bp, a_bp = butter_bandpass(bp_low, bp_high, fs, order=4)
-    data_filt = apply_filter(eeg_data, b_bp, a_bp, axis=0)
+    data_filt = apply_filter(data, b_bp, a_bp, axis=0)
     
     # Notch
     b_ns, a_ns = butter_bandstop(notch_freq - notch_width/2, notch_freq + notch_width/2, fs, order=4)
@@ -1059,17 +1075,22 @@ def main() -> int:
     # Carrega dados
     try:
         eeg_data, markers, timestamps = load_eeg_csv(args.csv)
+        metadata = load_events_json(args.json)
         if args.canais and args.canais.strip().lower() not in ("todos", "all"):
+            # O CsvWriter do gpype nomeia as colunas Ch01..Ch32; os nomes
+            # anatomicos estao no JSON de metadados. Usar o JSON quando o
+            # header for generico.
             nomes = ler_nomes_canais(args.csv)
+            if (not nomes or all(n.lower().startswith("ch") for n in nomes)):
+                nomes = list(metadata.get("channel_names") or [])
             desejados = [c.strip() for c in args.canais.split(",") if c.strip()]
             faltando = [c for c in desejados if c not in nomes]
             if faltando:
-                raise SystemExit(f"Canais nao encontrados no CSV: {faltando}; "
+                raise SystemExit(f"Canais nao encontrados no CSV/JSON: {faltando}; "
                                  f"disponiveis: {nomes}")
             indices = [nomes.index(c) for c in desejados]
             eeg_data = eeg_data[:, indices]
             print(f"[INFO] Canais selecionados: {desejados} -> shape {eeg_data.shape}")
-        metadata = load_events_json(args.json)
     except Exception as e:
         print(f"[ERRO] Falha ao carregar dados: {e}")
         return 1

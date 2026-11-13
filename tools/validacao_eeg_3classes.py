@@ -593,6 +593,12 @@ class MI3ClassParadigm:
     def _run_blocks(self):
         """Loop principal dos blocos (roda em thread separada)."""
         try:
+            # Contagem inicial para o participante se acomodar (sem tecla).
+            if not self.headless:
+                for n in (5, 4, 3, 2, 1):
+                    self._show_text(f"PREPARANDO\n\n{n}", duration=1.0)
+                    if self._aborted:
+                        break
             for block_idx in range(self.n_blocks):
                 if self._aborted:
                     break
@@ -624,11 +630,9 @@ class MI3ClassParadigm:
                 
                 # Pausa entre blocos (exceto último)
                 if block_idx < self.n_blocks - 1 and not self._aborted:
-                    pause_sec = 30.0  # 30s padrão
-                    if not self.headless:
-                        self._show_text(f"FIM DO BLOCO {block_idx + 1}\nPausa de {pause_sec:.0f}s\nPressione ESPAÇO para continuar", wait_key=True)
-                    else:
-                        self._wait_with_abort_check(pause_sec)
+                    pause_sec = 10.0  # pausa curta, sem tecla; ESC/Ctrl+C aborta
+                    self._show_text(f"FIM DO BLOCO {block_idx + 1}\n"
+                                    f"Pausa de {pause_sec:.0f}s", duration=pause_sec)
             
         except Exception as e:
             print(f"[ERRO] Exceção no loop de blocos: {e}")
