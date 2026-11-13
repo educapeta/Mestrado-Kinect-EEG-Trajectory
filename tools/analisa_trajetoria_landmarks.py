@@ -53,7 +53,8 @@ def suaviza(arr: np.ndarray, janela: int = 7, ordem: int = 2) -> np.ndarray:
 
 def analisar(csv_path: Path, metodo_filtro: str = "kinect",
              janela: int = 7, ordem: int = 2,
-             fisico: float = DESLOCAMENTO_FISICO_M) -> dict:
+             fisico: float = DESLOCAMENTO_FISICO_M,
+             hold_frames: int = 8) -> dict:
     grupos = defaultdict(list)
     with open(csv_path, newline="", encoding="utf-8") as f:
         for row in csv.DictReader(f):
@@ -83,6 +84,9 @@ def analisar(csv_path: Path, metodo_filtro: str = "kinect",
         idx_ini = [i for i, e in enumerate(estados) if e == "hold_inicio"]
         idx_fim = [i for i, e in enumerate(estados) if e == "hold_fim"]
         if len(idx_ini) >= 3 and len(idx_fim) >= 3:
+            # o 3-2-1 pode conter inicio de movimento; usa o FIM do hold inicial
+            idx_ini = idx_ini[-hold_frames:]
+            idx_fim = idx_fim[:hold_frames]
             p_ini = np.median(pos_suave[idx_ini], axis=0)
             p_fim = np.median(pos_suave[idx_fim], axis=0)
         else:
@@ -91,8 +95,15 @@ def analisar(csv_path: Path, metodo_filtro: str = "kinect",
             p_fim = np.median(pos_suave[-n:], axis=0)
 
         desloc = float(np.linalg.norm(p_fim - p_ini))
-        passos = np.linalg.norm(np.diff(pos_suave, axis=0), axis=1)
-        caminho = float(passos.sum()) if len(passos) else 0.0
+        # caminho integrado: só o trecho de MOVIMENTO (hold estático não conta)
+        idx_mov = [i for i, e in enumerate(estados) if e == "movimento"]
+        if len(idx_mov) >= 2:
+            trecho = pos_suave[idx_mov]
+            passos = np.linalg.norm(np.diff(trecho, axis=0), axis=1)
+            caminho = float(passos.sum())
+        else:
+            passos = np.linalg.norm(np.diff(pos_suave, axis=0), axis=1)
+            caminho = float(passos.sum()) if len(passos) else 0.0
         resultados.append({
             "repeticoes": rep, "lado": lado, "metodo": metodo,
             "landmark": lm, "n_frames": len(pos),
@@ -168,11 +179,14 @@ def main():
     ap.add_argument("--janela", type=int, default=7, help="Janela Savitzky-Golay")
     ap.add_argument("--ordem", type=int, default=2)
     ap.add_argument("--fisico", type=float, default=DESLOCAMENTO_FISICO_M)
+    ap.add_argument("--hold-frames", type=int, default=8,
+                    help="Frames finais do hold inicial usados como posição de partida")
     args = ap.parse_args()
 
     if not args.csv.exists():
         raise SystemExit(f"CSV não encontrado: {args.csv}")
-    res = analisar(args.csv, args.metodo, args.janela, args.ordem, args.fisico)
+    res = analisar(args.csv, args.metodo, args.janela, args.ordem,
+                   args.fisico, args.hold_frames)
     if not res["resultados"]:
         raise SystemExit("Nenhum landmark encontrado no CSV.")
     resumo = resumo_por_landmark(res)

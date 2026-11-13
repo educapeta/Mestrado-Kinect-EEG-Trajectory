@@ -78,6 +78,7 @@ MIN_HOLD_FRAMES = 5           # mediana geométrica sobre ≥5 frames no hold
 MIN_HOLD_SEC = 0.30           # tempo mínimo de hold alvo (~0,3-0,5 s)
 MAX_HOLD_SEC = 0.50
 HOLD_SEC = 0.50                # duracao fixa do hold inicial/final (s)
+HOLD_ANALYSIS_FRAMES = 8      # usar SO o fim do hold inicial (evita contar a transicao durante o 3-2-1)
 COUNTDOWN_SEC = 3.0            # contagem 3-2-1 antes do movimento
 WINDOW_SCALE = 0.5            # escala de exibição das janelas
 CSV_COLUNAS = [
@@ -387,6 +388,13 @@ def calcular_metricas_repeticao(rep: RepeticaoData) -> dict:
     hold_inicio_frames = [f for f in rep.frames if f.estado == "hold_inicio"]
     hold_fim_frames = [f for f in rep.frames if f.estado == "hold_fim"]
     movimento_frames = [f for f in rep.frames if f.estado == "movimento"]
+    # O 3-2-1 e' um periodo de espera, mas o usuario pode comecar a mover antes
+    # do cronometro. A posicao inicial real e' o FINAL do hold inicial; usar os
+    # 3 s inteiros contamina o jitter/deslocamento com a transicao.
+    if len(hold_inicio_frames) > HOLD_ANALYSIS_FRAMES:
+        hold_inicio_frames = hold_inicio_frames[-HOLD_ANALYSIS_FRAMES:]
+    if len(hold_fim_frames) > HOLD_ANALYSIS_FRAMES:
+        hold_fim_frames = hold_fim_frames[:HOLD_ANALYSIS_FRAMES]
     
     if len(hold_inicio_frames) < MIN_HOLD_FRAMES or len(hold_fim_frames) < MIN_HOLD_FRAMES:
         return {"erro": "frames de hold insuficientes"}
