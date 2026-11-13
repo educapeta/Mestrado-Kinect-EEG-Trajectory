@@ -165,11 +165,25 @@ class HoldBuffer:
     
     def adicionar(self, frame: FrameData):
         self.frames.append(frame)
-    
-    def mediana_posicao(self, metodo: str) -> Optional[np.ndarray]:
+
+    @staticmethod
+    def _chave_lateralidade(metodo: str) -> str:
+        if metodo in ("kinect", "mv_3view"):
+            return "lateralidade_kinect"
+        return f"lateralidade_{metodo.split('_')[-1]}"
+
+    def _frames_validos(self, metodo: str, lado: Optional[str] = None):
+        chave = self._chave_lateralidade(metodo)
+        for f in self.frames:
+            if lado is not None and getattr(f, chave, "") != lado:
+                continue
+            yield f
+
+    def mediana_posicao(self, metodo: str,
+                        lado: Optional[str] = None) -> Optional[np.ndarray]:
         """Mediana geométrica das posições 3D no hold para um método."""
         posicoes = []
-        for f in self.frames:
+        for f in self._frames_validos(metodo, lado):
             pos = getattr(f, f"{metodo}_pos", None)
             if pos is not None and np.isfinite(pos).all():
                 posicoes.append(pos)
@@ -182,10 +196,11 @@ class HoldBuffer:
             return None
         return float(np.median([f.timestamp_s for f in self.frames]))
     
-    def jitter_mm(self, metodo: str) -> Optional[float]:
+    def jitter_mm(self, metodo: str,
+                  lado: Optional[str] = None) -> Optional[float]:
         """Jitter no hold = norma do vetor desvio padrão (mm)."""
         posicoes = []
-        for f in self.frames:
+        for f in self._frames_validos(metodo, lado):
             pos = getattr(f, f"{metodo}_pos", None)
             if pos is not None and np.isfinite(pos).all():
                 posicoes.append(pos)
@@ -409,10 +424,10 @@ def calcular_metricas_repeticao(rep: RepeticaoData) -> dict:
     }
     
     for metodo in ("kinect", "mv_aux0", "mv_aux1", "mv_3view"):
-        p_ini = buf_inicio.mediana_posicao(metodo)
-        p_fim = buf_fim.mediana_posicao(metodo)
-        jitter = buf_inicio.jitter_mm(metodo)
-        jitter_fim = buf_fim.jitter_mm(metodo)
+        p_ini = buf_inicio.mediana_posicao(metodo, rep.lado)
+        p_fim = buf_fim.mediana_posicao(metodo, rep.lado)
+        jitter = buf_inicio.jitter_mm(metodo, rep.lado)
+        jitter_fim = buf_fim.jitter_mm(metodo, rep.lado)
         jitter_medio = None
         if jitter is not None and jitter_fim is not None:
             jitter_medio = (jitter + jitter_fim) / 2.0
@@ -453,10 +468,12 @@ def calcular_metricas_repeticao(rep: RepeticaoData) -> dict:
             lat_key = metodo.split("_")[-1]  # "aux0" ou "aux1"
         else:  # mv_3view usa lateralidade do Kinect como referência
             lat_key = "kinect"
-        lateralidade_ok = all(
-            getattr(f, f"lateralidade_{lat_key}", "") == rep.lado
-            for f in rep.frames
-        )
+        vals_lat = [getattr(f, f"lateralidade_{lat_key}", "")
+                    for f in rep.frames]
+        vals_lat = [v for v in vals_lat if v]
+        pct_lat = (100.0 * sum(v == rep.lado for v in vals_lat)
+                   / len(vals_lat)) if vals_lat else 0.0
+        lateralidade_ok = pct_lat >= 95.0
         
         resultados["metodos"][metodo] = {
             "deslocamento_m": desloc,
