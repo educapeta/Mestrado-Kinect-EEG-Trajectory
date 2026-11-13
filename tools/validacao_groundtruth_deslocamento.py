@@ -588,6 +588,17 @@ def agregar_resultados(repeticoes: list[RepeticaoData]) -> dict:
 # MODO HARDWARE (Kinect + Câmeras Auxiliares)
 # ============================================================================
 
+def _lado_en(lado_pt: str) -> str:
+    """Converte o lado do protocolo (pt) para o rótulo do MediaPipe (en)."""
+    return "right" if lado_pt == "direita" else "left"
+
+
+def _lado_pt(side_en: str) -> str:
+    """Converte o rótulo do MediaPipe para o lado do protocolo."""
+    return "direita" if side_en == "right" else (
+        "esquerda" if side_en == "left" else "")
+
+
 class ValidacaoHardware:
     """Executa validação com hardware real (Kinect + auxiliares)."""
     
@@ -783,6 +794,7 @@ class ValidacaoHardware:
     def _processar_frame(self, color_frame, depth_frame) -> tuple[Optional[np.ndarray], dict]:
         """Processa um frame e retorna imagem anotada + dados das mãos."""
         lado = self._lado_atual()
+        lado_en = _lado_en(lado)
         
         # Detecta mãos no Kinect (todas, para lateralidade)
         color_annotated, maos_kinect = self.tracker.detect_hands_all(color_frame, depth_frame)
@@ -827,9 +839,15 @@ class ValidacaoHardware:
         # Extrai posição da palma (landmark 9) para o lado atual
         mao_alvo = None
         for mao in maos_kinect:
-            if mao["side"] == lado:
+            if mao.get("side") == lado_en:
                 mao_alvo = mao
                 break
+        if mao_alvo is None and maos_kinect:
+            # Fallback explícito: não descarta a coleta se o classificador de
+            # lateralidade errar/omitir o rótulo; registra o lado detectado.
+            mao_alvo = maos_kinect[0]
+            print(f"[lado] mão {lado} não rotulada; usando {mao_alvo.get('side')} "
+                  f"({len(maos_kinect)} detectadas) -- verificar lateralidade")
         
         # Triangulação multi-view (se auxiliares disponíveis)
         mv_aux0_pos = None
@@ -841,7 +859,7 @@ class ValidacaoHardware:
         aux1_landmarks = None
         for aux_idx, maos in aux_corrigido.items():
             for mao in maos:
-                if mao["side"] == lado:
+                if mao.get("side") == lado_en:
                     if aux_idx == 0:
                         aux0_landmarks = mao["landmarks"]
                     elif aux_idx == 1:
@@ -858,15 +876,15 @@ class ValidacaoHardware:
         cobertura_3view = 100.0 if (aux0_landmarks and aux1_landmarks and kinect_landmarks) else 0.0
         
         # Lateralidade
-        lat_kinect = mao_alvo["side"] if mao_alvo else ""
+        lat_kinect = _lado_pt(mao_alvo["side"]) if mao_alvo else ""
         lat_aux0 = ""
         lat_aux1 = ""
         for aux_idx, maos in aux_corrigido.items():
             for mao in maos:
                 if aux_idx == 0:
-                    lat_aux0 = mao["side"]
+                    lat_aux0 = _lado_pt(mao.get("side", ""))
                 elif aux_idx == 1:
-                    lat_aux1 = mao["side"]
+                    lat_aux1 = _lado_pt(mao.get("side", ""))
         
         # Triangulação 3-view (se disponível)
         if kinect_landmarks and aux0_landmarks and aux1_landmarks:
@@ -1245,9 +1263,11 @@ Exemplos:
         print(f"\n--- RESUMO: {lado.upper()} | {vel.upper()} ---")
         for metodo, m in agg.get("metodos", {}).items():
             print(f"  {metodo}:")
-            print(f"    Deslocamento: {m.get('deslocamento_mediano_m', 0):.4f} m (mediana) | P95: {m.get('deslocamento_p95_m', 0):.4f} m")
-            print(f"    Erro absoluto: {m.get('erro_abs_mediano_cm', 0):.2f} cm (mediana) | P95: {m.get('erro_abs_p95_cm', 0):.2f} cm")
-            print(f"    Velocidade erro: {m.get('velocidade_erro_mediano_pct', 0):.1f}% (mediana)")
+            def _f(val, casas=4):
+                return "N/A" if val is None else f"{val:.{casas}f}"
+            print(f"    Deslocamento: {_f(m.get('deslocamento_mediano_m'))} m (mediana) | P95: {_f(m.get('deslocamento_p95_m'))} m")
+            print(f"    Erro absoluto: {_f(m.get('erro_abs_mediano_cm'), 2)} cm (mediana) | P95: {_f(m.get('erro_abs_p95_cm'), 2)} cm")
+            print(f"    Velocidade erro: {_f(m.get('velocidade_erro_mediano_pct'), 1)}% (mediana)")
             jitter_val = m.get('jitter_hold_mediano_mm')
             print(f"    Jitter hold: {jitter_val:.2f} mm (mediana)" if jitter_val is not None else "    Jitter hold: N/A mm (mediana)")
             cov_val = m.get('cobertura_media_pct')
