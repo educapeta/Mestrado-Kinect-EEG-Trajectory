@@ -77,6 +77,7 @@ TEMPO_ESPERADO = {
 MIN_HOLD_FRAMES = 5           # mediana geométrica sobre ≥5 frames no hold
 MIN_HOLD_SEC = 0.30           # tempo mínimo de hold alvo (~0,3-0,5 s)
 MAX_HOLD_SEC = 0.50
+HOLD_SEC = 0.50                # duracao fixa do hold inicial/final (s)
 WINDOW_SCALE = 0.5            # escala de exibição das janelas
 CSV_COLUNAS = [
     "frame_idx", "timestamp_s", "lado", "estado",  # estado: hold_inicio, movimento, hold_fim
