@@ -38,6 +38,8 @@ warnings.filterwarnings("ignore", category=RuntimeWarning)
 CODE_CUE_LEFT = 769
 CODE_CUE_RIGHT = 770
 CODE_CUE_REST = 784
+CODE_ME_START = 778
+CODE_ME_END = 779
 CODE_MI_START = 780
 CODE_MI_END = 781
 CODE_BLOCK_START = 790
@@ -961,6 +963,8 @@ def generate_report(
         f.write(f"- **Trials por classe:** {metadata.get('trials_per_class', '?')}\n")
         f.write(f"- **Total trials:** {metadata.get('total_trials', '?')}\n")
         f.write(f"- **Duração MI:** {metadata.get('mi_sec', '?')} s\n")
+        f.write(f"- **Duração ME:** {metadata.get('me_sec', '?')} s\n")
+        f.write(f"- **Fase analisada:** {metadata.get('fase', '?')}\n")
         f.write(f"- **Duração Cue:** {metadata.get('cue_sec', '?')} s\n")
         f.write(f"- **ITI:** {metadata.get('iti_range', '?')} s\n")
         f.write(f"- **Fs:** {metadata.get('fs', FS)} Hz\n")
@@ -1048,7 +1052,9 @@ def main() -> int:
     parser.add_argument("--csv", type=Path, required=True, help="Arquivo CSV de EEG")
     parser.add_argument("--json", type=Path, required=True, help="Arquivo JSON de eventos")
     parser.add_argument("--saida", type=Path, default=Path("./relatorio_validacao"), help="Pasta de saída")
-    parser.add_argument("--mi-tmin", type=float, default=0.5, help="Início da época relativo ao MI start (s)")
+    parser.add_argument("--fase", choices=["MI", "ME"], default="MI",
+                        help="Fase a analisar: MI (780/781) ou ME (778/779)")
+    parser.add_argument("--mi-tmin", type=float, default=0.5, help="Início da época relativo ao start da fase (s)")
     parser.add_argument("--mi-tmax", type=float, default=4.0, help="Fim da época relativo ao MI start (s)")
     parser.add_argument("--bp-low", type=float, default=0.5, help="Highpass (Hz)")
     parser.add_argument("--bp-high", type=float, default=40.0, help="Lowpass (Hz)")
@@ -1076,6 +1082,7 @@ def main() -> int:
     try:
         eeg_data, markers, timestamps = load_eeg_csv(args.csv)
         metadata = load_events_json(args.json)
+        metadata['fase'] = args.fase
         if args.canais and args.canais.strip().lower() not in ("todos", "all"):
             # O CsvWriter do gpype nomeia as colunas Ch01..Ch32; os nomes
             # anatomicos estao no JSON de metadados. Usar o JSON quando o
@@ -1123,13 +1130,20 @@ def main() -> int:
     
     # Extração de épocas
     print("[INFO] Extraindo épocas de MI...")
+    inicio_fase = CODE_ME_START if args.fase == "ME" else CODE_MI_START
+    fim_fase = CODE_ME_END if args.fase == "ME" else CODE_MI_END
+    print(f"[INFO] Fase analisada: {args.fase} "
+          f"(marcadores {inicio_fase}/{fim_fase})")
     epochs_list, labels, trial_idx, block_idx = extract_epochs_from_markers(
         eeg_filt,
         markers,
         timestamps,
         fs=metadata.get('fs', FS),
+        mi_start_code=inicio_fase,
+        mi_end_code=fim_fase,
         tmin=args.mi_tmin,
         tmax=args.mi_tmax,
+        cue_codes=CODE_TO_CLASS,
     )
     
     if len(epochs_list) == 0:

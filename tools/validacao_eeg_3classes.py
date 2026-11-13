@@ -77,6 +77,8 @@ CODE_BLOCK_END = 791
 CODE_CUE_LEFT = 769        # Cue mão ESQUERDA
 CODE_CUE_RIGHT = 770       # Cue mão DIREITA
 CODE_CUE_REST = 784        # Cue REPOUSO (baseline repouso ativo)
+CODE_ME_START = 778        # Início da execução motora
+CODE_ME_END = 779          # Fim da execução motora
 CODE_MI_START = 780        # Início fase MI
 CODE_MI_END = 781          # Fim fase MI
 CODE_TRIAL_CANCEL = 796    # Trial cancelado
@@ -350,6 +352,8 @@ class AcquisitionPipeline:
             "cue_left": CODE_CUE_LEFT,
             "cue_right": CODE_CUE_RIGHT,
             "cue_rest": CODE_CUE_REST,
+            "me_start": CODE_ME_START,
+            "me_end": CODE_ME_END,
             "mi_start": CODE_MI_START,
             "mi_end": CODE_MI_END,
             "trial_cancel": CODE_TRIAL_CANCEL,
@@ -437,6 +441,8 @@ class MI3ClassParadigm:
         n_blocks: int = 2,
         trials_per_class: int = 15,
         mi_sec: float = 4.0,
+        me_sec: float = 4.0,
+        transicao_sec: float = 1.0,
         rest_sec: float = 2.0,
         cue_sec: float = 1.0,
         iti_min_sec: float = 0.5,
@@ -452,6 +458,8 @@ class MI3ClassParadigm:
         self.n_blocks = n_blocks
         self.trials_per_class = trials_per_class
         self.mi_sec = mi_sec
+        self.me_sec = float(me_sec)
+        self.transicao_sec = float(transicao_sec)
         self.rest_sec = rest_sec
         self.cue_sec = cue_sec
         self.iti_min_sec = iti_min_sec
@@ -657,6 +665,8 @@ class MI3ClassParadigm:
             "class": class_label,
             "cue_code": cue_code,
             "mi_sec": self.mi_sec,
+            "me_sec": self.me_sec,
+            "transicao_sec": self.transicao_sec,
             "rest_sec": self.rest_sec,
             "cue_sec": self.cue_sec,
         }
@@ -673,20 +683,43 @@ class MI3ClassParadigm:
         else:
             self._wait_with_abort_check(self.cue_sec)
         
-        # 2. MI / REPOUSO
+        # 2. ME (execução motora) / REPOUSO
+        if class_label == "repouso":
+            texto_me = "REPOUSO\n\nNão se mova"
+        else:
+            texto_me = "EXECUTE\n\nMão " + class_label.upper()
+        self.pipeline.emit_marker("me_start")
+        self._log_event("me_start", {"class": class_label})
+        if not self.headless:
+            self._show_text(texto_me, duration=self.me_sec)
+        else:
+            self._wait_with_abort_check(self.me_sec)
+        self.pipeline.emit_marker("me_end")
+        self._log_event("me_end", {"class": class_label})
+        
+        # 3. Transição curta (neutra)
+        if not self.headless:
+            self._show_text("+", duration=self.transicao_sec)
+        else:
+            self._wait_with_abort_check(self.transicao_sec)
+        
+        # 4. MI / REPOUSO
+        if class_label == "repouso":
+            texto_mi = "REPOUSO\n\nContinue parado"
+        else:
+            texto_mi = "IMAGINE\n\nMão " + class_label.upper()
         self.pipeline.emit_marker("mi_start")
         self._log_event("mi_start", {"class": class_label})
-        
-        # Durante MI, se generator, poderíamos injetar padrão específico
-        # Por enquanto, apenas aguarda
-        self._wait_with_abort_check(self.mi_sec)
-        
+        if not self.headless:
+            self._show_text(texto_mi, duration=self.mi_sec)
+        else:
+            self._wait_with_abort_check(self.mi_sec)
         self.pipeline.emit_marker("mi_end")
         self._log_event("mi_end", {"class": class_label})
         
-        # 3. Pausa curta (ITI) - tela neutra
+        # 5. Pausa curta (ITI) - tela neutra
         if not self.headless:
-            self._show_text("+", duration=0.5)  # Fixação
+            self._show_text("+", duration=0.5)
         
         self._log_event("trial_end", {"trial": trial_num, "class": class_label})
     
@@ -760,6 +793,8 @@ class MI3ClassParadigm:
             "trials_per_class": self.trials_per_class,
             "total_trials": self._total_trials,
             "mi_sec": self.mi_sec,
+            "me_sec": self.me_sec,
+            "transicao_sec": self.transicao_sec,
             "rest_sec": self.rest_sec,
             "cue_sec": self.cue_sec,
             "iti_range": [self.iti_min_sec, self.iti_max_sec],
@@ -773,6 +808,8 @@ class MI3ClassParadigm:
                 "cue_left": CODE_CUE_LEFT,
                 "cue_right": CODE_CUE_RIGHT,
                 "cue_rest": CODE_CUE_REST,
+                "me_start": CODE_ME_START,
+                "me_end": CODE_ME_END,
                 "mi_start": CODE_MI_START,
                 "mi_end": CODE_MI_END,
                 "trial_cancel": CODE_TRIAL_CANCEL,
@@ -867,8 +904,32 @@ def run_generator_offline(args) -> int:
             escreve_bloco(np.zeros((int(args.cue_sec * FS), CHANNEL_COUNT)), cue)
             eventos.append({"type": "cue", "class": cls, "code": cue,
                             "sample": sample - int(args.cue_sec * FS)})
-            # MI/repouso: gera o bloco inteiro com modulação da classe
+            # ME (execução) — mesma assinatura sintética, fase separada
+            n_me = 0 if getattr(args, "sem_me", False) else int(args.me_sec * FS)
             n_mi = int(args.mi_sec * FS)
+            tt_me = np.arange(n_me) / FS
+            c3 = gen.channel_names.index("C3")
+            c4 = gen.channel_names.index("C4")
+            oz = gen.channel_names.index("Oz")
+            if n_me > 0:
+                dados_me, _ = gen.generate_block(n_me, cls, mi_active=True)
+                if cls == "direita":
+                    dados_me[:, c3] += 40.0 * np.sin(2 * np.pi * 12.0 * tt_me)
+                    dados_me[:, c4] += 5.0 * np.sin(2 * np.pi * 12.0 * tt_me)
+                elif cls == "esquerda":
+                    dados_me[:, c4] += 40.0 * np.sin(2 * np.pi * 12.0 * tt_me)
+                    dados_me[:, c3] += 5.0 * np.sin(2 * np.pi * 12.0 * tt_me)
+                else:
+                    dados_me[:, oz] += 40.0 * np.sin(2 * np.pi * 8.0 * tt_me)
+                escreve_bloco(dados_me, CODE_ME_START)
+                eventos.append({"type": "me_start", "class": cls,
+                                "code": CODE_ME_START,
+                                "sample": sample - n_me})
+                escreve_bloco(np.zeros((1, CHANNEL_COUNT)), CODE_ME_END)
+                eventos.append({"type": "me_end", "class": cls,
+                                "code": CODE_ME_END, "sample": sample - 1})
+                n_tr = int(getattr(args, "transicao_sec", 0.0) * FS)
+                escreve_bloco(np.zeros((n_tr, CHANNEL_COUNT)), 0)
             dados, _ = gen.generate_block(n_mi, cls, mi_active=True)
             # Assinaturas fortes para o teste sintético: a classe muda o
             # padrao espacial em C3/C4/Oz, de forma que CSP+LDA tenha o que
@@ -941,6 +1002,9 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--blocos", type=int, default=2, help="Número de blocos")
     parser.add_argument("--trials-por-classe", type=int, default=15, help="Trials por classe por bloco")
     parser.add_argument("--mi-sec", type=float, default=4.0, help="Duração da fase MI (s)")
+    parser.add_argument("--me-sec", type=float, default=4.0, help="Duração da fase ME (s)")
+    parser.add_argument("--transicao-sec", type=float, default=1.0, help="Transição ME->MI (s)")
+    parser.add_argument("--sem-me", action="store_true", help="Mantém o modo MI-only (sem ME)")
     parser.add_argument("--repouso-sec", type=float, default=2.0, help="Duração do repouso baseline (s)")
     parser.add_argument("--cue-sec", type=float, default=1.0, help="Duração do cue visual (s)")
     parser.add_argument("--iti-min", type=float, default=0.5, help="ITI mínimo entre trials (s)")
@@ -982,7 +1046,8 @@ def main() -> int:
     print(f"Fonte: {args.source}")
     print(f"Sujeito: {args.sujeito}, Sessão: {args.sessao}")
     print(f"Blocos: {args.blocos}, Trials/classe: {args.trials_por_classe}")
-    print(f"MI: {args.mi_sec}s, Repouso: {args.repouso_sec}s, Cue: {args.cue_sec}s")
+    print(f"ME: {0 if args.sem_me else args.me_sec}s, MI: {args.mi_sec}s, "
+          f"Transição: {0 if args.sem_me else args.transicao_sec}s, Cue: {args.cue_sec}s")
     print(f"Saída: {csv_path}")
     print(f"Headless: {args.sem_janela}")
     print("=" * 60)
@@ -1009,6 +1074,8 @@ def main() -> int:
         n_blocks=args.blocos,
         trials_per_class=args.trials_por_classe,
         mi_sec=args.mi_sec,
+        me_sec=(0.0 if args.sem_me else args.me_sec),
+        transicao_sec=(0.0 if args.sem_me else args.transicao_sec),
         rest_sec=args.repouso_sec,
         cue_sec=args.cue_sec,
         iti_min_sec=args.iti_min,
