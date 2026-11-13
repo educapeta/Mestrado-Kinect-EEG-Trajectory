@@ -598,6 +598,7 @@ class ValidacaoHardware:
         repeticoes: int,
         saida_dir: Path,
         sem_janela: bool = False,
+        tempo_movimento: Optional[float] = None,
     ):
         self.mao = mao
         self.velocidade = velocidade
