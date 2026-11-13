@@ -828,6 +828,10 @@ class ValidacaoHardware:
     
     def _lado_atual(self) -> str:
         return self.lados_ativos[self.lado_atual_idx]
+
+    def _repeticoes_do_lado(self) -> int:
+        return sum(1 for r in self.repeticoes_data
+                   if r.lado == self._lado_atual())
     
     def _desenha_guia_grande(self, frame):
         """Desenha a contagem 3-2-1 e o cronômetro grande do movimento."""
@@ -1157,8 +1161,16 @@ class ValidacaoHardware:
                 elif self.estado == "hold_fim" and (
                         time.monotonic() - self._t_state) >= HOLD_SEC:
                     self._finalizar_repeticao()
-                    if len(self.repeticoes_data) >= self.repeticoes:
-                        break
+                    if self._repeticoes_do_lado() >= self.repeticoes:
+                        if (self.mao == "ambas"
+                                and self.lado_atual_idx < len(self.lados_ativos) - 1):
+                            self.lado_atual_idx += 1
+                            self.estado = "aguardando_hold_inicio"
+                            self._t_state = time.monotonic()
+                            self.frame_idx = 0
+                            print(f"\n>>> MÃO {self._lado_atual().upper()} <<<")
+                        else:
+                            break
 
                 if not self.sem_janela and annotated is not None:
                     cv2.imshow("Kinect RGB", annotated)
@@ -1366,21 +1378,20 @@ Exemplos:
             calcular_metricas_repeticao(rep)
     
     else:
-        # Modo hardware: para "ambas", roda um lado por vez (mais robusto que
-        # tentar trocar de lado dentro do mesmo loop).
-        lados_hw = ["direita", "esquerda"] if args.mao == "ambas" else [args.mao]
-        for lado_hw in lados_hw:
-            print(f"\n>>> MÃO {lado_hw.upper()} <<<")
-            validador = ValidacaoHardware(
-                mao=lado_hw,
-                velocidade=args.velocidade,
-                repeticoes=args.repeticoes,
-                saida_dir=saida_dir,
-                sem_janela=args.sem_janela,
-                tempo_movimento=args.tempo_movimento,
-                salvar_landmarks=args.salvar_landmarks,
-            )
-            todas_repeticoes.extend(validador.executar())
+        # Modo hardware: UMA instancia do tracker para as duas maos.
+        # Reabrir o Kinect entre direita/esquerda fazia o pykinect2 reutilizar
+        # um body frame reader invalido (AttributeError em
+        # GetFrameArrivedEventData). A troca de lado agora e' interna.
+        validador = ValidacaoHardware(
+            mao=args.mao,
+            velocidade=args.velocidade,
+            repeticoes=args.repeticoes,
+            saida_dir=saida_dir,
+            sem_janela=args.sem_janela,
+            tempo_movimento=args.tempo_movimento,
+            salvar_landmarks=args.salvar_landmarks,
+        )
+        todas_repeticoes.extend(validador.executar())
         
         # Calcula métricas
         for rep in todas_repeticoes:
