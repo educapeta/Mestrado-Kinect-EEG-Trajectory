@@ -78,6 +78,7 @@ MIN_HOLD_FRAMES = 5           # mediana geométrica sobre ≥5 frames no hold
 MIN_HOLD_SEC = 0.30           # tempo mínimo de hold alvo (~0,3-0,5 s)
 MAX_HOLD_SEC = 0.50
 HOLD_SEC = 0.50                # duracao fixa do hold inicial/final (s)
+COUNTDOWN_SEC = 3.0            # contagem 3-2-1 antes do movimento
 WINDOW_SCALE = 0.5            # escala de exibição das janelas
 CSV_COLUNAS = [
     "frame_idx", "timestamp_s", "lado", "estado",  # estado: hold_inicio, movimento, hold_fim
@@ -603,6 +604,8 @@ class ValidacaoHardware:
         self.repeticoes = repeticoes
         self.saida_dir = Path(saida_dir)
         self.sem_janela = sem_janela
+        self.tempo_movimento = (float(tempo_movimento) if tempo_movimento
+                                else TEMPO_ESPERADO[velocidade])
         
         self.saida_dir.mkdir(parents=True, exist_ok=True)
         
@@ -728,6 +731,54 @@ class ValidacaoHardware:
     def _lado_atual(self) -> str:
         return self.lados_ativos[self.lado_atual_idx]
     
+    def _desenha_guia_grande(self, frame):
+        """Desenha a contagem 3-2-1 e o cronômetro grande do movimento."""
+        if frame is None:
+            return
+        agora = time.monotonic()
+        texto = None
+        cor = (0, 255, 255)
+        if self.estado == "aguardando_hold_inicio":
+            texto = "ESPAÇO"
+            cor = (0, 255, 0)
+        elif self.estado == "hold_inicio":
+            restante = COUNTDOWN_SEC - (agora - self._t_state)
+            if restante > 0:
+                texto = str(max(1, int(math.ceil(restante))))
+                cor = (0, 255, 255)
+            else:
+                texto = "VAI!"
+                cor = (0, 255, 0)
+        elif self.estado == "movimento":
+            decorrido = min(agora - self._t_state, self.tempo_movimento)
+            texto = f"{decorrido:.2f} s"
+            cor = (0, 255, 0) if decorrido < self.tempo_movimento else (0, 0, 255)
+        elif self.estado == "hold_fim":
+            texto = f"{self.tempo_movimento:.2f} s"
+            cor = (0, 0, 255)
+        if not texto:
+            return
+        h, w = frame.shape[:2]
+        escala = 4.5 if len(texto) <= 2 else 3.2
+        esp = 8 if len(texto) <= 2 else 6
+        (tw, th), base = cv2.getTextSize(texto, cv2.FONT_HERSHEY_SIMPLEX,
+                                         escala, esp)
+        x = max(0, (w - tw) // 2)
+        y = max(th + 10, h // 2 + th // 2)
+        # fundo semitransparente para leitura sobre a imagem
+        overlay = frame.copy()
+        cv2.rectangle(overlay, (x - 25, y - th - 20),
+                      (x + tw + 25, y + base + 20), (0, 0, 0), -1)
+        cv2.addWeighted(overlay, 0.55, frame, 0.45, 0, frame)
+        cv2.putText(frame, texto, (x, y), cv2.FONT_HERSHEY_SIMPLEX,
+                    escala, cor, esp, cv2.LINE_AA)
+        # alvo do movimento
+        if self.estado == "movimento":
+            cv2.putText(frame, f"mova {DESLOCAMENTO_FISICO_M*100:.0f} cm em "
+                               f"{self.tempo_movimento:.2f} s",
+                        (20, h - 60), cv2.FONT_HERSHEY_SIMPLEX, 0.8,
+                        (255, 255, 255), 2, cv2.LINE_AA)
+
     def _processar_frame(self, color_frame, depth_frame) -> tuple[Optional[np.ndarray], dict]:
         """Processa um frame e retorna imagem anotada + dados das mãos."""
         lado = self._lado_atual()
@@ -917,6 +968,7 @@ class ValidacaoHardware:
             
             cv2.putText(color_annotated, "R=Repetir  Q/ESC=Sair",
                        (20, color_annotated.shape[0] - 20), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (200, 200, 200), 1)
+            self._desenha_guia_grande(color_annotated)
         
         return color_annotated, {"frame_data": frame_data, "mao_alvo": mao_alvo}
     
@@ -953,12 +1005,20 @@ class ValidacaoHardware:
                     self.rep_atual.frames.append(frame_data)
                 self.frame_idx += 1
 
-                # Hold inicial de HOLD_SEC -> movimento automático.
+                # Contagem 3-2-1 -> movimento cronometrado.
                 if self.estado == "hold_inicio" and (
-                        time.monotonic() - self._t_state) >= HOLD_SEC:
+                        time.monotonic() - self._t_state) >= COUNTDOWN_SEC:
                     self.estado = "movimento"
                     self._t_state = time.monotonic()
-                    print("  hold inicial concluído -> MOVIMENTO")
+                    print(f"  contagem concluída -> MOVIMENTO de "
+                          f"{self.tempo_movimento:.2f} s")
+                # Movimento termina sozinho no tempo alvo (garante 1,00 s).
+                elif self.estado == "movimento" and (
+                        time.monotonic() - self._t_state) >= self.tempo_movimento:
+                    self.estado = "hold_fim"
+                    self._t_state = time.monotonic()
+                    print(f"  movimento concluído em {self.tempo_movimento:.2f} s "
+                          "-> HOLD FIM")
                 # Hold final de HOLD_SEC -> fecha repetição.
                 elif self.estado == "hold_fim" and (
                         time.monotonic() - self._t_state) >= HOLD_SEC:
@@ -980,7 +1040,7 @@ class ValidacaoHardware:
                             self.estado = "hold_inicio"
                             self._t_state = time.monotonic()
                             print(f"  [REP {len(self.repeticoes_data)+1}] "
-                                  "HOLD INÍCIO -> mantenha a palma parada")
+                                  "CONTAGEM 3-2-1 -> mantenha a palma parada")
                         elif self.estado == "movimento":
                             self.estado = "hold_fim"
                             self._t_state = time.monotonic()
@@ -1106,6 +1166,8 @@ Exemplos:
                        help="Executa sem abrir janelas OpenCV (headless)")
     parser.add_argument("--sintetico", action="store_true",
                        help="Modo sintético: gera dados com ground truth 0,500 m + ruído, sem câmeras")
+    parser.add_argument("--tempo-movimento", type=float, default=None,
+                       help="Duração alvo do movimento em s (default: 2,0/1,0/0,5 conforme velocidade)")
     
     args = parser.parse_args()
     
@@ -1153,6 +1215,7 @@ Exemplos:
                 repeticoes=args.repeticoes,
                 saida_dir=saida_dir,
                 sem_janela=args.sem_janela,
+                tempo_movimento=args.tempo_movimento,
             )
             todas_repeticoes.extend(validador.executar())
         
