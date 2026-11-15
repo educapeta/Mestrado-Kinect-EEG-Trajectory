@@ -49,8 +49,11 @@ def carrega_bci(pasta: Path, n_canais: int, cache: Path):
         raw = mne.io.read_raw_gdf(str(f), preload=True, verbose=False)
         raw.filter(0.5, 40.0, verbose=False)
         raw.resample(FS, verbose=False)
-        # 22 primeiros canais = EEG; EOG são os 3 últimos
-        picks = raw.ch_names[:n_canais]
+        # 22 primeiros canais = EEG; para 3 canais usar C3/C4/Cz
+        if n_canais == 3:
+            picks = ["EEG-C3", "EEG-C4", "EEG-Cz"]
+        else:
+            picks = raw.ch_names[:n_canais]
         events, event_id = mne.events_from_annotations(raw, verbose=False)
         code_to_class = {}
         for code, cls in CODE_BCI.items():
