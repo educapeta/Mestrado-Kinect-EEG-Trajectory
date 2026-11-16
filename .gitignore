@@ -115,3 +115,22 @@ literatura/*.pdf
 # aquisicao nem PDF). O restante dos .csv continua ignorado pela regra global.
 !literatura/matriz_literatura.csv
 
+
+# ===== BCI IV 2a/2b e resultados do piloto (dados grandes, LGPD/CEP) =====
+Datasets/
+BCICIV_2a_gdf/
+BCICIV_2b_gdf/
+_bci2a_cache*.npz
+_bci2a_*/
+_bci2a_transfer*/
+_eegnet_faria*/
+_ablation_me_mi/
+_alpha_test/
+_piloto3c_*/
+_teste_eegnet/
+_piloto3c_*/
+_saida_*/
+_resultados_*/
+
+# ===== Artefatos locais de PDF/extração =====
+_pdf_txt_*.txt
