@@ -2,6 +2,7 @@
 # Uso: .\run_eegnet_4060.ps1
 
 $ErrorActionPreference = "Stop"
+$env:PYTHONWARNINGS = "ignore"
 $raiz = Split-Path -Parent $MyInvocation.MyCommand.Path
 Set-Location $raiz
 

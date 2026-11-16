@@ -21,6 +21,7 @@ Pré-processamento do repositório:
 from __future__ import annotations
 
 import argparse
+import warnings
 import glob
 import re
 from pathlib import Path
@@ -34,6 +35,8 @@ import torch.nn.functional as F
 from torch.utils.data import DataLoader, TensorDataset
 
 mne.set_log_level("ERROR")
+warnings.filterwarnings("ignore", message=".*Channel names are not unique.*")
+warnings.filterwarnings("ignore", message=".*duplicates for.*")
 FS = 128.0
 N_TIMES = 256
 CHANCE = {2: 0.5, 4: 0.25}

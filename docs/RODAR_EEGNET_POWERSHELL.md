@@ -43,7 +43,7 @@ python -c "import torch; print(torch.__version__, torch.cuda.is_available(), tor
 Arc — 3 canais / 4 classes:
 
 ```powershell
-python tools\eegnet_faria_benchmark.py `
+python -W ignore tools\eegnet_faria_benchmark.py `
   --dataset 2a --n-canais 3 --n-classes 4 `
   --folds 4 --epochs 500 --device xpu --verbose `
   --saida _eegnet_faria_500 2>&1 |
@@ -107,7 +107,7 @@ Teste rápido de 20 epochs:
 ## 1. Treinar o benchmark 4-fold (Faria)
 
 ```powershell
-python tools\eegnet_faria_benchmark.py `
+python -W ignore tools\eegnet_faria_benchmark.py `
   --dataset 2a --n-canais 3 --n-classes 4 `
   --folds 4 --epochs 500 --device xpu --verbose `
   --saida _eegnet_faria_500 2>&1 |
@@ -122,7 +122,7 @@ Isso treina no BCI inteiro, salva `eegnet_2a_3ch_4cls.pt` e aplica nos seus
 4 s de MI com janelas de 2 s (passo 0,5 s):
 
 ```powershell
-python tools\eegnet_faria_aplicar_mi.py `
+python -W ignore tools\eegnet_faria_aplicar_mi.py `
   --device xpu --epochs 500 `
   --saida _eegnet_faria_3ch4cls 2>&1 |
   Tee-Object -FilePath _eegnet_faria_3ch4cls\log_aplicacao.txt
@@ -138,7 +138,7 @@ O script salva:
 ## 3. Aplicar depois sem retreinar
 
 ```powershell
-python tools\eegnet_faria_aplicar_mi.py `
+python -W ignore tools\eegnet_faria_aplicar_mi.py `
   --device xpu `
   --carregar-modelo _eegnet_faria_3ch4cls\eegnet_2a_3ch_4cls.pt `
   --saida _eegnet_faria_3ch4cls_aplicacao 2>&1 |
