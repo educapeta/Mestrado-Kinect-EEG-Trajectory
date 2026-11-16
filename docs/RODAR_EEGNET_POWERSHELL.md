@@ -224,3 +224,37 @@ Confusão (linha=verdade, coluna=pred):
 - são usados **somente** os 20 trials de esquerda + 20 de direita;
 - repouso é descartado;
 - o modelo vem do **2b**, com 3.680 épocas T de 9 sujeitos.
+
+
+---
+
+# Validação 1 e 2 na CPU — ME positivo + labels embaralhados
+
+## Rodar
+
+```powershell
+python -W ignore tools\validacao_me_shuffle.py --permutacoes 1000
+```
+
+Saídas:
+
+```text
+_validacao_me_shuffle/relatorio.md
+_validacao_me_shuffle/resultados.json
+```
+
+## O que o script faz
+
+- carrega ME e MI de `_piloto3c_memi`;
+- usa somente esquerda/direita (20 + 20 trials);
+- gera 5 janelas de 2 s por trial (passo 0,5 s);
+- classifica bandpower alpha/beta com LDA shrinkage;
+- faz 5-fold agrupado por trial (sem vazamento);
+- calcula acurácia, balanced accuracy e confusão;
+- embaralha labels 1.000 vezes e calcula p-valor.
+
+## Leitura dos resultados
+
+- ME: BA 0,675, p=0,043 (controle positivo);
+- MI: BA 0,575, p=0,251 (não significativo);
+- p95 do shuffle = 0,650; com 40 trials, resultados ~0,65 podem ser acaso.
