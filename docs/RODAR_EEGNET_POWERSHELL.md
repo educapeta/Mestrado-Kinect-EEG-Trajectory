@@ -98,3 +98,67 @@ Teste rápido de 20 epochs:
 - 500 epochs é o protocolo do `run-example.sh` do repositório do Faria;
 - nosso 4-fold é sobre a sessão T (a E não tem labels de classe);
 - não compare ainda com 0,566/0,696/0,798 até rodar os 500 epochs completos.
+
+
+---
+
+# Caso focado: BCIC-IV 2a 3 canais / 4 classes (1.412 parâmetros)
+
+## 1. Treinar o benchmark 4-fold (Faria)
+
+```powershell
+python tools\eegnet_faria_benchmark.py `
+  --dataset 2a --n-canais 3 --n-classes 4 `
+  --folds 4 --epochs 500 --device xpu --verbose `
+  --saida _eegnet_faria_500 2>&1 |
+  Tee-Object -FilePath _eegnet_faria_500\log_3ch4cls.txt
+```
+
+No laptop com 4060, use `--device cuda`.
+
+## 2. Treinar o modelo final e aplicar no MI do piloto
+
+Isso treina no BCI inteiro, salva `eegnet_2a_3ch_4cls.pt` e aplica nos seus
+4 s de MI com janelas de 2 s (passo 0,5 s):
+
+```powershell
+python tools\eegnet_faria_aplicar_mi.py `
+  --device xpu --epochs 500 `
+  --saida _eegnet_faria_3ch4cls 2>&1 |
+  Tee-Object -FilePath _eegnet_faria_3ch4cls\log_aplicacao.txt
+```
+
+O script salva:
+
+- `eegnet_2a_3ch_4cls.pt`;
+- `janelas_mi_2s.npz` com `X=(60,5,3,256)`, `y`, `blocos`;
+- `predicoes_piloto.npz`;
+- `resultado_aplicacao_mi.md`.
+
+## 3. Aplicar depois sem retreinar
+
+```powershell
+python tools\eegnet_faria_aplicar_mi.py `
+  --device xpu `
+  --carregar-modelo _eegnet_faria_3ch4cls\eegnet_2a_3ch_4cls.pt `
+  --saida _eegnet_faria_3ch4cls_aplicacao 2>&1 |
+  Tee-Object -FilePath _eegnet_faria_3ch4cls_aplicacao\log.txt
+```
+
+## 4. Apenas gerar as janelas deslizantes
+
+```powershell
+python tools\gera_janelas_mi_piloto.py `
+  --piloto _piloto3c_memi `
+  --saida _janelas_mi_piloto
+```
+
+Saída: `janelas_mi_2s.npz` e `janelas_mi_2s.json`.
+
+## 5. O que o relatório de aplicação mostra
+
+- predição do modelo BCI para cada trial do piloto;
+- acurácia 4-class apenas nos trials esquerda/direita;
+- acurácia binária restrita left/right;
+- distribuição dos trials de repouso (o BCI não tem classe repouso; tem
+  pés/língua, então não existe acurácia 3-class equivalente).
