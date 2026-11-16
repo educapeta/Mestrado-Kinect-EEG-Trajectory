@@ -91,6 +91,7 @@ def carrega_fase(pasta: Path, fase: str):
     # z-score por janela/canal
     X = (X - X.mean(axis=2, keepdims=True)) / (
         X.std(axis=2, keepdims=True) + 1e-9)
+    X = np.nan_to_num(X, nan=0.0, posinf=0.0, neginf=0.0)
     return X, y, trials
 
 

@@ -278,3 +278,20 @@ Resultado com 40 trials left/right:
 
 O transformer tem 13.410 parâmetros e overfitou no ME; com 40 trials
 independentes o LDA foi mais robusto.
+
+
+---
+
+# Baselines 3.1 e 3.2 na CPU
+
+```powershell
+python -W ignore tools\baselines_csp_lda_eegnet.py
+```
+
+- CSP+LDA: `CSP(n_components=2, reg="ledoit_wolf", log=True)`; com 3 canais
+  `n_components=4` não é válido.
+- EEGNet compacto: F1=8, D=2, F2=16, K=64, dropout 0.5, early stopping por
+  validação agrupada por trial.
+- Mesmo protocolo: 2 s, 5 janelas por trial, 5-fold agrupado.
+
+Saídas: `_baselines_csp_eegnet/relatorio.md`.
