@@ -258,3 +258,23 @@ _validacao_me_shuffle/resultados.json
 - ME: BA 0,675, p=0,043 (controle positivo);
 - MI: BA 0,575, p=0,251 (não significativo);
 - p95 do shuffle = 0,650; com 40 trials, resultados ~0,65 podem ser acaso.
+
+
+---
+
+# Validação alternativa: CNN-Transformer leve na CPU
+
+```powershell
+python -W ignore tools\validacao_me_transformer.py --epochs 60
+```
+
+Saídas em `_validacao_transformer/relatorio.md`.
+
+Resultado com 40 trials left/right:
+
+- ME BA = 0,425;
+- MI BA = 0,550;
+- LDA bandpower: ME 0,675 / MI 0,575.
+
+O transformer tem 13.410 parâmetros e overfitou no ME; com 40 trials
+independentes o LDA foi mais robusto.
