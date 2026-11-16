@@ -162,3 +162,65 @@ Saída: `janelas_mi_2s.npz` e `janelas_mi_2s.json`.
 - acurácia binária restrita left/right;
 - distribuição dos trials de repouso (o BCI não tem classe repouso; tem
   pés/língua, então não existe acurácia 3-class equivalente).
+
+
+---
+
+# BCIC-IV 2b — 3 canais / 2 classes / 1.154 parâmetros
+
+## 1. Benchmark 4-fold
+
+```powershell
+python -W ignore tools\eegnet_faria_benchmark.py `
+  --dataset 2b --n-canais 3 --n-classes 2 `
+  --folds 4 --epochs 500 --device xpu --verbose `
+  --saida _eegnet_faria_2b_benchmark 2>&1 |
+  Tee-Object -FilePath _eegnet_faria_2b_benchmark\log_2b_3ch_2cls.txt
+```
+
+No laptop com 4060, troque `--device xpu` por `--device cuda`.
+
+## 2. Treinar o modelo final e testar left/right do piloto
+
+```powershell
+python -W ignore tools\eegnet_faria_2b_aplicar_mi.py `
+  --device xpu --epochs 500 --batch-size 32 --progress-every 10 `
+  --saida _eegnet_faria_2b_3ch2cls 2>&1 |
+  Tee-Object -FilePath _eegnet_faria_2b_3ch2cls\log_aplicacao_2b.txt
+```
+
+O `--batch-size 32` segue o Faria; use `128` para ir mais rápido.
+
+Saídas:
+
+```text
+_eegnet_faria_2b_3ch2cls/eegnet_2b_3ch_2cls.pt
+_eegnet_faria_2b_3ch2cls/cache_bci_2b.npz
+_eegnet_faria_2b_3ch2cls/janelas_mi_left_right.npz
+_eegnet_faria_2b_3ch2cls/resultado_2b_teste_mi.md
+```
+
+## 3. Aplicar sem retreinar
+
+```powershell
+python -W ignore tools\eegnet_faria_2b_aplicar_mi.py `
+  --device xpu `
+  --carregar-modelo _eegnet_faria_2b_3ch2cls\eegnet_2b_3ch_2cls.pt `
+  --saida _eegnet_faria_2b_3ch2cls_aplicacao
+```
+
+## 4. Interpretação
+
+O relatório mostra:
+
+```text
+BINÁRIO NO PILOTO: acc=... | BA=... | n=40
+Confusão (linha=verdade, coluna=pred):
+[[... ...]
+ [... ...]]
+```
+
+- chance binária = 50%;
+- são usados **somente** os 20 trials de esquerda + 20 de direita;
+- repouso é descartado;
+- o modelo vem do **2b**, com 3.680 épocas T de 9 sujeitos.

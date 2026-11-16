@@ -190,33 +190,44 @@ def carrega_2a(pasta: Path, n_channels: int, n_classes: int,
 
 
 def carrega_2b(pasta: Path):
-    """BCIC-IV 2b: 3 canais, 2 classes. Dataset precisa existir."""
-    arquivos = sorted(pasta.glob("*.gdf"))
-    if not arquivos:
-        raise SystemExit(f"Dataset 2b não encontrado em {pasta}")
+    """BCIC-IV 2b: 3 canais, 2 classes, apenas sessões T rotuladas."""
     xs, ys, subs, runs = [], [], [], []
+    arquivos = sorted(pasta.glob("*T.gdf"))
+    if not arquivos:
+        raise SystemExit(f"Dataset 2b nao encontrado em {pasta}")
     for f in arquivos:
+        m = re.search(r"B(\d\d)", f.name)
+        if not m:
+            continue
+        subj = int(m.group(1))
         raw = mne.io.read_raw_gdf(str(f), preload=True, verbose=False)
         raw.filter(4.0, 40.0, verbose=False)
         raw.resample(FS, verbose=False)
-        raw.pick(["EEG-C3", "EEG-C4", "EEG-Cz"])
+        picks = [c for c in ["EEG:C3", "EEG:C4", "EEG:Cz"]
+                 if c in raw.ch_names]
+        if len(picks) != 3:
+            raise RuntimeError(f"{f.name}: canais encontrados {raw.ch_names}")
+        raw.pick(picks)
         dados = ema_standardize(raw.get_data())
         ev, code_to_label = _eventos_cue(raw)
         if ev is None:
+            print(f"[aviso] sem cues rotulados em {f.name}")
             continue
         for k, (sample, _, code) in enumerate(ev):
             label = code_to_label[int(code)]
+            if label not in (0, 1):
+                continue
             start = int(sample + 0.5 * FS)
             end = start + N_TIMES
             if start < 0 or end > dados.shape[1]:
                 continue
             xs.append(dados[:, start:end].astype(np.float32))
-            ys.append(int(label))
-            subs.append(k // 120)
-            runs.append(k // 120)
+            ys.append(label)
+            subs.append(subj)
+            runs.append(k // 120)  # 120 trials por sessão T
+        print(f"[2b] {f.name}: {len(xs)} acumuladas")
     return (np.stack(xs), np.array(ys, dtype=np.int64),
             np.array(subs), np.array(runs))
-
 
 def treina_fold(Xtr, ytr, Xval, yval, n_classes, epochs, seed, device,
                 batch_size=32, verbose=False):
