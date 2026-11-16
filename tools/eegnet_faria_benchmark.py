@@ -215,25 +215,36 @@ def carrega_2b(pasta: Path):
             np.array(subs), np.array(runs))
 
 
-def treina_fold(Xtr, ytr, Xval, yval, n_classes, epochs, seed, device):
+def treina_fold(Xtr, ytr, Xval, yval, n_classes, epochs, seed, device,
+                batch_size=32, verbose=False):
     torch.manual_seed(seed); np.random.seed(seed)
     device = torch.device(device)
-    model = EEGNet(Xtr.shape[1], Xtr.shape[2], n_classes, kernel_length=32).to(device)
+    model = EEGNet(Xtr.shape[1], Xtr.shape[2], n_classes,
+                   kernel_length=32).to(device)
     opt = torch.optim.Adam(model.parameters(), lr=1e-3)
     loss_fn = nn.CrossEntropyLoss()
-    tr = DataLoader(TensorDataset(torch.from_numpy(Xtr), torch.from_numpy(ytr)),
-                    batch_size=32, shuffle=True)
-    Xv = torch.from_numpy(Xval).to(device); yv = torch.from_numpy(yval).to(device)
+    # Tensores ficam uma vez na XPU; evita o overhead de DataLoader para
+    # um modelo minúsculo com poucos trials.
+    Xt = torch.from_numpy(Xtr).to(device)
+    yt = torch.from_numpy(ytr).to(device)
+    Xv = torch.from_numpy(Xval).to(device)
+    yv = torch.from_numpy(yval).to(device)
+    n = Xt.shape[0]
     melhor = 1e9; melhor_state = None
     for ep in range(epochs):
         model.train()
-        for xb, yb in tr:
+        perm = torch.randperm(n, device=device)
+        for i in range(0, n, batch_size):
+            idx = perm[i:i + batch_size]
             opt.zero_grad()
-            loss = loss_fn(model(xb.to(device)), yb.to(device))
+            loss = loss_fn(model(Xt[idx]), yt[idx])
             loss.backward(); opt.step()
         model.eval()
         with torch.no_grad():
             val_loss = loss_fn(model(Xv), yv).item()
+        if verbose and (ep == 0 or (ep + 1) % 50 == 0 or ep == epochs - 1):
+            print(f"      epoca {ep + 1:03d}/{epochs}: val_loss={val_loss:.4f}",
+                  flush=True)
         if val_loss < melhor:
             melhor = val_loss
             melhor_state = {k: v.clone() for k, v in model.state_dict().items()}
@@ -249,7 +260,8 @@ def prediz(model, X, device):
         return model(torch.from_numpy(X).to(device)).argmax(1).cpu().numpy()
 
 
-def run_config(X, y, subj, n_classes, folds, epochs, nome, device):
+def run_config(X, y, subj, n_classes, folds, epochs, nome, device,
+               verbose=False):
     accs = []
     for s in np.unique(subj):
         m = subj == s
@@ -262,10 +274,16 @@ def run_config(X, y, subj, n_classes, folds, epochs, nome, device):
             skf2 = StratifiedKFold(n_splits=3, shuffle=True, random_state=42)
             sub_tr, sub_val = next(skf2.split(Xs[tr_idx], ys[tr_idx]))
             tr = tr_idx[sub_tr]; val = tr_idx[sub_val]
+            print(f"  sujeito {int(s):02d} fold {fold + 1}/{folds}: treinando...",
+                  flush=True)
             model = treina_fold(Xs[tr], ys[tr], Xs[val], ys[val],
-                                n_classes, epochs, seed=42 + fold, device=device)
+                                n_classes, epochs, seed=42 + fold,
+                                device=device, verbose=verbose)
             pred = prediz(model, Xs[te_idx], device)
-            accs.append(float(np.mean(pred == ys[te_idx])))
+            fold_acc = float(np.mean(pred == ys[te_idx]))
+            accs.append(fold_acc)
+            print(f"  sujeito {int(s):02d} fold {fold + 1}/{folds}: "
+                  f"test_acc={fold_acc:.3f}", flush=True)
         print(f"  sujeito {int(s):02d}: {len(accs)} folds acumulados")
     return np.mean(accs), np.std(accs), len(accs)
 
@@ -283,15 +301,25 @@ def main():
                     help="auto, cuda ou cpu")
     ap.add_argument("--pasta-2a", type=Path, default=None)
     ap.add_argument("--pasta-2b", type=Path, default=None)
+    ap.add_argument("--verbose", action="store_true",
+                    help="Mostra learning curve a cada 50 epochs")
     args = ap.parse_args()
     args.saida.mkdir(parents=True, exist_ok=True)
     if args.device == "auto":
-        device = "cuda" if torch.cuda.is_available() else "cpu"
+        if torch.cuda.is_available():
+            device = "cuda"
+        elif hasattr(torch, "xpu") and torch.xpu.is_available():
+            device = "xpu"
+        else:
+            device = "cpu"
     else:
         device = args.device
-    print(f"[device] {device} | torch cuda disponivel: {torch.cuda.is_available()}")
+    print(f"[device] {device} | cuda={torch.cuda.is_available()} | "
+          f"xpu={hasattr(torch, 'xpu') and torch.xpu.is_available()}")
     if device == "cuda" and not torch.cuda.is_available():
         raise SystemExit("CUDA nao disponivel neste ambiente; use --device cpu")
+    if device == "xpu" and not (hasattr(torch, "xpu") and torch.xpu.is_available()):
+        raise SystemExit("XPU nao disponivel; instale torch XPU ou use --device cpu")
 
     # valida a contagem de parâmetros da Tabela 4.1
     esperado = {(22, 4): 1716, (3, 4): 1412, (22, 2): 1458, (3, 2): 1154}
@@ -319,7 +347,7 @@ def main():
     acc, sd, n = run_config(X, y, subj, args.n_classes, args.folds,
                             args.epochs,
                             f"{args.dataset}_{args.n_canais}c_{args.n_classes}c",
-                            device)
+                            device, verbose=args.verbose)
     chance = CHANCE[args.n_classes]
     print(f"[{args.dataset} {args.n_canais}ch {args.n_classes}cls] "
           f"acc={acc:.3f} ± {sd:.3f} (n={n}, chance={chance})")
