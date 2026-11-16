@@ -295,3 +295,18 @@ python -W ignore tools\baselines_csp_lda_eegnet.py
 - Mesmo protocolo: 2 s, 5 janelas por trial, 5-fold agrupado.
 
 Saídas: `_baselines_csp_eegnet/relatorio.md`.
+
+
+---
+
+# Permutação dos baselines
+
+```powershell
+python -W ignore tools\permutacao_baselines.py `
+  --perm-csp 500 --perm-eegnet 20
+```
+
+- CSP 500 permutações: ME p=0,108; MI p=0,064;
+- EEGNet 20 permutações: p=0,048 nas duas fases, mas nulo instável
+  (média ~0,405) e p mínimo 1/21; não interpretar como evidência forte.
+- Saídas: `_permutacao_baselines/relatorio.md` e `resultados.json`.
