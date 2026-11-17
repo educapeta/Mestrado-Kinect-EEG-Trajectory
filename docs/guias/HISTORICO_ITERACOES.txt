@@ -10447,3 +10447,67 @@ ITEM 194 (17/11/2026) - HANDMVNET / MULTIVIEW (EM ANDAMENTO)
   README, smoke test sem hardware, relatorio de dependencias/pesos/licenca.
 - STATUS: sem resultado final ate o fechamento deste item; nao considerar
   integrado antes da revisao do Lead e do commit.
+
+
+================================================================================
+ITEM 195 (17/11/2026) - RSF (RIEMANNIAN SPATIAL FILTERING) NO NOVO PILOTO
+================================================================================
+- IMPLEMENTACAO: `src/mestradopy/eeg/rsf_filter.py` (baseada em Pan et al.,
+  Neural Networks 188:107511, 2025; codigo oficial PLC-TJU/RSF clonado em
+  external/RSF). O filtro maximiza a distancia riemanniana entre as
+  covariancias medias das classes, via autovalores generalizados de
+  (W^T C1 W, W^T C2 W). pyriemann instalado no venv.
+- METODO DE AVALIACAO: `src/mestradopy/tools/rsf_novo_piloto.py`;
+  RSF fit SOMENTE na sessao de treino (janelas de 4 s);
+  CSP/EEGNet usam janelas de 2 s transformadas por W;
+  cross-session s1->s2 e s2->s1; 60 trials de teste.
+- DIMENSOES: RSF CSP dim=2; RSF EEGNet dim=3 (entrada esperada pelo modelo).
+- ME (controle):
+  * CSP+LDA: .633->.633 (s1->s2); .750->.767 (s2->s1).
+  * EEGNet A: .550->.650; .533->.583.
+  * EEGNet B: .633->.750; .733->.767.
+- MI (alvo):
+  * CSP+LDA: .550->.550; .533->.550.
+  * EEGNet A: .483->.500; .467->.467.
+  * EEGNet B: .517->.500; .717->.500 (colapso em uma classe).
+- DISTANCIA RIEMANNIANA: ME 0,36-0,43; MI 0,19-0,21.
+- CONCLUSAO: RSF melhora o ME/EEGNet, mas NAO melhora o MI; em uma direcao
+  piora o EEGNet. Nao e um pre-processamento que resolve a ausencia de
+  separabilidade de MI. O ganho no ME nao deve ser promovido como ganho de MI.
+- COMMIT: ccd40c9 (`Adiciona RSF riemanniano...`).
+- RELATORIO: docs/validation/RSF_NOVO_PILOTO_20261117.md.
+
+
+================================================================================
+ITEM 196 (17/11/2026) - HANDMVNET: INTEGRACAO MULTIVIEW CONCLUIDA
+================================================================================
+- SUBAGENTE `nvidia` concluiu a task-4 (revision 3).
+- REPO EXTERNO: clone raso de https://github.com/pyxploiter/HandMvNet em
+  external/HandMvNet (commit aa08ed1, ~4,9 MB; external/ e' gitignored).
+- ARQUIVOS INTEGRADOS (commit e02cd62):
+  * src/mestradopy/vision/handmvnet_adapter.py;
+  * src/mestradopy/vision/handmvnet_synthetic.py;
+  * src/mestradopy/tools/handmvnet_infer.py;
+  * tests/manual/test_handmvnet_adapter.py;
+  * docs/guias/HANDMVNET_INTEGRACAO.md;
+  * src/mestradopy/vision/__init__.py (docstring).
+- O QUE FUNCIONA:
+  * fallback DLT por juncao, com undistort/gate de reprojecao/melhor par;
+  * ground truth sintetico: erro 0,036 mm sem ruido; 1,76 mm @0,5 px;
+    3,5 mm @1 px; concordancia mediana 0,002 mm com a triangulacao canonica;
+  * arquitetura oficial carrega (17.504.704 params) e roda forward CPU/XPU;
+  * suite 116/116 checks em ~7,5 s, incluindo forward XPU Intel Arc A580.
+- BLOQUEIOS:
+  * pesos oficiais NAO publicados (0 releases/assets; issues #2 e #4 abertas;
+    notebook aponta para ../weights inexistente); modo modelo fica em fallback;
+  * repo sem LICENSE (GitHub API license=null) -> nao redistribuir;
+  * eval.py oficial quebrado (datasets/dexycb.py e mvhand.py ausentes);
+  * deps de treino antigas (CUDA 11.7/py3.8/torch 2.0.1/lightning 2.0.6)
+    diferentes do nosso venv py3.11/torch 2.14+xpu;
+  * checkpoints publicos sao 4/5/8 vistas != nosso rig 3 vistas;
+    `adapt_num_views=True` e' experimental e nao validado cientificamente.
+- PENDENTE: contatar autores por pesos+licenca; se obtiver, rodar
+  `handmvnet_infer.py status`/`synthetic --checkpoint` com sessao real
+  Kinect+aux0/aux1 e comparar MPJPE/PCK/latencia contra o ground truth.
+- OBSERVACAO: nao usar `git add -A` cego no projeto; os arquivos RSF e
+  HandMvNet foram commitados em commits separados.
