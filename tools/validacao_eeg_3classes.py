@@ -83,6 +83,10 @@ CODE_MI_START = 780        # Início fase MI
 CODE_MI_END = 781          # Fim fase MI
 CODE_TRIAL_CANCEL = 796    # Trial cancelado
 CODE_IMPEDANCE_CHECK = 897 # Verificação de impedância
+CODE_EYES_OPEN_START = 901
+CODE_EYES_OPEN_END = 902
+CODE_EYES_CLOSED_START = 903
+CODE_EYES_CLOSED_END = 904
 
 # Nomes das classes
 CLASS_NAMES = ["esquerda", "direita", "repouso"]
@@ -358,6 +362,10 @@ class AcquisitionPipeline:
             "mi_end": CODE_MI_END,
             "trial_cancel": CODE_TRIAL_CANCEL,
             "impedance_check": CODE_IMPEDANCE_CHECK,
+        "eyes_open_start": CODE_EYES_OPEN_START,
+        "eyes_open_end": CODE_EYES_OPEN_END,
+        "eyes_closed_start": CODE_EYES_CLOSED_START,
+        "eyes_closed_end": CODE_EYES_CLOSED_END,
         }
         self._marker_queue = queue.Queue()
         self.marker_node = MarkerMuxer(self._marker_queue,
@@ -453,6 +461,8 @@ class MI3ClassParadigm:
         headless: bool = False,
         check_impedance: bool = False,
         impedance_limit_kohm: float = 50.0,
+        classes: Optional[List[str]] = None,
+        baseline_eyes_sec: float = 0.0,
     ):
         self.pipeline = pipeline
         self.n_blocks = n_blocks
@@ -470,12 +480,14 @@ class MI3ClassParadigm:
         self.headless = headless
         self.check_impedance = check_impedance
         self.impedance_limit_kohm = impedance_limit_kohm
+        self.classes = list(classes) if classes else CLASS_NAMES.copy()
+        self.baseline_eyes_sec = float(baseline_eyes_sec)
         
         self._running = False
         self._aborted = False
         self._paused = False
         self._current_trial = 0
-        self._total_trials = n_blocks * trials_per_class * 3
+        self._total_trials = n_blocks * trials_per_class * len(self.classes)
         
         # Dados para JSON de eventos
         self.events = []
@@ -549,7 +561,7 @@ class MI3ClassParadigm:
     
     def _generate_block_orders(self):
         """Gera ordem aleatória das classes para cada bloco (balanceado)."""
-        classes = CLASS_NAMES.copy()
+        classes = self.classes.copy()
         for b in range(self.n_blocks):
             random.shuffle(classes)
             block_trials = []
@@ -607,6 +619,23 @@ class MI3ClassParadigm:
                     self._show_text(f"PREPARANDO\n\n{n}", duration=1.0)
                     if self._aborted:
                         break
+            # Baseline de qualidade: olhos abertos/fechados (nao entra no MI)
+            if self.baseline_eyes_sec > 0:
+                self.pipeline.emit_marker_code(CODE_EYES_OPEN_START)
+                self._log_event("eyes_open_start", {})
+                self._show_text("OLHOS ABERTOS\n\nOlhe para um ponto fixo",
+                                duration=self.baseline_eyes_sec)
+                self.pipeline.emit_marker_code(CODE_EYES_OPEN_END)
+                self._log_event("eyes_open_end", {})
+                self.pipeline.emit_marker_code(CODE_EYES_CLOSED_START)
+                self._log_event("eyes_closed_start", {})
+                self._show_text("OLHOS FECHADOS\n\nRelaxe",
+                                duration=self.baseline_eyes_sec)
+                self.pipeline.emit_marker_code(CODE_EYES_CLOSED_END)
+                self._log_event("eyes_closed_end", {})
+                if not self.headless:
+                    self._show_text("+", duration=2.0)
+
             for block_idx in range(self.n_blocks):
                 if self._aborted:
                     break
@@ -798,7 +827,7 @@ class MI3ClassParadigm:
             "rest_sec": self.rest_sec,
             "cue_sec": self.cue_sec,
             "iti_range": [self.iti_min_sec, self.iti_max_sec],
-            "classes": CLASS_NAMES,
+            "classes": self.classes,
             "class_codes": CLASS_CODES,
             "marker_codes": {
                 "session_start": CODE_SESSION_START,
@@ -870,7 +899,7 @@ def run_generator_offline(args) -> int:
     nomes = _sync_generator_header(CHANNEL_COUNT)
     gen = SyntheticEEGGenerator(sampling_rate=FS, channel_count=CHANNEL_COUNT,
                                 frame_size=1, seed=42)
-    classes = CLASS_NAMES.copy()
+    classes = [c.strip() for c in getattr(args, "classes", "esquerda,direita,repouso").split(",") if c.strip()]
     bloco_ordens = []
     for _ in range(args.blocos):
         ordem = []
@@ -972,12 +1001,12 @@ def run_generator_offline(args) -> int:
         "source": "generator", "fs": FS, "channels": CHANNEL_COUNT,
         "channel_names": nomes, "n_blocks": args.blocos,
         "trials_per_class": args.trials_por_classe,
-        "total_trials": args.blocos * args.trials_por_classe * 3,
+        "total_trials": args.blocos * args.trials_por_classe * len(classes),
         "mi_sec": args.mi_sec, "repouso_sec": args.repouso_sec,
         "cue_sec": args.cue_sec, "iti_range": [args.iti_min, args.iti_max],
-        "classes": CLASS_NAMES, "class_codes": CLASS_CODES,
+        "classes": classes, "class_codes": CLASS_CODES,
         "block_orders": bloco_ordens, "events": eventos,
-        "aborted": False, "completed_trials": args.blocos * args.trials_por_classe * 3,
+        "aborted": False, "completed_trials": args.blocos * args.trials_por_classe * len(classes),
         "synthetic": True,
     }
     with open(json_path, "w", encoding="utf-8") as f:
@@ -1009,6 +1038,10 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--cue-sec", type=float, default=1.0, help="Duração do cue visual (s)")
     parser.add_argument("--iti-min", type=float, default=0.5, help="ITI mínimo entre trials (s)")
     parser.add_argument("--iti-max", type=float, default=1.5, help="ITI máximo entre trials (s)")
+    parser.add_argument("--classes", default="esquerda,direita,repouso",
+                        help="Classes do trial, separadas por virgula")
+    parser.add_argument("--baseline-olhos-sec", type=float, default=0.0,
+                        help="Duracao de cada bloco olhos abertos/fechados (s); 0 desativa")
     
     # Saída
     parser.add_argument("--pasta-saida", type=Path, default=Path("./dados_validacao"),
@@ -1046,6 +1079,7 @@ def main() -> int:
     print(f"Fonte: {args.source}")
     print(f"Sujeito: {args.sujeito}, Sessão: {args.sessao}")
     print(f"Blocos: {args.blocos}, Trials/classe: {args.trials_por_classe}")
+    print(f"Classes: {args.classes} | Baseline olhos: {args.baseline_olhos_sec}s")
     print(f"ME: {0 if args.sem_me else args.me_sec}s, MI: {args.mi_sec}s, "
           f"Transição: {0 if args.sem_me else args.transicao_sec}s, Cue: {args.cue_sec}s")
     print(f"Saída: {csv_path}")
@@ -1086,6 +1120,8 @@ def main() -> int:
         headless=args.sem_janela,
         check_impedance=args.impedancia,
         impedance_limit_kohm=args.limite_impedancia,
+        classes=[c.strip() for c in args.classes.split(",") if c.strip()],
+        baseline_eyes_sec=args.baseline_olhos_sec,
     )
     
     # Executa
