@@ -28,3 +28,7 @@ PySide6
 # programa morria na linha do `scope = gp.TimeSeriesScope(...)`, antes de
 # qualquer gravacao (28/09/2026).
 pyqtgraph
+
+# Riemannian filtering (RSF)
+pyriemann>=0.8
+
