@@ -3,8 +3,10 @@
 Pipeline de aquisição e análise do mestrado: EEG g.Nautilus, Kinect v2,
 webcams auxiliares, IMU e modelos neurais.
 
-A raiz mantém apenas este README e o `.gitignore`. Tudo o mais tem um lugar
-definido abaixo.
+A raiz mantém este README, o `.gitignore` e um **atalho de compatibilidade**
+para o log histórico ativo. O arquivo canônico é
+`docs/guias/HISTORICO_ITERACOES.txt`; o atalho na raiz existe porque agentes e
+scripts antigos ainda escrevem nesse caminho.
 
 ## Estrutura
 

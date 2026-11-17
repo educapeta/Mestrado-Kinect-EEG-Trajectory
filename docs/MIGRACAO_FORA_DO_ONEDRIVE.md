@@ -20,7 +20,7 @@ Código → pasta local + GitHub. Dados → disco local ou HD externo.
 
 ```
 C:\Mestrado\projeto\        <- CÓDIGO (repo git; ~15 MB com modelos .task/.pt)
-    *.py  test_*.py  imu.py  README.md  requirements.txt  HISTORICO_ITERACOES.txt
+    *.py  test_*.py  imu.py  README.md  requirements.txt  docs/guias/HISTORICO_ITERACOES.txt
     stereo_calibration_auxN.npz / camera_alignment.npz / arm_model.json ...
     gravacoes -> (junction para o disco de dados)
 

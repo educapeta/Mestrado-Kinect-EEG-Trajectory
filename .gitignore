@@ -152,3 +152,7 @@ docs/literature/*.pdf
 src/**/__pycache__/
 __pycache__/
 
+
+# Atalho de compatibilidade para o log historico ativo (canonico em docs/guias)
+/HISTORICO_ITERACOES.txt
+

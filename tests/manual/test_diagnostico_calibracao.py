@@ -448,7 +448,7 @@ def bloco_documentacao():
             return arquivo.read()
 
     readme = ler("README.md")
-    historico = ler("HISTORICO_ITERACOES.txt")
+    historico = ler("docs/guias/HISTORICO_ITERACOES.txt")
     # O tool, as duas suites e os DOIS passos da bancada (congelar UMA vez +
     # rotina) tem de estar no README: sem isso o operador nao descobre o fluxo.
     assert "tools\\diagnostico_calibracao.py" in readme

@@ -75,7 +75,7 @@ git push
 ## 3. O que vai e o que NÃO vai
 
 Vai (39 arquivos, **13,5 MB**): os 20 programas/testes, `README.md`,
-`HISTORICO_ITERACOES.txt`, `imu.py`, `docs/`, `tools/`, as calibrações `.npz` e
+`docs/guias/HISTORICO_ITERACOES.txt`, `imu.py`, `docs/`, `tools/`, as calibrações `.npz` e
 os 2 modelos `.task` (7,5 + 5,5 MB; garantem que o clone funcione offline).
 
 **Não vai** (garantido pelo `.gitignore`): `.venv/` (36 mil arquivos!),
