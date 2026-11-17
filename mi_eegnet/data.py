@@ -6,6 +6,7 @@ from __future__ import annotations
 import csv
 import glob
 import json
+import warnings
 import re
 from pathlib import Path
 
@@ -14,6 +15,7 @@ import mne
 from scipy import signal
 
 mne.set_log_level("ERROR")
+warnings.filterwarnings("ignore", message=".*Highpass cutoff frequency.*")
 
 CH_2B = ["EEG:C3", "EEG:Cz", "EEG:C4"]
 CH_OWN_IDX = [14, 15, 16]  # 15=C3, 16=C4, 17=Cz na aquisicao
