@@ -83,8 +83,9 @@ def _load_own_csv(csv_path: Path):
 
 
 def carrega_own(pasta: Path, fs=128, l_freq=8.0, h_freq=32.0,
-                window_sec=2.0, step_sec=0.5, trial_sec=4.0):
-    """4 s de MI -> janelas deslizantes de 2 s, somente left/right."""
+                window_sec=2.0, step_sec=0.5, trial_sec=4.0,
+                fase="MI"):
+    """4 s de ME ou MI -> janelas deslizantes de 2 s, left/right."""
     csv_path = sorted(Path(pasta).glob("eeg_mi3c*.csv"))[-1]
     json_path = sorted(Path(pasta).glob("eventos*.json"))[-1]
     meta = json.load(open(json_path, encoding="utf-8"))
@@ -94,8 +95,9 @@ def carrega_own(pasta: Path, fs=128, l_freq=8.0, h_freq=32.0,
     eeg = filt_resample(eeg.T, fs_orig, fs, l_freq, h_freq).T
 
     mapa = {"esquerda": 0, "direita": 1, "repouso": 2}
-    starts = np.where(markers == 780)[0]
-    ends = np.where(markers == 781)[0]
+    ini, fim = (778, 779) if str(fase).upper() == "ME" else (780, 781)
+    starts = np.where(markers == ini)[0]
+    ends = np.where(markers == fim)[0]
     X, y, groups, trial_y = [], [], [], []
     n_win = int(window_sec * fs)
     step = int(step_sec * fs)
