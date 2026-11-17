@@ -134,3 +134,7 @@ _resultados_*/
 
 # ===== Artefatos locais de PDF/extração =====
 _pdf_txt_*.txt
+
+# Saidas da suite mi_eegnet
+_mi_eegnet_out/
+_mi_eegnet_smoke/

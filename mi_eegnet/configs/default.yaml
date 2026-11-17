@@ -1,0 +1,53 @@
+seed: 42
+
+paths:
+  bci2b: Datasets/BCICIV_2b_gdf
+  own: _piloto3c_memi
+  out: _mi_eegnet_out
+
+preprocessing:
+  fs: 128
+  l_freq: 8.0
+  h_freq: 32.0
+  window_sec: 2.0
+  step_sec: 0.5
+  bci2b_cue_offset_sec: 1.0
+
+model:
+  # Variante configuravel: EEGNet padrao + uma camada densa oculta.
+  # Contagem esperada: 5.866 parametros (~5.900).
+  F1: 8
+  D: 2
+  F2: 16
+  kernel_length: 64
+  dropout: 0.5
+  norm_rate: 0.25
+  classifier_hidden: 36
+  n_classes: 2
+  n_channels: 3
+  n_times: 256
+
+pretrain:
+  epochs: 200
+  patience: 30
+  lr: 0.001
+  weight_decay: 0.0001
+  batch_size: 32
+  noise_sigma: 0.05
+  channel_dropout: 0.1
+
+finetune:
+  n_train_trials: 20
+  n_test_trials: 20
+  folds: 5
+  inner_val_fraction: 0.2
+  epochs: 100
+  patience: 20
+  batch_size: 8
+  strategy_a_lr: 0.001
+  strategy_a_weight_decay: 0.001
+  strategy_b_lr: 0.0001
+  strategy_b_weight_decay: 0.0001
+
+evaluation:
+  bootstrap: 1000
