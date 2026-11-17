@@ -10251,3 +10251,199 @@ ITEM 188 (12/11/2026) - MULTIVIEW AUX0/AUX1 + AUDITORIA DO PIPELINE (NEMOTRON)
   --sintetico OK (depth 3D na auxiliar ~2.96 px no sintetico, NAO bancada).
 - PENDENTE: rodar tools/compara_tracking_mao.py com aux0/aux1 reais; medir
   cobertura dos 21 landmarks e jitter; validar com jig/verdade externa.
+
+
+================================================================================
+ITEM 189 (17/11/2026) - NOVO PILOTO ME/MI: PROTOCOLO E AQUISICAO (2 SESSOES)
+================================================================================
+- OBJETIVO: sair do piloto de 20 trials de fine-tune e coletar um conjunto
+  proprio maior, binario (mao direita x esquerda), com ME como controle
+  positivo e MI como alvo.
+- PROTOCOLO DEFINIDO:
+  * somente esquerda/direita no trial (sem classe repouso);
+  * 2 blocos x 15 trials/classe = 30 trials/classe por sessao;
+  * 2 sessoes em dias diferentes = 60 trials/classe = 120 trials L/R total;
+  * ME 4 s -> transicao 1 s -> MI 4 s; cue 1 s; ITI 1-2 s;
+  * baseline inicial: 60 s olhos abertos + 60 s olhos fechados, apenas QC;
+  * baseline ocular NAO entra no treino de MI.
+- CORRECAO NO PARADIGMA (commit 4148d14):
+  * `validacao_eeg_3classes.py` ganhou `--classes` e
+    `--baseline-olhos-sec`; classes default continuam 3, mas o piloto usa
+    `esquerda,direita`;
+  * marcadores novos 901/902 = olhos abertos inicio/fim; 903/904 = fechados;
+  * launcher `run_piloto_me_mi.ps1` com `--me-sec 4`, `--mi-sec 4`,
+    `--baseline-olhos-sec 60`.
+- SESSAO S01:
+  * arquivo em `outputs/eeg/piloto_me_mi_s01/`;
+  * 431.023 amostras, ~862 s, 32 canais + marcador;
+  * 60/60 trials; 30 esquerda + 30 direita; 15/15 por bloco;
+  * 778/779 e 780/781 = 60 cada;
+  * marcador 902 ausente (ver bug abaixo); 901->903 = 59,996 s de olhos
+    abertos e 903->904 = 60,0 s de olhos fechados;
+  * sem NaN/Inf; Ch15 (C3) std 15,51; Ch16 (C4) std 15,23; Ch17 (Cz) 14,53.
+- SESSAO S02:
+  * arquivo em `outputs/eeg/piloto_me_mi_s02/`;
+  * 432.037 amostras; 60/60 trials; 30/30; blocos 15/15;
+  * mesmos marcadores; 902 tambem ausente (rodada antes do patch).
+- BUG DO MARCADOR 902:
+  * 902 e 903 eram enfileirados no mesmo sample e o MarkerMuxer mantinha
+    apenas o ultimo; 902 se perdia.
+  * CORRECAO (commit 0a032bd): pequeno intervalo de 0,25 s entre 902 e 903
+    e metadados dos olhos no JSON.
+  * S01/S02 nao precisam ser regravadas: a janela de olhos abertos pode ser
+    lida como 901->903.
+- VALIDACAO: smoke test generator com 2 classes OK; CSV/JSON consistentes;
+  nenhum dado ausente nos trials de ME/MI.
+- OBSERVACAO: o ME pode conter componente de EMG/execucao; ele e controle
+  positivo funcional, nao prova de MI cortical pura.
+
+
+================================================================================
+ITEM 190 (17/11/2026) - CSP+LDA E EEGNET 2B NO NOVO PILOTO
+================================================================================
+DADOS: 2 sessoes, 60 trials L/R cada, fases ME e MI, janelas 2 s/0,5 s.
+PRE-PROCESSAMENTO: 8-32 Hz, 128 Hz, 3 canais C3/C4/Cz, soft voting por trial.
+
+CSP+LDA (commit 8f021f8; `tools/csp_lda_duas_sessoes.py`):
+- METODO: CSP(n_components=2, ledoit_wolf, log=True) + LDA com shrinkage;
+  5-fold agrupado por trial dentro da sessao e treino/teste cross-session.
+- ME within: s1 BA 0,767 (confusao [[25,5],[9,21]]); s2 BA 0,683
+  ([[20,10],[9,21]]).
+- ME cross: s1->s2 BA 0,633 (38/60, p=0,026); s2->s1 BA 0,750
+  (45/60, p=0,0001).
+- MI within: s1 BA 0,567 ([[17,13],[13,17]]); s2 BA 0,533
+  ([[16,14],[14,16]]).
+- MI cross: s1->s2 BA 0,550 (33/60, p=0,260); s2->s1 BA 0,533
+  (32/60, p=0,349).
+- CONCLUSAO: ME discrimina e funciona como controle positivo; MI nao
+  supera o acaso de forma significativa.
+- ARQUIVOS: `outputs/eeg/csp_lda_novo_piloto/{resultados.json,relatorio.md}`.
+
+EEGNET 2B + FINE-TUNE (commit ae4603c;
+`tools/eegnet2b_finetune_novo_piloto.py`):
+- MODELO: EEGNet configuravel 5.870 parametros, pre-treinado LOSO no 2b
+  (BA 0,689 +- 0,055); fine-tune 48 trials treino + 12 validacao interna;
+  teste na outra sessao; estrategias A (feature extraction) e B (full).
+- ME A: s1->s2 BA 0,550; s2->s1 BA 0,533.
+- ME B: s1->s2 BA 0,600 (IC [0,475;0,716]); s2->s1 BA 0,733
+  (IC [0,645;0,828], p=0,0002).
+- MI A: s1->s2 BA 0,483; s2->s1 BA 0,467.
+- MI B: s1->s2 BA 0,517 (IC [0,411;0,614]); s2->s1 BA 0,717
+  (IC [0,611;0,819], p=0,0005).
+- CONCLUSAO: ha assimetria forte entre direcoes. O 0,717 de MI em uma
+  direcao NAO se sustenta na direcao oposta (0,517); nao e evidencia
+  robusta de MI. O ME tambem oscila (0,600 vs 0,733). Nao escolher a
+  direcao favoravel para reportar como achado.
+- ARQUIVOS: `outputs/eeg/eegnet2b_novo_piloto/{resultados.json,relatorio.md}`.
+
+
+================================================================================
+ITEM 191 (17/11/2026) - ERD/ERS DE MU E BETA NO NOVO PILOTO
+================================================================================
+- METODO (commit 2960205; `tools/analise_erd_novo_piloto.py`):
+  envelope de Hilbert em mu 8-13 Hz e beta 13-30 Hz; baseline 1 s antes da
+  fase; media 0,5-3,5 s; ERD% = 100*(P-base)/base (negativo = supressao).
+- ME mu (contralateral - ipsilateral):
+  * esquerda: C4 -6,47% vs C3 +18,59% -> -25,06%;
+  * direita: C3 +18,56% vs C4 -5,28% -> +23,84%.
+- ME beta: esquerda +8,38%; direita +11,24% (sem lateralizacao classica).
+- MI mu:
+  * esquerda: C4 +22,65% vs C3 +37,33% -> -14,67%;
+  * direita: C3 +15,76% vs C4 +6,41% -> +9,35%.
+- MI beta: esquerda +0,22%; direita -13,66%.
+- LEITURA: ha modulacao dependente da classe no ME, mas nao o ERD
+  contralateral classico simetrico; no MI nao ha ERD mu claro. Os vales
+  perto de 0 s/4 s sao artefatos de borda de segmentacao/filtragem.
+  Analise descritiva, sem teste cluster/permutacao formal.
+- ARQUIVOS: `outputs/eeg/erd_novo_piloto/`
+
+
+================================================================================
+ITEM 192 (17/11/2026) - LITERATURA: ME DISCRIMINAVEL X MI NAO SIGNIFICATIVO
+================================================================================
+- DUANN & CHIOU (PLoS One 2016, PMC5026344): ME produz ERD alpha mais
+  profundo e longo (>2 s) que MI (600-700 ms); amplitude do ME quase o dobro;
+  MI no melhor caso ~3-4 dB por ~500 ms, dificil para deteccao online.
+- CHEN ET AL. (Front. Neurorobot. 2021, PMC8602190): em pacientes com
+  hemiplegia, MA-BCI ~79% vs MI-BCI ~66,5%; ERD e laterality index nao
+  diferiram significativamente. Tarefa motora mais concreta melhora a
+  classificacao.
+- GERONIMO ET AL. (Front. Neurosci. 2016, PMC4844920): 8/9 sujeitos
+  operaram o BCI online; 1 ficou no acaso; amplitude de mu pre-cue e estado
+  inicial predizem parte do sucesso; variabilidade individual alta.
+- REVISAO 2025 (Cureus, Europe PMC PMC12550537):
+  * MI evoca ERD mu/beta contralateral semelhante em topografia/timing ao
+    ME, mas com amplitude menor e campo mais amplo;
+  * benchmarks realistas ~meados de 70% para MI e baixo 80% para ME;
+  * ~70% e limiar de usabilidade; 15-30% dos usuarios naive ficam abaixo;
+  * melhora com instrucao cinestesica em primeira pessoa, vividness,
+    observacao de acao, tarefa orientada a objeto, EMG e neurofeedback;
+  * barreiras: protocolos heterogeneos, amostras pequenas, nao
+    estacionariedade entre sessoes e nao-respondedores persistentes.
+- IMPLICACAO PARA A TESE: o resultado do piloto (ME OK, MI nulo) e
+  consistente com a literatura. Nao e falha do hardware; e um resultado
+  negativo/exploratorio de MI em sujeito unico, 3 eletrodos, sem feedback
+  online nem treinamento prolongado. O ME valida aquisicao/pipeline; o MI
+  ainda nao foi demonstrado. Nao promover a direcao do EEGNet que deu 0,717
+  a achado de MI.
+
+
+================================================================================
+ITEM 193 (17/11/2026) - REORGANIZACAO COMPLETA DA ARVORE DO PROJETO
+================================================================================
+- MOTIVO: raiz com 63 pastas e 364 arquivos soltos, misturando codigo, dados,
+  calibracao, resultados, logs, literatura e tese.
+- COMMITS:
+  * 9230311 - checkpoint do estado anterior;
+  * c5c64d6 - reorganizacao da arvore;
+  * 20eb624 - mapa da migracao e ajustes finais;
+  * b727c01 - HISTORICO_ITERACOES de volta ao versionamento em docs/guias;
+  * c849154 - atalho raiz para o historico e referencias atualizadas.
+- ESTRUTURA ATUAL:
+  * src/mestradopy/core/ = modulos ativos (aquisicao, visao, IMU, calibracao);
+  * src/mestradopy/tools/ = ferramentas;
+  * src/mestradopy/eeg/mi_eegnet/ = pacote EEGNet;
+  * src/mestradopy/fusion/ e src/mestradopy/vision/;
+  * scripts/ = run_piloto_me_mi.ps1, run_eegnet_*.ps1;
+  * configs/calibracao/ = npz/json de calibracao;
+  * data/raw/Datasets/ = BCIC-IV e WAY-EEG-GAL;
+  * outputs/eeg/ = resultados (piloto_me_mi_s01/s02, csp_lda_novo_piloto,
+    eegnet2b_novo_piloto, erd_novo_piloto, mi_eegnet_out etc.);
+  * docs/literature, docs/validation, docs/thesis, docs/guias;
+  * tests/manual/ = testes manuais antigos;
+  * assets/models e assets/cues;
+  * external/, firmware/, archive/root_legacy/.
+- AJUSTES DE CODIGO:
+  * `mi_eegnet` config aponta para `data/raw/Datasets/BCICIV_2b_gdf` e
+    `outputs/eeg/mi_eegnet_out`;
+  * `stereo_calibration.py` e `kinect_imu_groundtruth.py` apontam para
+    `configs/calibracao/`;
+  * tools default de saida apontam para `outputs/eeg/`;
+  * testes do mi_eegnet usam caminho absoluto da config;
+  * README novo + `docs/guias/MIGRACAO_ESTRUTURA.md`;
+  * README antigo preservado em `docs/guias/README_ORIGINAL.md`.
+- VALIDACAO:
+  * 6 testes do mi_eegnet: OK;
+  * smoke test de aquisicao generator: 2 trials, CSV/JSON OK;
+  * `stereo_calibration.py --help`: import OK;
+  * `git status` limpo e push para main OK.
+- EXCECAO DELIBERADA: `HISTORICO_ITERACOES.txt` continua com hardlink na
+  raiz apontando para `docs/guias/HISTORICO_ITERACOES.txt`, para nao quebrar
+  agentes/scripts antigos que escrevem no caminho da raiz.
+- PENDENTE: subdividir `src/mestradopy/tools/` em eeg/vision/calibration/
+  diagnostics se o volume continuar crescendo; atualizar docs antigos que
+  ainda citam caminhos pre-reorganizacao.
+
+
+================================================================================
+ITEM 194 (17/11/2026) - HANDMVNET / MULTIVIEW (EM ANDAMENTO)
+================================================================================
+- TAREFA: ler https://github.com/pyxploiter/HandMvNet e integrar ao nosso
+  pipeline multiview (Kinect RGB + webcams auxiliares), sem tocar no EEG.
+- SUBAGENTE: `nvidia` (task-4), em andamento; escopo de escrita:
+  external/HandMvNet, src/mestradopy/vision, src/mestradopy/tools,
+  tests/manual, docs/guias.
+- PREVISTO: adaptador em src/mestradopy/vision/handmvnet_adapter.py,
+  README, smoke test sem hardware, relatorio de dependencias/pesos/licenca.
+- STATUS: sem resultado final ate o fechamento deste item; nao considerar
+  integrado antes da revisao do Lead e do commit.
