@@ -34,7 +34,8 @@ BCI_CLASSES = ["esquerda", "direita", "pes", "lingua"]
 PILOTO_CLASSES = ["esquerda", "direita", "repouso"]
 
 
-def treina_final(X, y, device, epochs=500):
+def treina_final(X, y, device, epochs=500, batch_size=128,
+                 progress_every=10):
     """Treina nos dados BCI inteiros e devolve o modelo."""
     torch.manual_seed(42)
     model = ef.EEGNet(X.shape[1], X.shape[2], 4, kernel_length=32).to(device)
@@ -46,12 +47,12 @@ def treina_final(X, y, device, epochs=500):
     for ep in range(epochs):
         model.train()
         perm = torch.randperm(n, device=device)
-        for i in range(0, n, 32):
-            idx = perm[i:i + 32]
+        for i in range(0, n, batch_size):
+            idx = perm[i:i + batch_size]
             opt.zero_grad()
-            loss = loss_fn(model(Xt[idx]), yt[idx].to(device))
+            loss = loss_fn(model(Xt[idx]), yt[idx])
             loss.backward(); opt.step()
-        if ep == 0 or (ep + 1) % 100 == 0:
+        if ep == 0 or (ep + 1) % progress_every == 0 or ep == epochs - 1:
             print(f"  epoca {ep + 1:03d}/{epochs}", flush=True)
     model.eval()
     return model
@@ -131,6 +132,11 @@ def main():
     ap.add_argument("--saida", type=Path, default=Path("_eegnet_faria_3ch4cls"))
     ap.add_argument("--carregar-modelo", type=Path, default=None,
                     help="Se informado, pula o treino e carrega este .pt")
+    ap.add_argument("--batch-size", type=int, default=128,
+                    help="Batch do treino final (protocolo Faria = 32)")
+    ap.add_argument("--progress-every", type=int, default=10)
+    ap.add_argument("--cache", type=Path, default=None,
+                    help="Cache do BCI pre-processado para nao recarregar GDF")
     args = ap.parse_args()
     args.saida.mkdir(parents=True, exist_ok=True)
 
@@ -144,13 +150,23 @@ def main():
 
     if args.carregar_modelo:
         model = ef.EEGNet(3, N_TIMES, 4, kernel_length=32).to(device)
-        model.load_state_dict(torch.load(args.carregar_modelo, map_location=device))
+        model.load_state_dict(torch.load(args.carregar_modelo,
+                                         map_location=device))
         model.eval()
         print("Modelo carregado:", args.carregar_modelo, flush=True)
     else:
-        X, y, subj, _ = ef.carrega_2a(args.dataset_2a, 3, 4)
-        print("BCI:", X.shape, flush=True)
-        model = treina_final(X, y, device, args.epochs)
+        cache = args.cache or (args.saida / "cache_bci_3ch4cls.npz")
+        if cache.exists():
+            d = np.load(cache)
+            X, y = d["X"], d["y"]
+            print("Cache BCI:", cache, X.shape, flush=True)
+        else:
+            X, y, subj, _ = ef.carrega_2a(args.dataset_2a, 3, 4)
+            np.savez_compressed(cache, X=X, y=y)
+            print("Cache BCI salvo:", cache, X.shape, flush=True)
+        model = treina_final(X, y, device, args.epochs,
+                             batch_size=args.batch_size,
+                             progress_every=args.progress_every)
         torch.save(model.state_dict(), args.saida / "eegnet_2a_3ch_4cls.pt")
         print("Modelo salvo.", flush=True)
 
