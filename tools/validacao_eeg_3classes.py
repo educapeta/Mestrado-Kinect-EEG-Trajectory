@@ -627,6 +627,9 @@ class MI3ClassParadigm:
                                 duration=self.baseline_eyes_sec)
                 self.pipeline.emit_marker_code(CODE_EYES_OPEN_END)
                 self._log_event("eyes_open_end", {})
+                # pequeno intervalo para o MarkerMuxer nao descartar 902
+                # quando 903 e' enfileirado no mesmo sample
+                self._wait_with_abort_check(0.25)
                 self.pipeline.emit_marker_code(CODE_EYES_CLOSED_START)
                 self._log_event("eyes_closed_start", {})
                 self._show_text("OLHOS FECHADOS\n\nRelaxe",
@@ -843,6 +846,10 @@ class MI3ClassParadigm:
                 "mi_end": CODE_MI_END,
                 "trial_cancel": CODE_TRIAL_CANCEL,
                 "impedance_check": CODE_IMPEDANCE_CHECK,
+                "eyes_open_start": CODE_EYES_OPEN_START,
+                "eyes_open_end": CODE_EYES_OPEN_END,
+                "eyes_closed_start": CODE_EYES_CLOSED_START,
+                "eyes_closed_end": CODE_EYES_CLOSED_END,
             },
             "block_orders": self.block_orders,
             "events": self.events,
