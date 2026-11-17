@@ -5,5 +5,28 @@
             "envManager": "ms-python.python:venv",
             "packageManager": "ms-python.python:pip"
         }
-    ]
+    ],
+    "latex-workshop.latex.recipes": [
+        {
+            "name": "pdflatex",
+            "tools": ["pdflatex"]
+        }
+    ],
+    "latex-workshop.latex.tools": [
+        {
+            "name": "pdflatex",
+            "command": "pdflatex",
+            "args": [
+                "-synctex=1",
+                "-interaction=nonstopmode",
+                "-file-line-error",
+                "%DOC%"
+            ]
+        }
+    ],
+    "latex-workshop.latex.rootFile": "C:/Users/Usuario/OneDrive/Desktop/Mestrado_Projeto/Tese_Latex_Agente/Mestrado/main.tex",
+    "latex-workshop.latex.autoBuild.run": "never",
+    "latex-workshop.latex.clean.enabled": false,
+    "latex-workshop.latex.recipes.choice": "manual",
+    "latex-workshop.latex.autoBuild.interval": 1000
 }

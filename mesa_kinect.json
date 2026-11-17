@@ -8,39 +8,39 @@
   "inliers": 2438,
   "fracao": 0.4873076154307416,
   "sinal": 1.0,
-  "quando": "2026-10-22 17:53:13",
+  "quando": "2026-10-28 11:36:39",
   "poses_verdade": {
     "right": [
       [
         "MAO PERTO DA LENTE (~50 cm), NO CENTRO DO QUADRO, PALMA MIRANDO A LENTE",
         [
-          -0.16235312715186503,
-          -0.3578670373420396,
-          -0.9195502409809055
+          -0.22238309830463993,
+          -0.2812293541218894,
+          -0.9335179741004528
         ]
       ],
       [
         "MAO PERTO DA LENTE, BEM A ESQUERDA DO QUADRO (ainda no quadro), PALMA MIRANDO A LENTE",
         [
-          -0.18020917396552222,
-          -0.36614160587810235,
-          -0.9129430311162183
+          -0.4652521349480608,
+          -0.22429602978594682,
+          -0.8562895199338441
         ]
       ],
       [
         "MAO PERTO DA LENTE, BEM A DIREITA DO QUADRO (ainda no quadro), PALMA MIRANDO A LENTE",
         [
-          -0.36250275810753885,
-          -0.35721764322256094,
-          -0.8608061952233769
+          -0.07772577800947371,
+          0.243102126623421,
+          -0.9668816160544124
         ]
       ],
       [
         "MAO PERTO DA LENTE, BEM PARA BAIXO NO QUADRO (mesma coluna), PALMA MIRANDO A LENTE",
         [
-          -0.5301278630716266,
-          -0.059120539990528825,
-          -0.8458541307733498
+          0.21824435944626872,
+          -0.2982775834242165,
+          -0.9291931353580359
         ]
       ]
     ],
@@ -48,33 +48,33 @@
       [
         "MAO PERTO DA LENTE (~50 cm), NO CENTRO DO QUADRO, PALMA MIRANDO A LENTE",
         [
-          0.15104950357441532,
-          -0.3675892176091423,
-          -0.9176394796255343
+          0.03041025558004409,
+          -0.3215590296311786,
+          -0.9464010813699503
         ]
       ],
       [
         "MAO PERTO DA LENTE, BEM A ESQUERDA DO QUADRO (ainda no quadro), PALMA MIRANDO A LENTE",
         [
-          0.1251107445218726,
-          -0.37571937823537294,
-          -0.9182495578129114
+          -0.3017931468827025,
+          -0.28660291156472667,
+          -0.9092742532246567
         ]
       ],
       [
         "MAO PERTO DA LENTE, BEM A DIREITA DO QUADRO (ainda no quadro), PALMA MIRANDO A LENTE",
         [
-          0.276468328673787,
-          -0.34759631438332333,
-          -0.8959587409403699
+          0.15230155236998352,
+          0.16319850741726666,
+          -0.974766887169681
         ]
       ],
       [
         "MAO PERTO DA LENTE, BEM PARA BAIXO NO QUADRO (mesma coluna), PALMA MIRANDO A LENTE",
         [
-          -0.34183148974867167,
-          -0.07562547170942138,
-          -0.9367134143615811
+          0.37950761043908016,
+          -0.27719334088886044,
+          -0.8826878414171634
         ]
       ]
     ]
