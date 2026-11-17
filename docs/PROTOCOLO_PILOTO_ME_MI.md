@@ -31,19 +31,19 @@ Sessão 1:
 ```powershell
 cd C:\mestradopy
 .\.venv\Scripts\Activate.ps1
-.\run_piloto_me_mi.ps1 -Sessao 01 -Sujeito S01
+.\scripts\run_piloto_me_mi.ps1 -Sessao 01 -Sujeito S01
 ```
 
 Sessão 2 (outro dia):
 
 ```powershell
-.\run_piloto_me_mi.ps1 -Sessao 02 -Sujeito S01
+.\scripts\run_piloto_me_mi.ps1 -Sessao 02 -Sujeito S01
 ```
 
 Ou diretamente:
 
 ```powershell
-python -W ignore tools\validacao_eeg_3classes.py `
+python -W ignore src\mestradopy\tools\validacao_eeg_3classes.py `
   --source gnautilus `
   --blocos 2 --trials-por-classe 15 `
   --classes esquerda,direita `
@@ -51,10 +51,10 @@ python -W ignore tools\validacao_eeg_3classes.py `
   --repouso-sec 2 --iti-min 1 --iti-max 2 `
   --baseline-olhos-sec 60 `
   --sujeito S01 --sessao 01 `
-  --pasta-saida _piloto_me_mi_s01
+  --pasta-saida outputs/eeg/piloto_me_mi_s01
 ```
 
-Para a sessão 2, troque `--sessao 02` e `_piloto_me_mi_s02`.
+Para a sessão 2, troque `--sessao 02` e `outputs/eeg/piloto_me_mi_s02`.
 
 ## Marcadores
 

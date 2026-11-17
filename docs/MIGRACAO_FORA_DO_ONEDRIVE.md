@@ -81,7 +81,7 @@ git status
 
 ```powershell
 # Sessao indo para o disco de dados (sem junction):
-python eeg_motor_paradigm.py --participante P03 --sessao S2 `
+python src\mestradopy\core\eeg_motor_paradigm.py --participante P03 --sessao S2 `
        --pasta-sessoes "D:\Mestrado_Dados\gravacoes"
 
 # Treino lendo de la:

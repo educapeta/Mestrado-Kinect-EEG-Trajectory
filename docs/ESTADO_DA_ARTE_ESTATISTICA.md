@@ -173,33 +173,33 @@ O utilitário `tools/analise_estatistica.py` fornece interface direta para todos
 ### Nível de Acaso Exato
 ```bash
 # Para um resultado experimental específico (e.g. 15 acertos em 20 trials, 2 classes)
-python tools/analise_estatistica.py --acaso 15/20
+python src/mestradopy/tools/analise_estatistica.py --acaso 15/20
 
 # Tabela do limiar crítico exato para múltiplos tamanhos de amostra
-python tools/analise_estatistica.py --acaso-tabela 10 20 30 40 60 100
+python src/mestradopy/tools/analise_estatistica.py --acaso-tabela 10 20 30 40 60 100
 ```
 
 ### Análise de Previsões de Trajetória do SAND
 ```bash
 # npz contendo chaves 'previsao' (N,T,3) e 'alvo' (N,T,3)
-python tools/analise_estatistica.py --pcc-npz resultados_validacao.npz --n-perm 5000 --json relatorio_pcc.json
+python src/mestradopy/tools/analise_estatistica.py --pcc-npz resultados_validacao.npz --n-perm 5000 --json relatorio_pcc.json
 ```
 
 ### Log de Desvio do Overlay de Câmeras
 ```bash
 # Analisa desvios médios por nó com FDR e contraste Kinect vs. Backup
-python tools/analise_estatistica.py --overlay-log overlay_deviation_log.csv
+python src/mestradopy/tools/analise_estatistica.py --overlay-log overlay_deviation_log.csv
 ```
 
 ### Comparação de Modelos e Benchmarks (Friedman + Holm)
 ```bash
 # CSV longo com colunas 'sujeito', 'metodo', 'pcc'
-python tools/analise_estatistica.py --pcc-tabela benchmark_modelos.csv
+python src/mestradopy/tools/analise_estatistica.py --pcc-tabela benchmark_modelos.csv
 ```
 
 ### Auto-Teste Integrado do Pipeline
 ```bash
-python tools/analise_estatistica.py --auto-teste
+python src/mestradopy/tools/analise_estatistica.py --auto-teste
 ```
 
 

@@ -46,8 +46,8 @@ Arc — 3 canais / 4 classes:
 python -W ignore tools\eegnet_faria_benchmark.py `
   --dataset 2a --n-canais 3 --n-classes 4 `
   --folds 4 --epochs 500 --device xpu --verbose `
-  --saida _eegnet_faria_500 2>&1 |
-  Tee-Object -FilePath _eegnet_faria_500\log_2a_3ch_4cls.txt
+  --saida outputs/eeg/eegnet_faria_500 2>&1 |
+  Tee-Object -FilePath outputs/eeg/eegnet_faria_500\log_2a_3ch_4cls.txt
 ```
 
 4060 — troque apenas `xpu` por `cuda`.
@@ -62,7 +62,7 @@ O `--verbose` mostra:
 ## 5. Acompanhar em outra janela
 
 ```powershell
-Get-Content .\_eegnet_faria_500\log_2a_3ch_4cls.txt -Wait -Tail 30
+Get-Content .\outputs/eeg/eegnet_faria_500\log_2a_3ch_4cls.txt -Wait -Tail 30
 ```
 
 Para parar: `Ctrl+C` na janela do treino.
@@ -110,8 +110,8 @@ Teste rápido de 20 epochs:
 python -W ignore tools\eegnet_faria_benchmark.py `
   --dataset 2a --n-canais 3 --n-classes 4 `
   --folds 4 --epochs 500 --device xpu --verbose `
-  --saida _eegnet_faria_500 2>&1 |
-  Tee-Object -FilePath _eegnet_faria_500\log_3ch4cls.txt
+  --saida outputs/eeg/eegnet_faria_500 2>&1 |
+  Tee-Object -FilePath outputs/eeg/eegnet_faria_500\log_3ch4cls.txt
 ```
 
 No laptop com 4060, use `--device cuda`.
@@ -124,8 +124,8 @@ Isso treina no BCI inteiro, salva `eegnet_2a_3ch_4cls.pt` e aplica nos seus
 ```powershell
 python -W ignore tools\eegnet_faria_aplicar_mi.py `
   --device xpu --epochs 500 `
-  --saida _eegnet_faria_3ch4cls 2>&1 |
-  Tee-Object -FilePath _eegnet_faria_3ch4cls\log_aplicacao.txt
+  --saida outputs/eeg/eegnet_faria_3ch4cls 2>&1 |
+  Tee-Object -FilePath outputs/eeg/eegnet_faria_3ch4cls\log_aplicacao.txt
 ```
 
 O script salva:
@@ -140,16 +140,16 @@ O script salva:
 ```powershell
 python -W ignore tools\eegnet_faria_aplicar_mi.py `
   --device xpu `
-  --carregar-modelo _eegnet_faria_3ch4cls\eegnet_2a_3ch_4cls.pt `
-  --saida _eegnet_faria_3ch4cls_aplicacao 2>&1 |
-  Tee-Object -FilePath _eegnet_faria_3ch4cls_aplicacao\log.txt
+  --carregar-modelo outputs/eeg/eegnet_faria_3ch4cls\eegnet_2a_3ch_4cls.pt `
+  --saida outputs/eeg/eegnet_faria_3ch4cls_aplicacao 2>&1 |
+  Tee-Object -FilePath outputs/eeg/eegnet_faria_3ch4cls_aplicacao\log.txt
 ```
 
 ## 4. Apenas gerar as janelas deslizantes
 
 ```powershell
-python tools\gera_janelas_mi_piloto.py `
-  --piloto _piloto3c_memi `
+python src\mestradopy\tools\gera_janelas_mi_piloto.py `
+  --piloto outputs/eeg/piloto3c_memi `
   --saida _janelas_mi_piloto
 ```
 
@@ -174,8 +174,8 @@ Saída: `janelas_mi_2s.npz` e `janelas_mi_2s.json`.
 python -W ignore tools\eegnet_faria_benchmark.py `
   --dataset 2b --n-canais 3 --n-classes 2 `
   --folds 4 --epochs 500 --device xpu --verbose `
-  --saida _eegnet_faria_2b_benchmark 2>&1 |
-  Tee-Object -FilePath _eegnet_faria_2b_benchmark\log_2b_3ch_2cls.txt
+  --saida outputs/eeg/eegnet_faria_2b_benchmark 2>&1 |
+  Tee-Object -FilePath outputs/eeg/eegnet_faria_2b_benchmark\log_2b_3ch_2cls.txt
 ```
 
 No laptop com 4060, troque `--device xpu` por `--device cuda`.
@@ -185,8 +185,8 @@ No laptop com 4060, troque `--device xpu` por `--device cuda`.
 ```powershell
 python -W ignore tools\eegnet_faria_2b_aplicar_mi.py `
   --device xpu --epochs 500 --batch-size 32 --progress-every 10 `
-  --saida _eegnet_faria_2b_3ch2cls 2>&1 |
-  Tee-Object -FilePath _eegnet_faria_2b_3ch2cls\log_aplicacao_2b.txt
+  --saida outputs/eeg/eegnet_faria_2b_3ch2cls 2>&1 |
+  Tee-Object -FilePath outputs/eeg/eegnet_faria_2b_3ch2cls\log_aplicacao_2b.txt
 ```
 
 O `--batch-size 32` segue o Faria; use `128` para ir mais rápido.
@@ -194,10 +194,10 @@ O `--batch-size 32` segue o Faria; use `128` para ir mais rápido.
 Saídas:
 
 ```text
-_eegnet_faria_2b_3ch2cls/eegnet_2b_3ch_2cls.pt
-_eegnet_faria_2b_3ch2cls/cache_bci_2b.npz
-_eegnet_faria_2b_3ch2cls/janelas_mi_left_right.npz
-_eegnet_faria_2b_3ch2cls/resultado_2b_teste_mi.md
+outputs/eeg/eegnet_faria_2b_3ch2cls/eegnet_2b_3ch_2cls.pt
+outputs/eeg/eegnet_faria_2b_3ch2cls/cache_bci_2b.npz
+outputs/eeg/eegnet_faria_2b_3ch2cls/janelas_mi_left_right.npz
+outputs/eeg/eegnet_faria_2b_3ch2cls/resultado_2b_teste_mi.md
 ```
 
 ## 3. Aplicar sem retreinar
@@ -205,8 +205,8 @@ _eegnet_faria_2b_3ch2cls/resultado_2b_teste_mi.md
 ```powershell
 python -W ignore tools\eegnet_faria_2b_aplicar_mi.py `
   --device xpu `
-  --carregar-modelo _eegnet_faria_2b_3ch2cls\eegnet_2b_3ch_2cls.pt `
-  --saida _eegnet_faria_2b_3ch2cls_aplicacao
+  --carregar-modelo outputs/eeg/eegnet_faria_2b_3ch2cls\eegnet_2b_3ch_2cls.pt `
+  --saida outputs/eeg/eegnet_faria_2b_3ch2cls_aplicacao
 ```
 
 ## 4. Interpretação
@@ -245,7 +245,7 @@ _validacao_me_shuffle/resultados.json
 
 ## O que o script faz
 
-- carrega ME e MI de `_piloto3c_memi`;
+- carrega ME e MI de `outputs/eeg/piloto3c_memi`;
 - usa somente esquerda/direita (20 + 20 trials);
 - gera 5 janelas de 2 s por trial (passo 0,5 s);
 - classifica bandpower alpha/beta com LDA shrinkage;
@@ -294,7 +294,7 @@ python -W ignore tools\baselines_csp_lda_eegnet.py
   validação agrupada por trial.
 - Mesmo protocolo: 2 s, 5 janelas por trial, 5-fold agrupado.
 
-Saídas: `_baselines_csp_eegnet/relatorio.md`.
+Saídas: `outputs/eeg/baselines_csp_eegnet/relatorio.md`.
 
 
 ---
@@ -309,4 +309,4 @@ python -W ignore tools\permutacao_baselines.py `
 - CSP 500 permutações: ME p=0,108; MI p=0,064;
 - EEGNet 20 permutações: p=0,048 nas duas fases, mas nulo instável
   (média ~0,405) e p mínimo 1/21; não interpretar como evidência forte.
-- Saídas: `_permutacao_baselines/relatorio.md` e `resultados.json`.
+- Saídas: `outputs/eeg/permutacao_baselines/relatorio.md` e `resultados.json`.

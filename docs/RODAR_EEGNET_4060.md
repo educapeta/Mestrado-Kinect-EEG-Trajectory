@@ -37,17 +37,17 @@ Use `--device cuda --epochs 500`:
 .\.venv\Scripts\python.exe tools\eegnet_faria_benchmark.py `
   --dataset 2a --n-canais 22 --n-classes 4 `
   --folds 4 --epochs 500 --device cuda `
-  --saida _eegnet_faria_500
+  --saida outputs/eeg/eegnet_faria_500
 
 .\.venv\Scripts\python.exe tools\eegnet_faria_benchmark.py `
   --dataset 2a --n-canais 3 --n-classes 4 `
   --folds 4 --epochs 500 --device cuda `
-  --saida _eegnet_faria_500
+  --saida outputs/eeg/eegnet_faria_500
 
 .\.venv\Scripts\python.exe tools\eegnet_faria_benchmark.py `
   --dataset 2a --n-canais 22 --n-classes 2 `
   --folds 4 --epochs 500 --device cuda `
-  --saida _eegnet_faria_500
+  --saida outputs/eeg/eegnet_faria_500
 ```
 
 Quando o 2b estiver na pasta:
@@ -56,7 +56,7 @@ Quando o 2b estiver na pasta:
 .\.venv\Scripts\python.exe tools\eegnet_faria_benchmark.py `
   --dataset 2b --n-canais 3 --n-classes 2 `
   --folds 4 --epochs 500 --device cuda `
-  --saida _eegnet_faria_500
+  --saida outputs/eeg/eegnet_faria_500
 ```
 
 Ou simplesmente execute:

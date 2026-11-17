@@ -152,13 +152,13 @@ Como as coordenadas são brutas no camera space, a transformação para um frame
 
 ```bash
 # Ligado por padrão quando Kinect está ativo
-python eeg_motor_paradigm.py --source gnautilus --sessao 1
+python src\mestradopy\core\eeg_motor_paradigm.py --source gnautilus --sessao 1
 
 # Desligar explicitamente
-python eeg_motor_paradigm.py --source gnautilus --sessao 1 --sem-corpo
+python src\mestradopy\core\eeg_motor_paradigm.py --source gnautilus --sessao 1 --sem-corpo
 
 # Forçar ligado (útil para testes com generator)
-python eeg_motor_paradigm.py --source generator --sem-kinect --corpo
+python src\mestradopy\core\eeg_motor_paradigm.py --source generator --sem-kinect --corpo
 ```
 
 ### Comportamento padrão:

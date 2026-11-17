@@ -138,3 +138,17 @@ _pdf_txt_*.txt
 # Saidas da suite mi_eegnet
 _mi_eegnet_out/
 _mi_eegnet_smoke/
+
+# ===== Nova estrutura do projeto =====
+data/
+outputs/
+archive/
+external/
+assets/models/
+configs/calibracao/*.npz
+configs/calibracao/*.json.antes_item153
+configs/calibracao/*.json.bak
+docs/literature/*.pdf
+src/**/__pycache__/
+__pycache__/
+

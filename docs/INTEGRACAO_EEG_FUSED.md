@@ -118,7 +118,7 @@ python test_fusion_eeg_export.py -v
 python -m fusion.replay --input sessao_xyz --compare-palm-fused  # futuro
 
 # 4. Teste de fumaça com --fusion-enabled (generator source, sem Kinect/IMU)
-python eeg_motor_paradigm.py --source generator --fusion-enabled --blocos 1 --trials-por-bloco 2 --sem-kinect
+python src\mestradopy\core\eeg_motor_paradigm.py --source generator --fusion-enabled --blocos 1 --trials-por-bloco 2 --sem-kinect
 # Verifica: CSV tem 93 colunas, header inclui FUSED_*, JSON tem fused_schema_ver=1
 ```
 
@@ -163,7 +163,7 @@ Antes de flippar `--fusion-enabled` para `True` por default, a Fase 4 deve demon
 # 2. MotionRecorder.__init__: import append_fused_columns, condicional header
 # 3. MotionRecorder.write_motion: import fused_row, validate_fused_row, condicional extend
 ```
-**Teste:** `python eeg_motor_paradigm.py --source generator --fusion-enabled --blocos 1 --trials-por-bloco 2 --sem-kinect` → CSV com 93 colunas, JSON com `fused_schema_ver=1`.
+**Teste:** `python src\mestradopy\core\eeg_motor_paradigm.py --source generator --fusion-enabled --blocos 1 --trials-por-bloco 2 --sem-kinect` → CSV com 93 colunas, JSON com `fused_schema_ver=1`.
 
 ### Passo 2: Conectar `FusedState` do SensorManager ao MotionRecorder
 ```bash

@@ -1,0 +1,8 @@
+﻿[project]
+name = "mestradopy"
+version = "0.1.0"
+description = "EEG, visão, IMU e fusão para o mestrado"
+requires-python = ">=3.10"
+
+[tool.pytest.ini_options]
+pythonpath = ["src/mestradopy", "src/mestradopy/core", "src/mestradopy/tools", "src/mestradopy/eeg"]

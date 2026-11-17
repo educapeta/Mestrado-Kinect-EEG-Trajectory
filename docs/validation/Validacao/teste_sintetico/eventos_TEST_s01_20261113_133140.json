@@ -1,0 +1,425 @@
+{
+  "subject_id": "TEST",
+  "session_id": "01",
+  "date": "2026-11-13T13:31:40.563016",
+  "protocol": "MI_3classes_validation",
+  "version": "1.0",
+  "source": "generator",
+  "fs": 500.0,
+  "channels": 32,
+  "channel_names": [
+    "Fp1",
+    "Fp2",
+    "F7",
+    "F3",
+    "Fz",
+    "F4",
+    "F8",
+    "FC5",
+    "FC1",
+    "FC2",
+    "FC6",
+    "T7",
+    "C3",
+    "Cz",
+    "C4",
+    "T8",
+    "CP5",
+    "CP1",
+    "CP2",
+    "CP6",
+    "P7",
+    "P3",
+    "Pz",
+    "P4",
+    "P8",
+    "PO7",
+    "PO3",
+    "PO4",
+    "PO8",
+    "O1",
+    "Oz",
+    "O2",
+    "Ref"
+  ],
+  "n_blocks": 1,
+  "trials_per_class": 2,
+  "total_trials": 6,
+  "mi_sec": 2.0,
+  "rest_sec": 2.0,
+  "cue_sec": 0.5,
+  "iti_range": [
+    0.2,
+    0.5
+  ],
+  "classes": [
+    "esquerda",
+    "direita",
+    "repouso"
+  ],
+  "class_codes": {
+    "esquerda": 769,
+    "direita": 770,
+    "repouso": 784
+  },
+  "marker_codes": {
+    "session_start": 32766,
+    "session_end": 32765,
+    "block_start": 790,
+    "block_end": 791,
+    "cue_left": 769,
+    "cue_right": 770,
+    "cue_rest": 784,
+    "mi_start": 780,
+    "mi_end": 781,
+    "trial_cancel": 796,
+    "impedance_check": 897
+  },
+  "block_orders": [
+    [
+      "esquerda",
+      "repouso",
+      "direita",
+      "esquerda",
+      "repouso",
+      "direita"
+    ]
+  ],
+  "events": [
+    {
+      "timestamp": 1794587478.729263,
+      "monotonic": 775024.5,
+      "type": "session_start",
+      "data": {
+        "subject": "TEST",
+        "session": "01"
+      }
+    },
+    {
+      "timestamp": 1794587478.7302344,
+      "monotonic": 775024.5,
+      "type": "block_start",
+      "data": {
+        "block": 1,
+        "order": [
+          "esquerda",
+          "repouso",
+          "direita",
+          "esquerda",
+          "repouso",
+          "direita"
+        ]
+      }
+    },
+    {
+      "timestamp": 1794587478.7302344,
+      "monotonic": 775024.5,
+      "type": "trial_start",
+      "data": {
+        "trial": 1,
+        "block": 1,
+        "trial_in_block": 1,
+        "class": "esquerda",
+        "cue_code": 769,
+        "mi_sec": 2.0,
+        "rest_sec": 2.0,
+        "cue_sec": 0.5
+      }
+    },
+    {
+      "timestamp": 1794587479.2384198,
+      "monotonic": 775025.0,
+      "type": "cue",
+      "data": {
+        "class": "esquerda",
+        "code": 769
+      }
+    },
+    {
+      "timestamp": 1794587479.2384198,
+      "monotonic": 775025.0,
+      "type": "mi_start",
+      "data": {
+        "class": "esquerda"
+      }
+    },
+    {
+      "timestamp": 1794587481.264763,
+      "monotonic": 775027.031,
+      "type": "mi_end",
+      "data": {
+        "class": "esquerda"
+      }
+    },
+    {
+      "timestamp": 1794587481.264763,
+      "monotonic": 775027.031,
+      "type": "trial_end",
+      "data": {
+        "trial": 1,
+        "class": "esquerda"
+      }
+    },
+    {
+      "timestamp": 1794587481.668523,
+      "monotonic": 775027.437,
+      "type": "trial_start",
+      "data": {
+        "trial": 2,
+        "block": 1,
+        "trial_in_block": 2,
+        "class": "repouso",
+        "cue_code": 784,
+        "mi_sec": 2.0,
+        "rest_sec": 2.0,
+        "cue_sec": 0.5
+      }
+    },
+    {
+      "timestamp": 1794587482.1743286,
+      "monotonic": 775027.937,
+      "type": "cue",
+      "data": {
+        "class": "repouso",
+        "code": 784
+      }
+    },
+    {
+      "timestamp": 1794587482.1743286,
+      "monotonic": 775027.937,
+      "type": "mi_start",
+      "data": {
+        "class": "repouso"
+      }
+    },
+    {
+      "timestamp": 1794587484.1998465,
+      "monotonic": 775029.968,
+      "type": "mi_end",
+      "data": {
+        "class": "repouso"
+      }
+    },
+    {
+      "timestamp": 1794587484.1998465,
+      "monotonic": 775029.968,
+      "type": "trial_end",
+      "data": {
+        "trial": 2,
+        "class": "repouso"
+      }
+    },
+    {
+      "timestamp": 1794587484.503989,
+      "monotonic": 775030.265,
+      "type": "trial_start",
+      "data": {
+        "trial": 3,
+        "block": 1,
+        "trial_in_block": 3,
+        "class": "direita",
+        "cue_code": 770,
+        "mi_sec": 2.0,
+        "rest_sec": 2.0,
+        "cue_sec": 0.5
+      }
+    },
+    {
+      "timestamp": 1794587485.011514,
+      "monotonic": 775030.781,
+      "type": "cue",
+      "data": {
+        "class": "direita",
+        "code": 770
+      }
+    },
+    {
+      "timestamp": 1794587485.011514,
+      "monotonic": 775030.781,
+      "type": "mi_start",
+      "data": {
+        "class": "direita"
+      }
+    },
+    {
+      "timestamp": 1794587487.0337203,
+      "monotonic": 775032.796,
+      "type": "mi_end",
+      "data": {
+        "class": "direita"
+      }
+    },
+    {
+      "timestamp": 1794587487.0337203,
+      "monotonic": 775032.796,
+      "type": "trial_end",
+      "data": {
+        "trial": 3,
+        "class": "direita"
+      }
+    },
+    {
+      "timestamp": 1794587487.3361013,
+      "monotonic": 775033.093,
+      "type": "trial_start",
+      "data": {
+        "trial": 4,
+        "block": 1,
+        "trial_in_block": 4,
+        "class": "esquerda",
+        "cue_code": 769,
+        "mi_sec": 2.0,
+        "rest_sec": 2.0,
+        "cue_sec": 0.5
+      }
+    },
+    {
+      "timestamp": 1794587487.8434463,
+      "monotonic": 775033.609,
+      "type": "cue",
+      "data": {
+        "class": "esquerda",
+        "code": 769
+      }
+    },
+    {
+      "timestamp": 1794587487.8434463,
+      "monotonic": 775033.609,
+      "type": "mi_start",
+      "data": {
+        "class": "esquerda"
+      }
+    },
+    {
+      "timestamp": 1794587489.867345,
+      "monotonic": 775035.625,
+      "type": "mi_end",
+      "data": {
+        "class": "esquerda"
+      }
+    },
+    {
+      "timestamp": 1794587489.867345,
+      "monotonic": 775035.625,
+      "type": "trial_end",
+      "data": {
+        "trial": 4,
+        "class": "esquerda"
+      }
+    },
+    {
+      "timestamp": 1794587490.1717288,
+      "monotonic": 775035.937,
+      "type": "trial_start",
+      "data": {
+        "trial": 5,
+        "block": 1,
+        "trial_in_block": 5,
+        "class": "repouso",
+        "cue_code": 784,
+        "mi_sec": 2.0,
+        "rest_sec": 2.0,
+        "cue_sec": 0.5
+      }
+    },
+    {
+      "timestamp": 1794587490.6783938,
+      "monotonic": 775036.437,
+      "type": "cue",
+      "data": {
+        "class": "repouso",
+        "code": 784
+      }
+    },
+    {
+      "timestamp": 1794587490.6783938,
+      "monotonic": 775036.437,
+      "type": "mi_start",
+      "data": {
+        "class": "repouso"
+      }
+    },
+    {
+      "timestamp": 1794587492.7060416,
+      "monotonic": 775038.468,
+      "type": "mi_end",
+      "data": {
+        "class": "repouso"
+      }
+    },
+    {
+      "timestamp": 1794587492.7060416,
+      "monotonic": 775038.468,
+      "type": "trial_end",
+      "data": {
+        "trial": 5,
+        "class": "repouso"
+      }
+    },
+    {
+      "timestamp": 1794587492.9592314,
+      "monotonic": 775038.718,
+      "type": "trial_start",
+      "data": {
+        "trial": 6,
+        "block": 1,
+        "trial_in_block": 6,
+        "class": "direita",
+        "cue_code": 770,
+        "mi_sec": 2.0,
+        "rest_sec": 2.0,
+        "cue_sec": 0.5
+      }
+    },
+    {
+      "timestamp": 1794587493.4648206,
+      "monotonic": 775039.234,
+      "type": "cue",
+      "data": {
+        "class": "direita",
+        "code": 770
+      }
+    },
+    {
+      "timestamp": 1794587493.4648206,
+      "monotonic": 775039.234,
+      "type": "mi_start",
+      "data": {
+        "class": "direita"
+      }
+    },
+    {
+      "timestamp": 1794587495.4929297,
+      "monotonic": 775041.265,
+      "type": "mi_end",
+      "data": {
+        "class": "direita"
+      }
+    },
+    {
+      "timestamp": 1794587495.4929297,
+      "monotonic": 775041.265,
+      "type": "trial_end",
+      "data": {
+        "trial": 6,
+        "class": "direita"
+      }
+    },
+    {
+      "timestamp": 1794587495.4929297,
+      "monotonic": 775041.265,
+      "type": "block_end",
+      "data": {
+        "block": 1
+      }
+    },
+    {
+      "timestamp": 1794587495.5454965,
+      "monotonic": 775041.312,
+      "type": "session_end",
+      "data": {}
+    }
+  ],
+  "aborted": false,
+  "completed_trials": 6
+}

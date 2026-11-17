@@ -1,0 +1,60 @@
+{
+  "lado": "direita",
+  "velocidade": "rapida",
+  "n_repeticoes": 10,
+  "distancia_fita_m": 1.0,
+  "velocidade_esperada_m_s": 2.0,
+  "kinect_depth": {
+    "deslocamento_mediano_m": 1.0003229948883572,
+    "deslocamento_p95_m": 1.0036122892563621,
+    "erro_abs_mediano_cm": 0.2021236562301798,
+    "erro_abs_p95_cm": 0.39436684113999904,
+    "erro_rel_mediano_pct": 0.2021236562301798,
+    "erro_rel_p95_pct": 0.39436684113999904,
+    "velocidade_erro_mediano_pct": 0.2021236562301798,
+    "velocidade_erro_p95_pct": 0.39436684113999904,
+    "cobertura_media_pct": 95.23809523809518,
+    "jitter_hold_mediano_mm": 8.088931172868321,
+    "jitter_hold_p95_mm": 9.11327159882918
+  },
+  "multi_view_aux0": {
+    "deslocamento_mediano_m": 1.0012561048507909,
+    "deslocamento_p95_m": 1.005200524657813,
+    "erro_abs_mediano_cm": 0.22028407279830464,
+    "erro_abs_p95_cm": 0.5200524657813088,
+    "erro_rel_mediano_pct": 0.22028407279830464,
+    "erro_rel_p95_pct": 0.5200524657813088,
+    "velocidade_erro_mediano_pct": 0.22028407279830464,
+    "velocidade_erro_p95_pct": 0.5200524657813088,
+    "cobertura_media_pct": 95.23809523809518,
+    "jitter_hold_mediano_mm": 10.645191415016416,
+    "jitter_hold_p95_mm": 12.69202794047019
+  },
+  "multi_view_3view": {
+    "deslocamento_mediano_m": 1.000188604400049,
+    "deslocamento_p95_m": 1.001881640198865,
+    "erro_abs_mediano_cm": 0.16616418603412342,
+    "erro_abs_p95_cm": 0.1993669414995164,
+    "erro_rel_mediano_pct": 0.16616418603412342,
+    "erro_rel_p95_pct": 0.1993669414995164,
+    "velocidade_erro_mediano_pct": 0.16616418603412342,
+    "velocidade_erro_p95_pct": 0.1993669414995164,
+    "cobertura_media_pct": 95.23809523809518,
+    "jitter_hold_mediano_mm": 6.792535938890095,
+    "jitter_hold_p95_mm": 8.29115851792387
+  },
+  "lateralidade": {
+    "lateralidade_100_pct": true,
+    "troca_mao_ocorreu": false
+  },
+  "criterios_aceite": {
+    "kinect_erro_mediano_cm_ok": true,
+    "kinect_erro_p95_cm_ok": true,
+    "mv_aux0_erro_mediano_cm_ok": true,
+    "kinect_cobertura_ok": true,
+    "mv_cobertura_ok": true,
+    "kinect_jitter_ok": false,
+    "velocidade_erro_ok": true,
+    "lateralidade_ok": true
+  }
+}
