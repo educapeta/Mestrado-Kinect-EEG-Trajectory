@@ -1,0 +1,45 @@
+# HandMvNet — 3 vistas (Kinect RGB + aux0 + aux1)
+# Usado como referência de arquitetura/treino pelo script
+# src/mestradopy/tools/handmvnet_train.py.
+name: handmvnet
+base_output_dir: outputs/visao/handmvnet_3views
+data:
+  name: ho3d              # só seleciona AUC threshold; nosso loader é próprio
+  batch_size: 2
+  image_size: 256
+  heatmap_size: 32
+  num_views: 3
+  selected_views: [0, 1, 2]
+  mask_size: 32
+  depth_size: 32
+  mano_models_dir: external/HandMvNet/src/mano
+  num_workers: 0
+  augment: true
+model:
+  selected_views: [0, 1, 2]
+  num_views: 3
+  fusion: cross_attn
+  fusion_layers: 5
+  pos_enc: [pos2d, crop, sin]
+  use_gcn: false
+  backbone: resnet
+  backbone_type: "18"     # começar pequeno; "50_paper" se houver GPU/memória
+  backbone_early_return: 3
+  backbone_channels: [256, 128, 64]
+  backbone_pretrained: false
+  get_vertices: false
+train:
+  debug: false
+  root_relative: true
+  epochs: 40
+  batch_size: 2
+  lr: 0.0001
+  weight_decay: 0.05
+  mask_invisible_joints: false
+  loss_weights:
+    heatmap: 10.0
+    joints_2d: 1.0
+    joints_3d: 1000.0
+  lr_scheduler:
+    gamma: 0.75
+    milestones: [20, 40, 60, 80]
