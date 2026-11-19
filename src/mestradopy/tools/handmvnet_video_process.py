@@ -1550,6 +1550,9 @@ def build_parser() -> argparse.ArgumentParser:
                         help="espelhar frames antes do MediaPipe (auto = do meta)")
     parser.add_argument("--mediapipe-gpu", action="store_true",
                         help="tenta o delegate GPU do MediaPipe (opcional)")
+    parser.add_argument("--num-hands", type=int, default=2,
+                        help="maximo de maos por vista (use 1 se so' uma mao "
+                             "aparece; evita deteccao duplicada)")
     parser.add_argument("--min-detection-confidence", type=float, default=0.5)
     parser.add_argument("--min-presence-confidence", type=float, default=0.5)
     parser.add_argument("--min-tracking-confidence", type=float, default=0.5)
@@ -1596,6 +1599,7 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
             return 0
         detector_options = {
             "gpu": bool(args.mediapipe_gpu),
+            "num_hands": max(1, int(args.num_hands)),
             "min_detection_confidence": args.min_detection_confidence,
             "min_presence_confidence": args.min_presence_confidence,
             "min_tracking_confidence": args.min_tracking_confidence,
