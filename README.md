@@ -119,6 +119,17 @@ Calibrações ficam em `configs/calibracao/`.
 - Configuração de câmera/EEG em `configs/`.
 - Relatórios em `docs/validation/`; literatura em `docs/literature/`.
 - Experimentos antigos em `archive/`, não apagar sem revisar.
+- Diagnóstico de calibração vai para `outputs/visao/debug_calibracao/`
+  (nunca para a raiz).
+- Antes de commitar, rode a checagem de higiene da raiz:
+
+```powershell
+.\scripts\verificar_raiz.ps1
+```
+
+Ela falha se aparecer arquivo/diretório solto na raiz. Se for um arquivo de
+saída, mova para `outputs/` ou `archive/`; se for código, para `src/` ou
+`scripts/`.
 
 O README antigo, com os detalhes de bancada e calibração, está em
 `docs/guias/README_ORIGINAL.md`.

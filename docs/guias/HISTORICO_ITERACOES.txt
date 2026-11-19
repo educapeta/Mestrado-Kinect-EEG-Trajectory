@@ -10511,3 +10511,30 @@ ITEM 196 (17/11/2026) - HANDMVNET: INTEGRACAO MULTIVIEW CONCLUIDA
   Kinect+aux0/aux1 e comparar MPJPE/PCK/latencia contra o ground truth.
 - OBSERVACAO: nao usar `git add -A` cego no projeto; os arquivos RSF e
   HandMvNet foram commitados em commits separados.
+
+================================================================================
+ITEM 197 (19/11/2026) - CALIBRACAO, VIDEO OFFLINE E HIGIENE DA RAIZ
+================================================================================
+- CALIBRACAO ATUAL (cameras remontadas antes de 17/11):
+  * Kinect intrinsics congelado RMS 0,631 px;
+  * aux0 SIGMA 1,6988 px / 15 poses; aux1 Trust 1,1580 px / 15 poses;
+  * aviso de poucas poses inclinadas (2/15): melhorar na proxima.
+- SYNC: detector de flash falhou com a iluminacao/exposicao da bancada; SYNC
+  MANUAL pela tecla S funcionou (2 eventos, offset +16 ms, residual 0 ms).
+- VIDEO teste_sync3 (20 s, 1280x720, H.264, 196/160 frames, ~10,6/8,0 fps):
+  * --num-hands 2: 187 saidas, 115 right/70 left, 143 trocas de rotulo;
+  * --num-hands 1: 112 saidas, 85 right/27 unknown, 2 trocas, cobertura
+    mediana 75,9%, reproj 1,37/1,40 px. Usar 1 mao para sessoes de uma mao.
+- VISUALIZACAO 3D: tools/visualiza_landmarks3d.py gera GIF+PNG; saidas em
+  outputs/visao/landmarks3d_teste_sync3_1mao/.
+- HANDMVNET: NAO treinar do zero com pseudo-labels da triangulacao; usar
+  checkpoint/fine-tune ou comprovar ganho. HandMvNet nao resolve lateralidade.
+- CORRECAO: frame depth->color (npz, caminho apos reorganizacao); commits
+  5e14e42 e 7d76f89.
+- RAIZ: _hb_*.png vinham de stereo_calibration.py; agora vao para
+  outputs/visao/debug_calibracao/; adicionados tests/manual/test_estrutura_raiz.py
+  e scripts/verificar_raiz.ps1 (RAIZ_OK).
+- PROTOCOLO EEG: scripts/aquisicao_lr_adaptativo.ps1 (2 blocos x 10/classe,
+  ME 4 s + MI 4 s, 3 sessoes) e scripts/rodar_feedback_lr.ps1 (treino/teste
+  congelado); plano validado: 20/classe/sessao, 60/classe total.
+- TESTES: video offline 73/73; feedback 10/10; raiz limpa; plano OK.

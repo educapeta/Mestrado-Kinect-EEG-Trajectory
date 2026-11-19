@@ -90,6 +90,9 @@ import sys
 import time
 from pathlib import Path
 
+RAIZ_PROJETO = Path(__file__).resolve().parents[3]
+DEBUG_CALIB_DIR = RAIZ_PROJETO / "outputs" / "visao" / "debug_calibracao"
+
 import cv2
 import numpy as np
 
@@ -1917,7 +1920,8 @@ def calibrate_one(aux_index, ref_kinect=None, salvar_intrinsecas=False):
                 #: Batimento de diagnostico: silencio total quando a deteccao
                 #: falha e' cruel -- parece travado. A cada 5 s sem par completo,
                 #: imprime O QUE cada camera mostra (achou? brilho medio?) e
-                #: salva os frames em _hb_*.png para analise externa.
+                #: salva os frames em outputs/visao/debug_calibracao para
+                #: analise externa (NUNCA na raiz do projeto).
                 if now - ultimo_aviso_detecao >= 5.0:
                     mk = (f"brilho {kinect_frame.mean():.0f}"
                           if kinect_frame is not None else "sem frame")
@@ -1928,12 +1932,19 @@ def calibrate_one(aux_index, ref_kinect=None, salvar_intrinsecas=False):
                         f"(Kinect {'OK' if kinect_found else 'nao'} {mk} | "
                         f"aux {AUX_CAMERA_INDEX} "
                         f"{'OK' if auxiliary_found else 'nao'} {ma}); "
-                        "frames salvos em _hb_*.png", flush=True)
+                        "frames salvos em outputs/visao/debug_calibracao", flush=True)
                     ultimo_aviso_detecao = now
-                    if kinect_frame is not None:
-                        cv2.imwrite("_hb_kinect.png", kinect_frame)
-                    if auxiliary_ok:
-                        cv2.imwrite("_hb_aux.png", auxiliary_frame)
+                    try:
+                        DEBUG_CALIB_DIR.mkdir(parents=True, exist_ok=True)
+                        if kinect_frame is not None:
+                            cv2.imwrite(str(DEBUG_CALIB_DIR / "_hb_kinect.png"),
+                                        kinect_frame)
+                        if auxiliary_ok:
+                            cv2.imwrite(str(DEBUG_CALIB_DIR / "_hb_aux.png"),
+                                        auxiliary_frame)
+                    except OSError as exc:              # noqa: BLE001
+                        print(f"  [aviso] nao consegui salvar frames de "
+                              f"diagnostico: {exc}", flush=True)
                 continue
             if stable_since is None:
                 stable_since = now
