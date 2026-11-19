@@ -10722,3 +10722,12 @@ ITEM 209 (19/11/2026) - COMPARADOR ONLINE PAR AUX x KINECT
     --exposicao "0:-7,1:-7" --duracao 30 --csv outputs\visao\comparacao_pair_kinect.csv
 - LEMBRETE: Kinect depth nao e' verdade absoluta; interpretar junto com falhas
   de depth/map e com jig/tabuleiro.
+
+================================================================================
+ITEM 210 (19/11/2026) - FIX COMPARADOR ONLINE: UNPACK DO KINECT
+================================================================================
+- compara_pair_kinect_online.py: KinectHandTracker.detect_hands_all devolve
+  (color_frame, maos); a versao inicial tratava a tupla como lista de maos e
+  quebrava com AttributeError 'numpy.ndarray' has no attribute 'get'.
+  Corrigido para _, kin_hands = tracker.detect_hands_all(...).
+- COMPILE OK; --dry-run OK (aux0 RMS 1,699; aux1 RMS 1,315).

@@ -1,24 +1,24 @@
-#!/usr/bin/env python
+﻿#!/usr/bin/env python
 # -*- coding: utf-8 -*-
-"""Comparador ONLINE: triangulação aux0↔aux1 vs Kinect RGB/depth.
+"""Comparador ONLINE: triangulaÃ§Ã£o aux0â†”aux1 vs Kinect RGB/depth.
 
-Abre Kinect (RGB+depth) e as duas webcams auxiliares, detecta as mãos com
-MediaPipe, triangula o par aux0↔aux1 e compara com o 3D obtido pelo depth do
-Kinect (corrigido depth→cor). Mostra métricas ao vivo e grava CSV.
+Abre Kinect (RGB+depth) e as duas webcams auxiliares, detecta as mÃ£os com
+MediaPipe, triangula o par aux0â†”aux1 e compara com o 3D obtido pelo depth do
+Kinect (corrigido depthâ†’cor). Mostra mÃ©tricas ao vivo e grava CSV.
 
 Uso:
     .\\.venv\\Scripts\\python.exe src\\mestradopy\\tools\\compara_pair_kinect_online.py ^
         --exposicao "0:-7,1:-7" --duracao 30
 
-Métricas por frame/lado:
-  - erro 3D par×Kinect (mediana/p90 em mm)
-  - reprojeção do 3D do par na aux0/aux1 e no Kinect (px)
+MÃ©tricas por frame/lado:
+  - erro 3D parÃ—Kinect (mediana/p90 em mm)
+  - reprojeÃ§Ã£o do 3D do par na aux0/aux1 e no Kinect (px)
   - cobertura 2D/3D
   - FPS
 
-IMPORTANTE: o Kinect depth não é verdade absoluta; ele tem ruído, falhas de
-depth e a correção depth→cor. O CSV registra também quantos joints do Kinect
-falharam para você não ler o erro sem contexto.
+IMPORTANTE: o Kinect depth nÃ£o Ã© verdade absoluta; ele tem ruÃ­do, falhas de
+depth e a correÃ§Ã£o depthâ†’cor. O CSV registra tambÃ©m quantos joints do Kinect
+falharam para vocÃª nÃ£o ler o erro sem contexto.
 """
 from __future__ import annotations
 
@@ -181,7 +181,7 @@ def main() -> int:
             for k, i in enumerate(indices):
                 dets[i] = detector.detect(frames[k], f"aux{i}", stamp,
                                           aux_index=i) or []
-            kin_hands = tracker.detect_hands_all(color, depth) or []
+            _, kin_hands = tracker.detect_hands_all(color, depth)
             kin_por_lado = {h.get("side"): h for h in kin_hands if h.get("side")}
             if args.pareamento == "geometrico":
                 casadas, _ = _casa_maos_geometrica(
@@ -312,3 +312,4 @@ def main() -> int:
 
 if __name__ == "__main__":
     raise SystemExit(main())
+
