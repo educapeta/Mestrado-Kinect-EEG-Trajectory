@@ -10554,3 +10554,18 @@ ITEM 198 (19/11/2026) - TRACK ID TEMPORAL NO PROCESSAMENTO OFFLINE
 - PROXIMO: pareamento geometrico entre vistas + deduplicacao por distancia 3D,
   depois exportador do dataset 2 vistas e treino HandMvNet/pose.
 - TESTE: test_handmvnet_video_offline.py 73/73 OK.
+
+================================================================================
+ITEM 199 (19/11/2026) - PAREAMENTO GEOMETRICO E DEDUP NO VIDEO OFFLINE
+================================================================================
+- handmvnet_video_process.py aceita --pairing geometrico (casa deteccoes das
+  duas vistas minimizando reprojecao, sem depender de left/right) e
+  --dedup-distance-m (funde deteccoes duplicadas no mesmo par; default 0,12 m).
+- Teste teste_sync3, --num-hands 1 --pairing geometrico: 112 registros, tracks
+  [0,1], -1=27; reproj 1,37/1,40 px; mesmo resultado do modo lateral para uma mao.
+- Teste com --num-hands 2 --pairing geometrico: 194 registros, tracks [0,1],
+  139 trocas intercaladas; dedup 0,12 m nao removeu porque as duas deteccoes
+  estao separadas > 0,12 m (provavel segunda mao/falso positivo). Para uma mao,
+  usar --num-hands 1; para duas maos, proximo passo e' dedup/associacao por
+  track e validacao visual.
+- Testes: HANDMVNET_VIDEO_OFFLINE_OK 73/73.

@@ -99,6 +99,8 @@ HAND_SIDE_ORDER = ("right", "left", "unknown")
 NUM_LANDMARKS = 21
 #: Minimo de junções validas para considerar a mao triangulada.
 MIN_VALID_JOINTS = 5
+#: Distancia 3D (m) para fundir deteccoes duplicadas no mesmo par.
+DEDUP_DIST_M = 0.12
 
 CSV_COLUMNS: Tuple[str, ...] = (
     "pair", "frame0", "frame1", "frame_kinect",
@@ -371,6 +373,51 @@ def _valid_mask(points_kin: np.ndarray, reproj_0: np.ndarray,
     if reproj_kin is not None:
         mask &= np.isfinite(reproj_kin) & (reproj_kin <= float(max_reproj_px))
     return mask
+
+
+def _casa_maos_geometrica(dets0: Sequence[HandDetection],
+                          dets1: Sequence[HandDetection],
+                          view0: Any, view1: Any, kinect_gt: Any
+                          ) -> Tuple[List[Tuple[str, HandDetection, HandDetection]], int]:
+    """Casa deteccoes entre as vistas minimizando o erro de reprojecao.
+
+    Nao usa o rotulo left/right do MediaPipe. Para cada combinacao possivel,
+    triangula e mede o custo geometrico; escolhe pares sem reutilizar deteccao.
+    """
+    combinacoes = []
+    for det0 in dets0:
+        for det1 in dets1:
+            try:
+                pontos, _ = kinect_gt.triangulate_pair_points(
+                    view0, view1, det0.landmarks_px, det1.landmarks_px)
+            except Exception as exc:             # noqa: BLE001
+                continue
+            if pontos is None:
+                continue
+            pontos = np.asarray(pontos, np.float64).reshape(-1, 3)
+            r0 = _reproj_por_juncao(pontos, det0.landmarks_px,
+                                    view0.effective_matrix, view0.dist, view0)
+            r1 = _reproj_por_juncao(pontos, det1.landmarks_px,
+                                    view1.effective_matrix, view1.dist, view1)
+            vals = np.concatenate([r0[np.isfinite(r0)], r1[np.isfinite(r1)]])
+            if vals.size == 0:
+                continue
+            custo = float(np.median(vals))
+            combinacoes.append((custo, det0, det1))
+    combinacoes.sort(key=lambda item: item[0])
+    pares: List[Tuple[str, HandDetection, HandDetection]] = []
+    usados0: set[int] = set()
+    usados1: set[int] = set()
+    for custo, det0, det1 in combinacoes:
+        i0 = id(det0); i1 = id(det1)
+        if i0 in usados0 or i1 in usados1:
+            continue
+        usados0.add(i0); usados1.add(i1)
+        lado = (det0.side if det0.side == det1.side
+                and det0.side in ("left", "right") else "unknown")
+        pares.append((lado, det0, det1))
+    nao_casadas = (len(dets0) + len(dets1)) - 2 * len(pares)
+    return pares, nao_casadas
 
 
 def _casa_maos(dets0: Sequence[HandDetection],
@@ -821,6 +868,8 @@ def process_session(session_dir: str | Path, *,
                     handmvnet: str = "off",
                     handmvnet_checkpoint: Optional[str] = None,
                     handmvnet_adapt_num_views: bool = False,
+                    pairing: str = "lateral",
+                    dedup_distance_m: float = DEDUP_DIST_M,
                     verbose: bool = True) -> Dict[str, Any]:
     """Processa uma sessao gravada e grava CSV/NPZ/relatorio (retorna o report).
 
@@ -929,7 +978,11 @@ def process_session(session_dir: str | Path, *,
                      for d in dets1_raw]
             bruto0_por_lado = {d.side: d for d in dets0_raw if d.side}
             bruto1_por_lado = {d.side: d for d in dets1_raw if d.side}
-            casadas, nao_casadas = _casa_maos(dets0, dets1)
+            if pairing == "geometrico":
+                casadas, nao_casadas = _casa_maos_geometrica(
+                    dets0, dets1, view0, view1, kinect_gt)
+            else:
+                casadas, nao_casadas = _casa_maos(dets0, dets1)
             stats["hand_unmatched"] += int(nao_casadas)
             if not casadas:
                 stats["pairs_no_hands"] += 1
@@ -1023,6 +1076,8 @@ def process_session(session_dir: str | Path, *,
             except Exception:                           # pragma: no cover
                 pass
 
+    if dedup_distance_m and dedup_distance_m > 0:
+        _deduplica_records(records, float(dedup_distance_m))
     _atribui_tracks(records)
     _suaviza_lados_por_track(records)
     tempo_total = time.monotonic() - t_inicio
@@ -1196,6 +1251,48 @@ def _ponto_referencia(record: TriangRecord) -> Optional[np.ndarray]:
     if len(pontos) == 0:
         return None
     return np.median(pontos, axis=0)
+
+
+def _qualidade_record(record: TriangRecord) -> float:
+    """Maior e' melhor: joints validos, menos reprojecao."""
+    n = int(np.asarray(record.valid, dtype=bool).sum())
+    med = float(np.nanmedian(record.reproj_aux0))
+    return float(n) - (0.001 * med if np.isfinite(med) else 0.0)
+
+
+def _deduplica_records(records: List[TriangRecord],
+                       dist_m: float = DEDUP_DIST_M) -> None:
+    """Remove deteccoes duplicadas no MESMO par de frames.
+
+    Duas deteccoes com palma 3D a menos de `dist_m` sao consideradas a mesma
+    mao; fica a de maior qualidade. Se as duas estiverem bem separadas, sao
+    mantidas (duas maos reais).
+    """
+    por_par: Dict[int, List[TriangRecord]] = {}
+    for r in records:
+        por_par.setdefault(int(r.pair), []).append(r)
+    manter: List[TriangRecord] = []
+    for par in sorted(por_par):
+        grupo = por_par[par]
+        if len(grupo) <= 1:
+            manter.extend(grupo)
+            continue
+        ordenado = sorted(grupo, key=_qualidade_record, reverse=True)
+        escolhidos: List[TriangRecord] = []
+        for cand in ordenado:
+            p = _ponto_referencia(cand)
+            duplicado = False
+            if p is not None:
+                for keep in escolhidos:
+                    pk = _ponto_referencia(keep)
+                    if pk is not None and np.linalg.norm(p - pk) < float(dist_m):
+                        duplicado = True
+                        break
+            if not duplicado:
+                escolhidos.append(cand)
+        manter.extend(escolhidos)
+    records[:] = sorted(manter, key=lambda r: (int(r.pair), int(r.frame0),
+                                               int(r.track_id)))
 
 
 def _atribui_tracks(records: Sequence[TriangRecord]) -> None:
@@ -1673,6 +1770,14 @@ def build_parser() -> argparse.ArgumentParser:
                         help="espelhar frames antes do MediaPipe (auto = do meta)")
     parser.add_argument("--mediapipe-gpu", action="store_true",
                         help="tenta o delegate GPU do MediaPipe (opcional)")
+    parser.add_argument("--pairing", choices=("lateral", "geometrico"),
+                        default="lateral",
+                        help="pareamento entre vistas: lateral (rotulo) ou "
+                             "geometrico (minimiza reprojecao; nao depende de "
+                             "left/right)")
+    parser.add_argument("--dedup-distance-m", type=float, default=DEDUP_DIST_M,
+                        help="distancia 3D (m) para fundir deteccoes duplicadas "
+                             "no mesmo par; 0 desliga")
     parser.add_argument("--num-hands", type=int, default=2,
                         help="maximo de maos por vista (use 1 se so' uma mao "
                              "aparece; evita deteccao duplicada)")
@@ -1739,7 +1844,9 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
             mirror=args.mirror, detector_options=detector_options,
             handmvnet=args.handmvnet,
             handmvnet_checkpoint=args.handmvnet_checkpoint,
-            handmvnet_adapt_num_views=args.handmvnet_adapt_num_views)
+            handmvnet_adapt_num_views=args.handmvnet_adapt_num_views,
+            pairing=args.pairing,
+            dedup_distance_m=args.dedup_distance_m)
         if args.json:
             print(json.dumps(report, indent=2, ensure_ascii=False, default=str))
         return 0
