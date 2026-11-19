@@ -10805,3 +10805,24 @@ ITEM 215 (19/11/2026) - QC OFFLINE DOS LANDMARKS 3D
   relatorio. Versao SavGol: CV 2,748% (robusto 1,103%).
 - QC mostra que o par e' consistente no offline; usar como gate antes de
   exportar dataset/treinar.
+
+================================================================================
+ITEM 216 (19/11/2026) - FEEDBACK L/R EM DADOS REAIS + CORRECAO DE CANAIS
+================================================================================
+- BUG 1: carrega_sessao_eeg usava channel_names do JSON (32 nomes) em vez dos
+  canais fisicos Ch15/16/17 (0-based 14/15/16) = C3/C4/Cz. Corrigido usando
+  CH_OWN_IDX do pacote eeg.mi_eegnet.data.
+- BUG 2: _resample recebia (amostras, canais) e reamostrava o eixo dos canais,
+  deixando 1 canal; corrigido para (canais, amostras) e voltando para (N,3).
+- BUG 3: joblib nao salvava FunctionTransformer com funcao local _finite;
+  movida para funcao de modulo _finite_np.
+- BUG 4: relatorio ERD assumia 3 canais fixos e quebrava; formatacao tolerante.
+- RESULTADOS CORRIGIDOS (piloto 17/11):
+  * s01 treino: bloco1 BA=0,700 [0,525;0,864]; bloco2 BA=0,533 [0,400;0,667];
+  * s02 teste congelado: BA=0,567 [0,437;0,688], n=60; confusao [[20,10],
+    [16,14]]; |score|=0,197; NAO-RESPONDEDOR;
+  * ERD s02 mu esquerda -10 a -19%; direita C3 +16,6%, C4/Cz negativos;
+    beta esquerda -19 a -22%; direita fraca.
+- MODELO: outputs/visao/lr_adaptativo/modelo_s01_v3.joblib.
+- RELATORIO: docs/validation/VALIDACAO_FEEDBACK_PILOTO_20261119.md.
+- TESTE: test_feedback_adaptativo.py 10/10.

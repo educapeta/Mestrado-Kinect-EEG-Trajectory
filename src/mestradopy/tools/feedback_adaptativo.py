@@ -218,12 +218,14 @@ def carrega_sessao_eeg(pasta, fs_alvo=FS):
     meta = (json.load(open(jsons[-1], encoding="utf-8")) if jsons else {})
     fs = float(meta.get("fs", 500.0))
     nomes = [str(n) for n in meta.get("channel_names", [])]
-    canais = []
-    for alvo in ("C3", "Cz", "C4"):
-        try:
-            canais.append(nomes.index(alvo))
-        except ValueError:
-            canais.append({"C3": 14, "Cz": 15, "C4": 16}[alvo])
+    # O CSV tem os 32 canais fisicos; os 3 canais uteis do projeto sao
+    # Ch15/Ch16/Ch17 (0-based 14/15/16) = C3/C4/Cz. NAO usar channel_names,
+    # que e' metadado do g.Nautilus e desalinha o CSV de 3 canais.
+    try:
+        from eeg.mi_eegnet.data import CH_OWN_IDX
+        canais = [int(i) for i in CH_OWN_IDX]
+    except Exception:  # noqa: BLE001
+        canais = [14, 15, 16]
     linhas = []
     with open(caminho_csv, newline="", encoding="utf-8") as h:
         leitor = csv.reader(h)
@@ -246,12 +248,15 @@ def carrega_sessao_eeg(pasta, fs_alvo=FS):
     arr = np.asarray(linhas, np.float64)
     if arr.ndim != 2 or arr.shape[1] < 8:
         raise SystemExit(f"CSV inesperado: shape {arr.shape}")
-    n_ch = len(nomes) if nomes else (arr.shape[1] - 2)
-    n_ch = min(n_ch, arr.shape[1] - 2)
+    # CSV: Time + Ch01..Ch33 + Marker -> usa os 33 canais fisicos.
+    n_ch = min(max(max(canais) + 1, len(nomes) if nomes else 0),
+               max(0, arr.shape[1] - 2))
     eeg = arr[:, 1:1 + n_ch][:, canais]
     markers = arr[:, -1].astype(np.int64)
-    eeg = _passa_faixa(eeg.T, fs).T
-    eeg = _resample(eeg, fs, fs_alvo)
+    # _passa_faixa/_resample trabalham em (canais, amostras)
+    eeg = _passa_faixa(eeg.T, fs)          # (3, N)
+    eeg = _resample(eeg, fs, fs_alvo)      # (3, N')
+    eeg = eeg.T                            # volta para (N', 3)
     escala = fs_alvo / fs
     pos = {cod: np.where(markers == cod)[0] for cod in set(MARK.values())}
     # blocos: 790..791; se ausente, infere 1 bloco
@@ -306,6 +311,11 @@ def carrega_sessao_eeg(pasta, fs_alvo=FS):
 # ==========================================================================
 # 2. Decoder CSP+LDA e score continuo
 # ==========================================================================
+def _finite_np(Z):
+    """Substitui NaN/inf por 0; funcao de MODULO para joblib conseguir salvar."""
+    return np.nan_to_num(Z, nan=0.0, posinf=0.0, neginf=0.0)
+
+
 def cria_pipeline(n_componentes=2):
     """CSP+LDA identico ao `csp_lda_duas_sessoes.make_csp()` (mne/sklearn)."""
     from mne.decoding import CSP
@@ -318,12 +328,9 @@ def cria_pipeline(n_componentes=2):
     except (ImportError, AttributeError):
         pass
 
-    def _finite(Z):
-        return np.nan_to_num(Z, nan=0.0, posinf=0.0, neginf=0.0)
-
     return Pipeline([
         ("csp", CSP(n_components=n_componentes, reg="ledoit_wolf", log=True)),
-        ("finite", FunctionTransformer(_finite)),
+        ("finite", FunctionTransformer(_finite_np)),
         ("lda", LinearDiscriminantAnalysis(solver="lsqr", shrinkage="auto")),
     ])
 
@@ -747,8 +754,13 @@ def relatorio_md(resultado, plano):
         l.append("")
         for banda, por_classe in teste["erd"].items():
             for classe, valores in por_classe.items():
-                l.append(f"- {banda} / MI {classe}: C3={valores[0]:+.1f}%, "
-                         f"Cz={valores[1]:+.1f}%, C4={valores[2]:+.1f}%")
+                nomes = ["C3", "C4", "Cz"]
+                vals = list(valores)
+                txt = ", ".join(
+                    f"{nomes[k] if k < len(nomes) else f'canal{k}'}="
+                    f"{float(v):+.1f}%"
+                    for k, v in enumerate(vals) if np.isfinite(v))
+                l.append(f"- {banda} / MI {classe}: {txt}")
         l.append("")
     l.append("## Criterios pre-fixados")
     l.append("")
