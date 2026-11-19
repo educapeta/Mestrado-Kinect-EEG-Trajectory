@@ -10840,3 +10840,13 @@ ITEM 217 (19/11/2026) - RUNBOOK E PREFLIGHT DO PROTOCOLO L/R
 - FEEDBACK REAL CORRIGIDO: s01 treino BA 0,700/0,533; s02 congelado BA 0,567
   IC95[0,437;0,688] -> NAO-RESPONDEDOR. Relatorio
   docs/validation/VALIDACAO_FEEDBACK_PILOTO_20261119.md.
+
+================================================================================
+ITEM 218 (19/11/2026) - TESTES DE REGRESSAO DO FEEDBACK
+================================================================================
+- tests/manual/test_feedback_adaptativo.py ganhou:
+  * test_resample_preserva_canais: (3,1000)->(3,256), nunca 1 canal;
+  * test_pipeline_salva_e_carrega_joblib: fit CSP+LDA, dump/load, predict;
+  * test_finite_np: NaN/inf -> finitos.
+- Suite: 13/13 OK (antes 10/10).
+- Objetivo: impedir recorrencia dos bugs de orientacao/reamostragem e pickle.

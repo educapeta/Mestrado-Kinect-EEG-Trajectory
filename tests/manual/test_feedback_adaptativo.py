@@ -125,6 +125,36 @@ class TestPipelineCompleto(unittest.TestCase):
         self.assertTrue(teste["veredito"]["nao_respondedor"])
 
 
+class TestRegressaoCanaisEPickle(unittest.TestCase):
+    """Regressões dos bugs de 19/11: orientação no resample e joblib."""
+
+    def test_resample_preserva_canais(self):
+        rng = np.random.default_rng(7)
+        x = rng.normal(size=(3, 1000))          # (canais, amostras)
+        y = fa._resample(x, 500, 128)
+        self.assertEqual(y.shape[0], 3)         # NUNCA virar 1 canal
+        self.assertEqual(y.shape[1], 256)
+
+    def test_pipeline_salva_e_carrega_joblib(self):
+        import tempfile, joblib
+        from pathlib import Path as P
+        pipe = fa.cria_pipeline()
+        rng = np.random.default_rng(8)
+        X = rng.normal(size=(40, 3, 128))
+        y = np.array([0, 1] * 20)
+        pipe.fit(X, y)
+        with tempfile.TemporaryDirectory() as d:
+            f = P(d) / "modelo.joblib"
+            joblib.dump(pipe, f)
+            loaded = joblib.load(f)
+            self.assertEqual(loaded.predict(X).shape, (40,))
+
+    def test_finite_np(self):
+        x = np.array([np.nan, np.inf, -np.inf, 1.0])
+        y = fa._finite_np(x)
+        self.assertTrue(np.all(np.isfinite(y)))
+
+
 class TestDecide(unittest.TestCase):
     def test_decide_direita_esquerda(self):
         self.assertEqual(fa.decide(0.5, 0.0)[0], 1)
