@@ -10762,3 +10762,20 @@ ITEM 212 (19/11/2026) - METRICA DE RIGIDEZ (COMPRIMENTO DE OSSO)
 - RESSALVA: rigidez nao mede escala absoluta; uma reconstrucao com escala/
   cisalhamento constante tem CV baixo. Comparar mediana de ossos com medidas
   antropometricas/caliper e com Kinect.
+
+================================================================================
+ITEM 213 (19/11/2026) - VALIDACAO V3: RIGIDEZ DE OSSOS PAR x KINECT
+================================================================================
+- CSV v3: 405 linhas, FPS med 11,7; Kinect com mao 363/405.
+- Erro3D par x Kinect (depth corrigido): 0-5s ~22 mm (p90 29-34); 5-10s
+  ~30-35 mm; 10-20s ~35 mm (p90 43-61).
+- Reprojeção aux do par: 1,9-2,5 px (excelente); reproj Kinect ~16,2 px.
+- RIGIDEZ (CV comprimento de osso): par 10,2-11,4% (p90 13-18%); Kinect depth
+  73-151% (p90 159-457%) -> Kinect depth dominado por outliers; offline par
+  CV 2,66%.
+- Razao por osso Kinect/par mediana 1,02-1,05 -> sem vies global de escala;
+  Kinect tem cauda de outliers.
+- CONCLUSAO: par aux0/aux1 consistente; Kinect depth nao serve como referencia
+  limpa; usar CV robusto (mediana/MAD), medida antropometrica e triangulacao
+  Kinect+aux como referencias independentes.
+- Relatorio: docs/validation/VALIDACAO_RIGIDEZ_MAO_20261119.md.
