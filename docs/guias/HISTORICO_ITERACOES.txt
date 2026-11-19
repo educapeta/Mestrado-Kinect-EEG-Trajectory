@@ -10731,3 +10731,18 @@ ITEM 210 (19/11/2026) - FIX COMPARADOR ONLINE: UNPACK DO KINECT
   quebrava com AttributeError 'numpy.ndarray' has no attribute 'get'.
   Corrigido para _, kin_hands = tracker.detect_hands_all(...).
 - COMPILE OK; --dry-run OK (aux0 RMS 1,699; aux1 RMS 1,315).
+
+================================================================================
+ITEM 211 (19/11/2026) - COMPARADOR ONLINE: REPROJ AUX E FPS
+================================================================================
+- Correcao: para reprojetar o 3D do par nas auxiliares agora aplica
+  X_aux = R X_kin + T antes de cv2.projectPoints (antes projetava o 3D do
+  frame do Kinect direto com K da auxiliar; os 77-214 px eram erro de metrica).
+- FPS do CSV agora e' instantaneo (1/dt), nao n/total.
+- Primeira sessao (CSV antigo, antes da correcao de reproj):
+  * 626 linhas, 332 right / 294 left; Kinect com mao em 457/626;
+  * erro3D par x Kinect: left med 26,8 mm (p90 39,2); right med 25,8 mm
+    (p90 140,8; so' 169 comparacoes) -> alta cauda, provavel identidade/sync;
+  * Kinect depth_fail/map_fail = 0;
+  * reproj Kinect med 15,5 px (alta) -> investigar pareamento/sync.
+  Proximo: rodar de novo e analisar CSV com reproj aux corrigida.

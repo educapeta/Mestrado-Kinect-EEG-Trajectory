@@ -97,6 +97,15 @@ def _proj_px(pontos, K, dist):
     return out
 
 
+def _proj_aux(view, pontos):
+    """X_aux = R X_kin + T; depois projeta com K/dist da auxiliar."""
+    p = np.asarray(pontos, np.float64).reshape(-1, 3).copy()
+    R = np.asarray(view.rotation, np.float64).reshape(3, 3)
+    T = np.asarray(view.translation, np.float64).reshape(3)
+    p_aux = (R @ p.T).T + T.reshape(1, 3)
+    return _proj_px(p_aux, view.effective_matrix, view.dist)
+
+
 def _resumo(vals):
     a = np.asarray([v for v in vals if v is not None and np.isfinite(v)],
                    np.float64)
@@ -158,6 +167,8 @@ def main() -> int:
             "reproj_kinect_med_px", "n3d", "n_kin",
             "kin_depth_fail", "kin_map_fail", "obs"])
         t0 = time.time(); n = 0
+        last_fps_t = t0
+        fps_atual = 0.0
         last_palm: Dict[str, np.ndarray] = {}
         cv2.namedWindow("Comparador ONLINE: aux pair x Kinect", cv2.WINDOW_NORMAL)
         cv2.resizeWindow("Comparador ONLINE: aux pair x Kinect", 1280, 760)
@@ -176,6 +187,9 @@ def main() -> int:
                 if not ok or frame is None:
                     raise RuntimeError("camera auxiliar parou")
                 frames.append(gt.transform_auxiliary_frame(frame))
+            now = time.time()
+            fps_atual = 1.0 / max(1e-6, now - last_fps_t)
+            last_fps_t = now
             stamp = int(time.monotonic() * 1000)
             dets: Dict[int, List[HandDetection]] = {}
             for k, i in enumerate(indices):
@@ -209,10 +223,8 @@ def main() -> int:
                     kin_px = _proj_px(kin_cor, alignment.kinect_matrix,
                                        alignment.kinect_dist)
                 # reprojecao do par
-                r0 = _proj_px(pair_xyz, views[indices[0]].effective_matrix,
-                              views[indices[0]].dist)
-                r1 = _proj_px(pair_xyz, views[indices[1]].effective_matrix,
-                              views[indices[1]].dist)
+                r0 = _proj_aux(views[indices[0]], pair_xyz)
+                r1 = _proj_aux(views[indices[1]], pair_xyz)
                 e0 = (np.linalg.norm(r0 - d0.landmarks_px, axis=1)
                       if pair_xyz is not None else np.array([]))
                 e1 = (np.linalg.norm(r1 - d1.landmarks_px, axis=1)
@@ -272,7 +284,7 @@ def main() -> int:
                 if writer is not None:
                     writer.writerow([
                         n, f"{time.time():.6f}", lado,
-                        f"{1.0 / max(1e-6, time.time() - t0):.2f}",
+                        f"{fps_atual:.2f}",
                         int(pair_xyz is not None), med, p90,
                         _m(e0), _m(e1), _m(ekg),
                         int(np.isfinite(pair_xyz).all(axis=1).sum())
@@ -281,7 +293,7 @@ def main() -> int:
                         n_kin_fail, n_kin_map,
                         "" if pair_xyz is not None else "triangulacao_falhou"])
                 cv2.putText(kin_bgr, f"par vs Kinect | FPS "
-                            f"{n / max(1e-6, time.time() - t0):.1f}",
+                            f"{fps_atual:.1f}",
                             (10, kin_bgr.shape[0] - 12),
                             cv2.FONT_HERSHEY_SIMPLEX, 0.55, (0, 255, 255),
                             1, cv2.LINE_AA)
