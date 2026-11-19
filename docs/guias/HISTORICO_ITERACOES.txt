@@ -10569,3 +10569,22 @@ ITEM 199 (19/11/2026) - PAREAMENTO GEOMETRICO E DEDUP NO VIDEO OFFLINE
   usar --num-hands 1; para duas maos, proximo passo e' dedup/associacao por
   track e validacao visual.
 - Testes: HANDMVNET_VIDEO_OFFLINE_OK 73/73.
+
+================================================================================
+ITEM 200 (19/11/2026) - FFT/PSD E TEMPO-FREQUENCIA DAS EPOCAS MI (NVIDIA)
+================================================================================
+- Subagente nvidia entregou src/mestradopy/tools/fft_epocas_piloto.py e
+  outputs/eeg/analises_fft_piloto/ (figuras, tabelas, NPZ, relatorio).
+- Dados: piloto_me_mi_s01/s02; MI 4 s a partir do marcador 780; 60 L + 60 R;
+  C3/C4/Cz (Ch15/16/17); baseline 1 s pre-cue.
+- ACHADOS (descritivos, sem correcao multipla):
+  * mu 8-13 Hz: sem diferenca L/R (p>=0,78; razoes +0,13/-0,03/+0,19 dB);
+  * beta 13-30 Hz: C4 menor na direita (-0,49 dB, p=0,022 nao corrigido,
+    d=-0,38), sem pico beta destacado;
+  * total 1-45 Hz: padrao lateralizado fraco, mas sessoes individuais com
+    sinais opostos no mu -> NAO promover a achado.
+- Interpretacao: MI sem ERD/diferenca robusta, consistente com HISTORICO 191.
+- Limitacoes: 3 canais, 1 participante, 2 sessoes do mesmo dia, Welch 2 s,
+  sem ICA/rejeicao de artefatos, p exploratorios.
+- Script/relatorio commitados; figuras em outputs/ (gitignored).
+- TESTE: relatorio revisado; figuras abrem; n=120.
