@@ -708,10 +708,11 @@ def build_parser() -> argparse.ArgumentParser:
                              "convencao da calibracao)")
     parser.add_argument("--no-exposure-lock", action="store_true",
                         help="nao congelar exposicao/ganho (padrao congela)")
-    parser.add_argument("--exposicao", type=float, default=None,
-                        help="tempo de exposicao (unidade do driver, ex.: -7)")
-    parser.add_argument("--ganho", type=float, default=None,
-                        help="ganho (unidade do driver)")
+    parser.add_argument("--exposicao", type=str, default=None,
+                        help="exposicao: -6 para todas, ou \"0:-6,1:-7\" "
+                             "por camera")
+    parser.add_argument("--ganho", type=str, default=None,
+                        help="ganho: valor unico ou \"0:0,1:1\" por camera")
     parser.add_argument("--no-mjpeg", action="store_true",
                         help="nao pedir MJPG na abertura (pode cair para 8-10 fps)")
     parser.add_argument("--dry-run", action="store_true",
@@ -792,6 +793,17 @@ def _imprime_dry_run(info: Dict[str, Any]) -> None:
     print("=" * 78)
 
 
+def _controle_por_camera(texto, indice):
+    """Converte "-6" ou "0:-6,1:-7" no valor daquela camera."""
+    if texto is None:
+        return None
+    from camera_uvc import parse_controle_por_camera
+    c = parse_controle_por_camera(texto)
+    if c.get("todos") is not None:
+        return float(c["todos"])
+    return c.get("indices", {}).get(int(indice))
+
+
 def main(argv: Optional[Sequence[str]] = None) -> int:
     parser = build_parser()
     args = parser.parse_args(argv)
@@ -852,7 +864,9 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
         for idx in indices:
             print(f"[camera] abrindo auxiliar {idx}...", flush=True)
             source = _abre_camera(
-                int(idx), config, exposicao=args.exposicao, ganho=args.ganho,
+                int(idx), config,
+                exposicao=_controle_por_camera(args.exposicao, idx),
+                ganho=_controle_por_camera(args.ganho, idx),
                 mjpeg=not args.no_mjpeg,
                 travar_exposicao=not args.no_exposure_lock)
             largura_real, altura_real = source.size_hint or (0, 0)
