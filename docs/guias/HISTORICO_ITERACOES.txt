@@ -10639,3 +10639,20 @@ ITEM 203 (19/11/2026) - SUAVIZACAO 3D POR TRACK E REVISAO DLC
   offline, concordancia 1,5 mm com nosso DLT, reproj pior (2,3-2,8 vs 1,4 px),
   11 swaps/10 rejeicoes, jitter 0,65 mm/frame^2. ATHENA 0.3 PyPI quebrado.
   Nao tem modo tempo real nativo; proximo passo e' decidir preview hibrido.
+
+================================================================================
+ITEM 204 (19/11/2026) - REVISAO ATHENA E TESTE NOS DADOS REAIS
+================================================================================
+- athena-review entregou docs/validation/ATHENA_REVIEW_20261119.md (42 kB) e
+  testou o ATHENA de verdade em %TEMP% (sem tocar no .venv/dados do projeto).
+- athena-tracking 0.3 (PyPI): instalacao quebrada (pyav/pymovie) + bugs; roda
+  so' com --no-deps e patch; fase 2 so' AVI; sem correcao cross-camera.
+- ATHENA main v1.0 (GitHub, Python 3.12): rodou nos nossos 125 pares
+  frame-locked; reproj 2,3-2,8 px (pior que nosso 1,4); concordancia 3D 1,5 mm;
+  11 swaps/10 rejeicoes; jitter 0,65 vs 3,32 mm/frame^2 nosso; rotulos L/R
+  invertidos no nosso setup (convencao selfie).
+- VEREDITO: NO-GO substituir nosso pipeline; GO condicional para portar
+  reassign/rejeicao por punho 3D + SavGol (2-3 dias). ATHENA nao tem modo
+  tempo real nativo (offline/frame-locked).
+- Implementado imediatamente o SavGol: tools/suaviza_landmarks3d.py;
+  teste_sync3: jitter mediano 2,35 -> 1,13 mm (-51,8%). Commit abadf9c.
