@@ -10656,3 +10656,18 @@ ITEM 204 (19/11/2026) - REVISAO ATHENA E TESTE NOS DADOS REAIS
   tempo real nativo (offline/frame-locked).
 - Implementado imediatamente o SavGol: tools/suaviza_landmarks3d.py;
   teste_sync3: jitter mediano 2,35 -> 1,13 mm (-51,8%). Commit abadf9c.
+
+================================================================================
+ITEM 205 (19/11/2026) - PREVIEW AO VIVO HIBRIDO DAS 2 AUXILIARES
+================================================================================
+- NOVO src/mestradopy/tools/athena_live_preview.py: duas webcams, MediaPipe
+  Hands por frame (mesmo detector do pipeline), espelhamento da calibracao,
+  pareamento lateral/geometrico e triangulacao DLT ao vivo; desenha 2D/3D e
+  FPS. NAO e' o ATHENA completo (ATHENA e' batch/offline); e' o preview
+  "ATHENA-style" pedido para ver o tracking ao vivo.
+- --dry-run valida calibracao: aux0 RMS 1,699; aux1 RMS 1,315; 1280x720.
+- Uso:
+  .\.venv\Scripts\python.exe src\mestradopy\tools\athena_live_preview.py \
+    --exposicao "0:-6,1:-6" --num-hands 1 --pareamento geometrico
+- ATHENA offline: athena-review vai gerar video demo com o main v1.0 nos dados
+  teste_sync3 (task separada).
