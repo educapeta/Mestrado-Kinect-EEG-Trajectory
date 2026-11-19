@@ -111,7 +111,7 @@ def _comprimentos_ossos(xyz):
 
 
 def _resumo_rigidez(por_osso):
-    """[{osso, n, media_mm, std_mm, cv_pct, mad_mm}] a partir de listas."""
+    """CV bruto e robusto (mediana +/- 3 MAD) por osso."""
     linhas = []
     for k, (a, b) in enumerate(BONES):
         vals = np.asarray(por_osso.get(k, []), np.float64)
@@ -120,10 +120,23 @@ def _resumo_rigidez(por_osso):
             continue
         media = float(np.median(vals))
         mad = float(np.median(np.abs(vals - media)))
+        sigma = 1.4826 * mad
+        if sigma > 0:
+            keep = np.abs(vals - media) <= 3.0 * sigma
+        else:
+            keep = np.ones(vals.size, bool)
+        limpos = vals[keep]
+        if limpos.size < 3:
+            limpos = vals
+        cv_bruto = 100.0 * float(np.std(vals)) / max(media, 1e-9)
+        cv_rob = 100.0 * float(np.std(limpos)) / max(media, 1e-9)
         linhas.append({"osso": f"{a}-{b}", "n": int(vals.size),
+                       "n_limpos": int(limpos.size),
+                       "n_outliers": int(vals.size - limpos.size),
                        "media_mm": round(media * 1000.0, 3),
                        "std_mm": round(float(np.std(vals)) * 1000.0, 3),
-                       "cv_pct": round(100.0 * float(np.std(vals)) / max(media, 1e-9), 3),
+                       "cv_pct": round(cv_bruto, 3),
+                       "cv_robusto_pct": round(cv_rob, 3),
                        "mad_mm": round(mad * 1000.0, 3)})
     return linhas
 
@@ -376,9 +389,12 @@ def main() -> int:
             for fonte in ("pair", "kin"):
                 cv = [x["cv_pct"] for x in linhas_rig
                       if x["lado"] == side and x["fonte"] == fonte]
+                cvr = [x["cv_robusto_pct"] for x in linhas_rig
+                       if x["lado"] == side and x["fonte"] == fonte]
                 if cv:
-                    print(f"  rigidez {side}/{fonte}: CV mediano "
-                          f"{np.median(cv):.2f}% (n ossos={len(cv)})")
+                    print(f"  rigidez {side}/{fonte}: CV bruto "
+                          f"{np.median(cv):.2f}% | robusto "
+                          f"{np.median(cvr):.2f}% (n ossos={len(cv)})")
     print("CSV:", args.csv)
     return 0
 

@@ -10779,3 +10779,17 @@ ITEM 213 (19/11/2026) - VALIDACAO V3: RIGIDEZ DE OSSOS PAR x KINECT
   limpa; usar CV robusto (mediana/MAD), medida antropometrica e triangulacao
   Kinect+aux como referencias independentes.
 - Relatorio: docs/validation/VALIDACAO_RIGIDEZ_MAO_20261119.md.
+
+================================================================================
+ITEM 214 (19/11/2026) - CV DE OSSO ROBUSTO NO COMPARADOR
+================================================================================
+- _resumo_rigidez agora calcula:
+  * CV bruto;
+  * CV robusto apos remover valores fora de mediana +/- 3 MAD (1,4826);
+  * n_limpos, n_outliers, mad_mm.
+- CSV <csv>_rigidez.csv ganha cv_robusto_pct/n_outliers; console imprime CV
+  bruto e robusto por lado/fonte.
+- Motivo: no v3 o Kinect depth teve CV 73-151% (p90 159-457%) por outliers;
+  o CV bruto nao separa ruido de escala. Rodar de novo para comparar par x
+  Kinect com a metrica robusta.
+- COMPILE/dry-run OK.
