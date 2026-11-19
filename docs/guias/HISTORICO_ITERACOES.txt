@@ -10826,3 +10826,17 @@ ITEM 216 (19/11/2026) - FEEDBACK L/R EM DADOS REAIS + CORRECAO DE CANAIS
 - MODELO: outputs/visao/lr_adaptativo/modelo_s01_v3.joblib.
 - RELATORIO: docs/validation/VALIDACAO_FEEDBACK_PILOTO_20261119.md.
 - TESTE: test_feedback_adaptativo.py 10/10.
+
+================================================================================
+ITEM 217 (19/11/2026) - RUNBOOK E PREFLIGHT DO PROTOCOLO L/R
+================================================================================
+- NOVO docs/guias/RUNBOOK_AQUISICAO_LR.md: passo a passo das 3 sessoes,
+  comandos, questionario, criterios e checklist pos-sessao.
+- NOVO scripts/verificar_preflight_lr.ps1: raiz, plano, testes 10/10 e 73/73,
+  dry-run de cameras (opcional -SkipCameras) e arquivos de calibracao.
+- TESTE: preflight -SkipCameras -> RAIZ_OK, plano 3 sessoes x20/classe,
+  feedback 10/10, video 73/73, calibracoes OK; PREFLIGHT OK.
+- Protocolo aponta para o runbook.
+- FEEDBACK REAL CORRIGIDO: s01 treino BA 0,700/0,533; s02 congelado BA 0,567
+  IC95[0,437;0,688] -> NAO-RESPONDEDOR. Relatorio
+  docs/validation/VALIDACAO_FEEDBACK_PILOTO_20261119.md.
