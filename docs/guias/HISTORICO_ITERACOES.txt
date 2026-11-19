@@ -10538,3 +10538,19 @@ ITEM 197 (19/11/2026) - CALIBRACAO, VIDEO OFFLINE E HIGIENE DA RAIZ
   ME 4 s + MI 4 s, 3 sessoes) e scripts/rodar_feedback_lr.ps1 (treino/teste
   congelado); plano validado: 20/classe/sessao, 60/classe total.
 - TESTES: video offline 73/73; feedback 10/10; raiz limpa; plano OK.
+
+================================================================================
+ITEM 198 (19/11/2026) - TRACK ID TEMPORAL NO PROCESSAMENTO OFFLINE
+================================================================================
+- handmvnet_video_process.py agora grava track_id no CSV/NPZ; track por
+  continuidade 3D (palma 9), sem depender do rotulo left/right do MediaPipe.
+- Suavizacao de lado por maioria do track (>=60%) e resumo 	racking no
+  relatorio.
+- teste_sync3, --num-hands 1: 112 registros, tracks [0,1] e -1=27 (sem ponto
+  3D valido no trecho 1,0-7,5 s), 2 trocas de rotulo.
+- teste_sync3, --num-hands 2: tracks 0=115 right / 1=69 left, 143 trocas
+  intercaladas -> segundo track e' deteccao duplicada/falsa; NAO usar 2 maos
+  para sessao de uma mao.
+- PROXIMO: pareamento geometrico entre vistas + deduplicacao por distancia 3D,
+  depois exportador do dataset 2 vistas e treino HandMvNet/pose.
+- TESTE: test_handmvnet_video_offline.py 73/73 OK.

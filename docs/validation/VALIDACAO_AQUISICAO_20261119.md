@@ -162,3 +162,34 @@ Higiene da raiz: os PNGs `_hb_*.png` eram gravados pelo `stereo_calibration.py`
 na raiz; o código foi corrigido para gravar em
 `outputs/visao/debug_calibracao/` e a checagem `scripts/verificar_raiz.ps1` foi
 adicionada.
+
+### 3.4 Track IDs e lateralidade
+
+Foi adicionado 	rack_id ao CSV/NPZ (continuidade 3D; não depende do rótulo
+left/right do MediaPipe). O relatório também passou a mostrar 	racks.
+
+Com --num-hands 1:
+
+`	ext
+112 registros | tracks IDs [0, 1], -1=27 sem ponto 3D válido
+hand: right=85, unknown=27 | 2 trocas de rótulo
+`
+
+O track 0 cobre ~0–1,0 s e o track 1 ~7,5–19,5 s; o intervalo intermediário
+ficou como -1 por não ter joint 3D válido (baixa cobertura naquele trecho).
+Ou seja, o track é estável, mas o vídeo ainda tem um trecho sem 3D confiável.
+
+Com --num-hands 2:
+
+`	ext
+187 registros | tracks 0 (115 right) e 1 (69 left)
+143 trocas de rótulo entre linhas
+`
+
+Isso confirma que o modo de 2 mãos está criando **um segundo track**
+(provavelmente detecção duplicada/falsa) e alternando os dois na saída. Para
+sessões de uma mão, usar --num-hands 1; para duas mãos, o próximo passo é
+pareamento geométrico + deduplicação por distância 3D.
+
+Conclusão: o 	rack_id é o alvo correto para o dataset (track físico, não
+rótulo do MediaPipe). --num-hands 2 ainda não é confiável para uma mão.

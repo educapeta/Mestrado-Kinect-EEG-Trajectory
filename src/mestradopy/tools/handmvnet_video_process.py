@@ -103,7 +103,7 @@ MIN_VALID_JOINTS = 5
 CSV_COLUMNS: Tuple[str, ...] = (
     "pair", "frame0", "frame1", "frame_kinect",
     "time0_s", "time1_s", "time_sync_s",
-    "hand", "joint", "x_m", "y_m", "z_m",
+    "hand", "track_id", "joint", "x_m", "y_m", "z_m",
     "reproj_aux0_px", "reproj_aux1_px", "reproj_kinect_px",
     "valid", "method",
 )
@@ -153,6 +153,7 @@ class TriangRecord:
     frame_kinect: int = -1
     reproj_kinect: Optional[np.ndarray] = None  # (21,) px (modo three)
     pixels_kinect: Optional[np.ndarray] = None  # (21,2)
+    track_id: int = -1                         # ID temporal (nao e' o lado)
 
 
 @dataclass
@@ -1022,6 +1023,8 @@ def process_session(session_dir: str | Path, *,
             except Exception:                           # pragma: no cover
                 pass
 
+    _atribui_tracks(records)
+    _suaviza_lados_por_track(records)
     tempo_total = time.monotonic() - t_inicio
     report = _monta_report(
         plan=plan, destino=destino, records=records, stats=stats,
@@ -1175,6 +1178,119 @@ def _prepara_handmvnet(session: Path, plan: SessionPlan, modo: str,
 
 
 # ---------------------------------------------------------------------------
+# Identidade temporal (track ID) sem depender do rotulo left/right
+# ---------------------------------------------------------------------------
+TRACK_MAX_DIST_M = 0.35
+TRACK_MAX_GAP_S = 1.5
+
+
+def _ponto_referencia(record: TriangRecord) -> Optional[np.ndarray]:
+    """Ponto 3D para associacao: palma (9), senao media dos joints validos."""
+    xyz = np.asarray(record.joints_xyz, np.float64)
+    valid = np.asarray(record.valid, dtype=bool)
+    if xyz.shape != (NUM_LANDMARKS, 3):
+        return None
+    if valid[9] and np.isfinite(xyz[9]).all():
+        return xyz[9].copy()
+    pontos = xyz[valid & np.isfinite(xyz).all(axis=1)]
+    if len(pontos) == 0:
+        return None
+    return np.median(pontos, axis=0)
+
+
+def _atribui_tracks(records: Sequence[TriangRecord]) -> None:
+    """Atribui track_id por continuidade 3D (um ID por mao fisica).
+
+    Nao usa o rotulo do MediaPipe. Dois registros do mesmo par nao podem
+    receber o mesmo ID; tracks expirados por tempo/distancia sao fechados.
+    """
+    trilhas: Dict[int, Dict[str, Any]] = {}
+    proximo_id = 0
+    usados_no_par: set[int] = set()
+    ultimo_par = None
+    for record in records:
+        if record.pair != ultimo_par:
+            usados_no_par.clear()
+            ultimo_par = record.pair
+        ponto = _ponto_referencia(record)
+        if ponto is None:
+            record.track_id = -1
+            continue
+        melhor_id = None
+        melhor_dist = float("inf")
+        for tid, estado in trilhas.items():
+            if tid in usados_no_par:
+                continue
+            dt = float(record.time_sync_s) - float(estado["t"])
+            if dt < 0 or dt > TRACK_MAX_GAP_S:
+                continue
+            dist = float(np.linalg.norm(ponto - estado["p"]))
+            if dist < melhor_dist:
+                melhor_dist = dist
+                melhor_id = tid
+        if melhor_id is None or melhor_dist > TRACK_MAX_DIST_M:
+            melhor_id = proximo_id
+            proximo_id += 1
+            trilhas[melhor_id] = {"p": ponto, "t": record.time_sync_s,
+                                  "n": 0, "hand": record.hand}
+        record.track_id = int(melhor_id)
+        usados_no_par.add(int(melhor_id))
+        estado = trilhas[int(melhor_id)]
+        estado["p"] = ponto
+        estado["t"] = record.time_sync_s
+        estado["n"] += 1
+        if record.hand in ("left", "right"):
+            estado.setdefault("lados", {})
+            estado["lados"][record.hand] = estado["lados"].get(record.hand, 0) + 1
+
+
+def _suaviza_lados_por_track(records: Sequence[TriangRecord]) -> None:
+    """Troca rotulos left/right instaveis pela maioria do track fisico.
+
+    O MediaPipe oscila entre left/right em vista lateral. O track_id e' dado
+    pela continuidade 3D; aqui cada track recebe o lado majoritario (>=60%).
+    Sem maioria clara, mantem o rotulo original. Nao altera os pixels/3D.
+    """
+    por_track: Dict[int, Dict[str, int]] = {}
+    for r in records:
+        if int(r.track_id) < 0:
+            continue
+        lado = r.hand if r.hand in ("left", "right") else "unknown"
+        por_track.setdefault(int(r.track_id), {}).setdefault(lado, 0)
+        por_track[int(r.track_id)][lado] += 1
+    majoritarios: Dict[int, str] = {}
+    for tid, contagem in por_track.items():
+        total = sum(contagem.values())
+        if total <= 0:
+            continue
+        lado, n = max(contagem.items(), key=lambda kv: kv[1])
+        if lado in ("left", "right") and n / total >= 0.60:
+            majoritarios[tid] = lado
+    for r in records:
+        tid = int(r.track_id)
+        if tid >= 0 and tid in majoritarios and r.hand != majoritarios[tid]:
+            r.hand = majoritarios[tid]
+
+
+def _resumo_tracks(records: Sequence[TriangRecord]) -> Dict[str, Any]:
+    ids = [int(r.track_id) for r in records if int(r.track_id) >= 0]
+    unicos = sorted(set(ids))
+    counts = {str(tid): ids.count(tid) for tid in unicos}
+    lados: Dict[str, Dict[str, int]] = {}
+    for r in records:
+        if int(r.track_id) < 0:
+            continue
+        lado = r.hand if r.hand in ("left", "right") else "unknown"
+        lados.setdefault(str(int(r.track_id)), {}).setdefault(lado, 0)
+        lados[str(int(r.track_id))][lado] += 1
+    trocas = sum(1 for a, b in zip(records, records[1:])
+                 if a.hand != b.hand)
+    return {"n_tracks": len(unicos), "ids": unicos,
+            "records_por_track": counts, "lados_por_track": lados,
+            "hand_switches": int(trocas)}
+
+
+# ---------------------------------------------------------------------------
 # Relatorio e saidas
 # ---------------------------------------------------------------------------
 def _monta_report(*, plan: SessionPlan, destino: Path,
@@ -1248,6 +1364,7 @@ def _monta_report(*, plan: SessionPlan, destino: Path,
                        pairs_written=int(n_gravados),
                        coverage_pairs_pct=(
                            100.0 * n_gravados / n_pares if n_pares else 0.0)),
+        "tracking": _resumo_tracks(records),
         "quality": {
             "reproj_aux0_px": _stats(reproj0),
             "reproj_aux1_px": _stats(reproj1),
@@ -1344,7 +1461,8 @@ def _escreve_csv_long(path: Path, records: Sequence[TriangRecord]) -> None:
                     int(record.pair), int(record.frame0), int(record.frame1),
                     int(record.frame_kinect),
                     f"{record.time0_s:.6f}", f"{record.time1_s:.6f}",
-                    f"{record.time_sync_s:.6f}", record.hand, int(juntao),
+                    f"{record.time_sync_s:.6f}", record.hand,
+                    int(record.track_id), int(juntao),
                     f"{x:.6f}", f"{y:.6f}", f"{z:.6f}",
                     "" if not np.isfinite(r0) else f"{r0:.3f}",
                     "" if not np.isfinite(r1) else f"{r1:.3f}",
@@ -1391,6 +1509,7 @@ def _escreve_npz_landmarks(path: Path, records: Sequence[TriangRecord],
         "time_sync_s": np.array([r.time_sync_s for r in records],
                                 dtype=np.float64),
         "hand": np.array([r.hand for r in records], dtype="U7"),
+        "track_id": np.array([r.track_id for r in records], dtype=np.int64),
         "method": np.array([r.method for r in records], dtype="U24"),
         "joints_xyz": _stack("joints_xyz", (NUM_LANDMARKS, 3)),
         "valid": _stack("valid", (NUM_LANDMARKS,), dtype=bool),
@@ -1476,6 +1595,10 @@ def report_resumo_txt(report: Dict[str, Any]) -> str:
     cobertura = [item["pct"] for item in quality["joint_coverage"]]
     linhas.append(f"cobertura/junção  : min {min(cobertura) if cobertura else 0}% "
                   f"mediana {float(np.median(cobertura)) if cobertura else 0:.1f}%")
+    tr = report.get("tracking", {})
+    linhas.append(f"tracks            : {tr.get('n_tracks', 0)} "
+                  f"IDs={tr.get('ids', [])} | trocas de lado="
+                  f"{tr.get('hand_switches', 0)}")
     hn = report.get("handmvnet", {})
     if hn.get("used"):
         linhas.append(f"HandMvNet         : {hn.get('model')}")
