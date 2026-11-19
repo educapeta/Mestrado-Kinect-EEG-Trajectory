@@ -10588,3 +10588,26 @@ ITEM 200 (19/11/2026) - FFT/PSD E TEMPO-FREQUENCIA DAS EPOCAS MI (NVIDIA)
   sem ICA/rejeicao de artefatos, p exploratorios.
 - Script/relatorio commitados; figuras em outputs/ (gitignored).
 - TESTE: relatorio revisado; figuras abrem; n=120.
+
+================================================================================
+ITEM 201 (19/11/2026) - EXPORTADOR DE DATASET 2 VISTAS
+================================================================================
+- NOVO src/mestradopy/tools/handmvnet_export_2views.py: converte
+  <sessao>/processed*/landmarks_3d.npz + videos aux0/aux1 -> frames/*.jpg +
+  labels.npz no formato HandMvNetSessionDataset.
+- Campos: joints_2d (N,2,21,2), joints_3d mm, bboxes, intrinsics na resolucao do
+  video, extrinsics [R|T] (mundo Kinect->camera), valid, hand, track_id,
+  timestamps, pair/frame0/frame1; meta.json com calibracao.
+- Teste com teste_sync3/processed_track1b: 85 amostras (filtro min_valid=5),
+  170 JPGs (2 vistas), hands=direita 85.
+- Validacao: HandMvNetSessionDataset carrega n=85, n_views=2; __getitem__ OK:
+  rgb (2,3,256,256), heatmap (2,21,32,32), joints_cam (21,3),
+  intrinsics (2,4), extrinsics (2,4,4).
+- Uso:
+  .\.venv\Scripts\python.exe src\mestradopy\tools\handmvnet_export_2views.py
+    --session F:\handmvnet_videos\teste_sync3
+    --npz ...\processed_track1b\landmarks_3d.npz
+    --dest outputs\handmvnet_dataset\teste_sync3_2v --overwrite
+- LIMITACAO: 85 frames e' smoke; treino real precisa de mais sessoes. Modelo
+  oficial pode esperar 3 vistas; adaptar o trainer/config para 2 vistas no
+  proximo passo.
