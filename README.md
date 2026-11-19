@@ -124,7 +124,7 @@ Calibrações ficam em `configs/calibracao/`.
 - Antes de commitar, rode a checagem de higiene da raiz:
 
 ```powershell
-.\scripts\verificar_raiz.ps1
+powershell -NoProfile -ExecutionPolicy Bypass -File .\scripts\verificar_raiz.ps1
 ```
 
 Ela falha se aparecer arquivo/diretório solto na raiz. Se for um arquivo de
