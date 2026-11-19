@@ -10623,3 +10623,19 @@ ITEM 202 (19/11/2026) - TREINO HANDMVNET COM 2 VISTAS (SMOKE)
   val_mpjpe_mm=85,06 (pesos aleatorios; smoke de encanamento, NAO resultado).
 - Checkpoint em outputs/visao/handmvnet_smoke_2v/handmvnet_checkpoint.pt.
 - Commits anteriores: exportador 5ba5ac4; validacao 4ca0017/0e72048.
+
+================================================================================
+ITEM 203 (19/11/2026) - SUAVIZACAO 3D POR TRACK E REVISAO DLC
+================================================================================
+- NOVO src/mestradopy/tools/suaviza_landmarks3d.py: SavGol por track/junta,
+  preserva valid, gera landmarks_3d_suavizado.npz + smoothing_report.json.
+- Teste teste_sync3/processed_track1b: jitter mediano 2,3455 -> 1,1311 mm
+  (-51,8%); p90 12,4646 -> 7,4848 mm; 2 tracks; dataset exportado e
+  HandMvNetSessionDataset carregou 85 amostras 2 vistas.
+- REVISAO DLC (nvidia): docs/validation/REVISAO_DLC_MULTIVIEW_AUX_20261119.md
+  (35 kB). Veredito: NO-GO substituir MediaPipe; GO condicional spike 2D;
+  Anipose 3D no-go; ganho imediato = suavizacao + FPS casado.
+- ATHENA (athena-review): teste executavel nos nossos dados; main v1.0 roda
+  offline, concordancia 1,5 mm com nosso DLT, reproj pior (2,3-2,8 vs 1,4 px),
+  11 swaps/10 rejeicoes, jitter 0,65 mm/frame^2. ATHENA 0.3 PyPI quebrado.
+  Nao tem modo tempo real nativo; proximo passo e' decidir preview hibrido.
