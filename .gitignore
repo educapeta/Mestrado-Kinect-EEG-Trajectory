@@ -156,3 +156,6 @@ __pycache__/
 # Atalho de compatibilidade para o log historico ativo (canonico em docs/guias)
 /HISTORICO_ITERACOES.txt
 
+
+docs/literature/*_text.txt
+

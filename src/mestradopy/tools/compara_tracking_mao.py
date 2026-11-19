@@ -71,6 +71,67 @@ SAIDA_PADRAO = Path(
 IDX_DORSO = 9
 PONTOS_DORSO = (0, 5, 9, 13, 17)
 
+#: Extrinsica depth->color do PROPRIO Kinect (calibracao do sensor, nao do rig).
+#: O 3D do depth sai de `MapDepthPointToCameraSpace` (frame da camera de
+#: PROFUNDIDADE), mas a calibracao stereo das auxiliares vive no frame da camera
+#: de COR. Sem esta correcao, projetar o 3D do depth na auxiliar injeta a
+#: baseline depth->color (~6 cm) de forma sistematica -- medido em 18/11/2026:
+#: `kd_aux` mediano caia de 84,6 -> 15,2 px (aux0) e 39,0 -> 10,1 px (aux1) na
+#: sessao de 12/11. Arquivo gerado por
+#: `tools/auditoria_multiview_offline.py --salvar-frame-cor ...`.
+RAIZ_PROJETO = Path(__file__).resolve().parent.parent.parent
+FRAME_COR_FILE = (RAIZ_PROJETO / "configs" / "calibracao"
+                  / "kinect_depth_para_cor.npz")
+_FRAME_COR = None
+_FRAME_COR_LIDO = False
+
+
+def _frame_cor() -> dict | None:
+    """Le (uma vez) a extrinsica depth->color; None = correcao indisponivel."""
+    global _FRAME_COR, _FRAME_COR_LIDO
+    if _FRAME_COR_LIDO:
+        return _FRAME_COR
+    _FRAME_COR_LIDO = True
+    try:
+        if FRAME_COR_FILE.exists():
+            dados = np.load(FRAME_COR_FILE, allow_pickle=True)
+            _FRAME_COR = {
+                "R": np.asarray(dados["rotation"], np.float64).reshape(3, 3),
+                "t": np.asarray(dados["translation"], np.float64).reshape(3),
+                "residuo_px": (float(dados["residuo_px"])
+                               if "residuo_px" in dados.files else float("nan")),
+                "arquivo": str(FRAME_COR_FILE),
+            }
+    except (OSError, KeyError, ValueError):
+        _FRAME_COR = None
+    return _FRAME_COR
+
+
+def _corrige_frame_cor(xyz):
+    """X_cor = R X_depth + t (frame da profondidade -> frame da cor).
+
+    Identidade quando o npz de correcao nao existe (comportamento antigo).
+    """
+    cfg = _frame_cor()
+    xyz = np.asarray(xyz, np.float64)
+    if cfg is None:
+        return xyz
+    return xyz @ cfg["R"].T + cfg["t"].reshape(1, 3)
+
+
+def _nota_frame_3d() -> str:
+    """Texto do meta.json explicando em que frame o 3D foi medido."""
+    cfg = _frame_cor()
+    if cfg is None:
+        return ("3D do depth no frame da CAMERA DE PROFUNDIDADE; as metricas que "
+                "comparam esse 3D com a auxiliar (kd_aux, d9) ficam infladas pela "
+                "baseline depth->color. Gere configs/calibracao/"
+                "kinect_depth_para_cor.npz com tools/auditoria_multiview_offline.py "
+                "--salvar-frame-cor")
+    return ("3D do depth convertido para o frame da CAMERA DE COR por "
+            f"{cfg['arquivo']} (residuo PnP {cfg['residuo_px']:.2f} px); "
+            "kd_aux e d9 comparam no MESMO frame da calibracao stereo")
+
 # --------------------------------------------------------------------------
 # Schema do CSV (as colunas sao o contrato com metricas_tracking_mao.py)
 # --------------------------------------------------------------------------
@@ -1062,6 +1123,7 @@ def _meta_sessao(ctx, args, origem, extra=None):
         "teclas": "ESC/Q sai | E estatico | M movimento | R repouso | D depth",
         "referencial": "camera de cor do Kinect, metros, eixos OpenCV "
                        "(X direita, Y para baixo, Z para frente)",
+        "frame_3d": _nota_frame_3d(),
         "privacidade": "nenhum video/frame e' gravado; so' landmarks e 3D",
     }
     if extra:
@@ -1446,6 +1508,7 @@ def _processa_lado(ctx, view, lado, mao_k, mao_a, aux_frame, projeta_aux, args):
         "tracker": ctx.tracker, "ok_k": mao_k is not None,
         "ok_aux": mao_a is not None, "kin_px": None, "aux_px": None,
         "k_xyz": np.full((21, 3), np.nan),
+        "k_xyz_cor": np.full((21, 3), np.nan),
         "k_info": [{"map_fail": False, "depth_fail": False, "rescue": False,
                     "depth_m": float("nan")} for _ in range(21)],
         "mv_xyz": np.full((21, 3), np.nan), "mv_mask": np.zeros(21, bool),
@@ -1467,6 +1530,8 @@ def _processa_lado(ctx, view, lado, mao_k, mao_a, aux_frame, projeta_aux, args):
         if len(landmarks) == 21:
             xyz, info = _kinect_3d_21(ctx.tracker, landmarks, lado)
             entrada["k_xyz"] = xyz
+            #: Frame da COR (compativel com a calibracao stereo das auxiliares).
+            entrada["k_xyz_cor"] = _corrige_frame_cor(xyz)
             entrada["k_info"] = info
             entrada["kin_px"] = np.array(
                 [(lm.x * kw, lm.y * kh) for lm in landmarks], np.float64)
@@ -1540,7 +1605,7 @@ def _processa_lado(ctx, view, lado, mao_k, mao_a, aux_frame, projeta_aux, args):
                     except Exception:             # noqa: BLE001
                         pass
                 # Distance between the two dorsum estimates (same frame).
-                palm_k = entrada["k_xyz"][IDX_DORSO]
+                palm_k = entrada["k_xyz_cor"][IDX_DORSO]
                 palm_mv = entrada["mv_xyz"][IDX_DORSO]
                 if (np.isfinite(palm_k).all() and np.isfinite(palm_mv).all()
                         and entrada["mv_mask"][IDX_DORSO]):
@@ -1552,13 +1617,18 @@ def _processa_lado(ctx, view, lado, mao_k, mao_a, aux_frame, projeta_aux, args):
         entrada["note"] = "sem mao na auxiliar"
 
     # Depth do Kinect visto pela auxiliar (diagnostico visual + erro de
-    # correspondencia).
+    # correspondencia). Usa o 3D no frame da COR: a calibracao stereo da
+    # auxiliar foi feita no frame da camera de cor do Kinect, e o 3D cru do
+    # depth vem do frame da camera de profundidade (baseline ~6 cm).
+    xyz_aux_frame = entrada.get("k_xyz_cor")
+    if xyz_aux_frame is None:
+        xyz_aux_frame = entrada["k_xyz"]
     if (mao_a is not None and view is not None and view.usable
             and entrada["aux_px"] is not None
-            and np.isfinite(entrada["k_xyz"]).all(axis=1).any()):
+            and np.isfinite(xyz_aux_frame).all(axis=1).any()):
         try:
-            validos_k = np.isfinite(entrada["k_xyz"]).all(axis=1)
-            proj_kd = projeta_aux(view, entrada["k_xyz"][validos_k])
+            validos_k = np.isfinite(xyz_aux_frame).all(axis=1)
+            proj_kd = projeta_aux(view, xyz_aux_frame[validos_k])
             entrada["kd_aux_px"] = _espalha(proj_kd, validos_k,
                                             int(validos_k.sum()))
             desvios = np.linalg.norm(proj_kd - entrada["aux_px"][validos_k],
