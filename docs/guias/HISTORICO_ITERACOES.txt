@@ -10861,3 +10861,12 @@ ITEM 219 (19/11/2026) - RESUMO CONSOLIDADO DO PILOTO EEG
 - FFT: mu sem diferenca L/R; beta C4 R<L -0,49 dB apenas exploratorio.
 - CONCLUSAO: ME decodificavel, MI fraca; participante nao-respondedor no piloto;
   proximo passo e o protocolo de 3 sessoes x20/classe.
+
+================================================================================
+ITEM 220 (19/11/2026) - RASCUNHO DE SECAO DA TESE
+================================================================================
+- NOVO docs/validation/DRAFT_SECAO_TESE_20261119.md: rascunho (nao inserido
+  no LaTeX) com metodos e resultados de calibracao, video offline, 3D/QC,
+  protocolo EEG, CSP LDA, FFT, feedback congelado, limitacoes e proximos passos.
+- Fonte: relatorios docs/validation/ de 19/11.
+- GOAL (6) avanca; autor deve revisar/adaptar antes de colocar na tese.
