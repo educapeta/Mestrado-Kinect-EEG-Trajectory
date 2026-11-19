@@ -10706,3 +10706,19 @@ ITEM 208 (19/11/2026) - CORRECAO DO PREVIEW: PAR UNKNOWN
   "unknown" (rotulos L/R discordantes), o par e' ignorado no painel 3D em vez
   de causar KeyError; os esqueletos 2D continuam visiveis. vis.get seguro.
 - COMPILE OK; --dry-run OK (aux0 RMS 1,699 / aux1 RMS 1,315).
+
+================================================================================
+ITEM 209 (19/11/2026) - COMPARADOR ONLINE PAR AUX x KINECT
+================================================================================
+- NOVO src/mestradopy/tools/compara_pair_kinect_online.py: abre Kinect RGB+depth
+  e as duas auxiliares; MediaPipe nas 3 vistas; triangula par aux0/aux1;
+  compara com 3D do Kinect corrigido depth->cor (configs/calibracao/
+  kinect_depth_para_cor.npz) por junta.
+- Mostra ao vivo: Kinect RGB + par projetado, aux0, aux1, erros 3D med/p90 mm,
+  reproj aux/kinect, FPS. CSV: outputs/visao/comparacao_pair_kinect.csv com
+  erro3d, reproj, cobertura, kin_depth_fail/map_fail.
+- --dry-run OK (aux0 RMS 1,699; aux1 RMS 1,315). Uso:
+  .\.venv\Scripts\python.exe src\mestradopy\tools\compara_pair_kinect_online.py \
+    --exposicao "0:-7,1:-7" --duracao 30 --csv outputs\visao\comparacao_pair_kinect.csv
+- LEMBRETE: Kinect depth nao e' verdade absoluta; interpretar junto com falhas
+  de depth/map e com jig/tabuleiro.
