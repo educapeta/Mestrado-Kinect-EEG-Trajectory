@@ -331,6 +331,12 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--trava-exposicao", action="store_true",
                    help="Tenta travar exposicao/ganho da auxiliar "
                         "(camera_uvc.trava_exposicao)")
+    p.add_argument("--exposicao", type=int, default=None,
+                   help="Exposicao manual (unidade do driver; ex.: -6 escuro, "
+                        "-2/0 mais claro). So' vale com --trava-exposicao.")
+    p.add_argument("--ganho", type=int, default=None,
+                   help="Ganho manual (unidade do driver). So' vale com "
+                        "--trava-exposicao.")
     p.add_argument("--sem-relatorio", action="store_true",
                    help="So' grava os CSV (nao gera relatorio/PNGs no fim)")
     p.add_argument("--sintetico", action="store_true",
@@ -404,7 +410,8 @@ def _falha(mensagem: str):
     _PROBLEMAS.append(mensagem)
 
 
-def _abre_camera(indice: int, largura: int, altura: int, trava: bool):
+def _abre_camera(indice: int, largura: int, altura: int, trava: bool,
+                 exposicao=None, ganho=None):
     """Abre a auxiliar em DSHOW e cai para MSMF; devolve (cap, frame) ou None.
 
     Mesma ordem do tool de groundtruth (DSHOW e' o backend da calibracao e abre
@@ -425,7 +432,8 @@ def _abre_camera(indice: int, largura: int, altura: int, trava: bool):
             if trava:
                 try:
                     from camera_uvc import trava_exposicao
-                    trava_exposicao(cap, rotulo=f"aux {indice}")
+                    trava_exposicao(cap, exposicao=exposicao, ganho=ganho,
+                                   rotulo=f"aux {indice}")
                 except Exception as exc:            # noqa: BLE001
                     print(f"[aviso] trava de exposicao falhou: {exc}")
             for _ in range(5):                      # descarta o buffer velho
@@ -546,7 +554,8 @@ def prepara_contexto(args) -> Contexto:
     if _PROBLEMAS:
         _mensagem_abortar()
 
-    aberto = _abre_camera(aux_index, int(cal_w), int(cal_h), args.trava_exposicao)
+    aberto = _abre_camera(aux_index, int(cal_w), int(cal_h),
+                          args.trava_exposicao, args.exposicao, args.ganho)
     if aberto is None:
         nomes = []
         try:
