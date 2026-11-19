@@ -10793,3 +10793,15 @@ ITEM 214 (19/11/2026) - CV DE OSSO ROBUSTO NO COMPARADOR
   o CV bruto nao separa ruido de escala. Rodar de novo para comparar par x
   Kinect com a metrica robusta.
 - COMPILE/dry-run OK.
+
+================================================================================
+ITEM 215 (19/11/2026) - QC OFFLINE DOS LANDMARKS 3D
+================================================================================
+- NOVO src/mestradopy/tools/qc_landmarks3d.py: le landmarks_3d.npz (ou
+  suavizado) e gera qc_report.json/md, bones.csv (comprimento por osso/track,
+  CV bruto e robusto mediana +/- 3 MAD) e frames.csv (valid/reproj/track).
+- Teste em teste_sync3/processed_track1b (112 registros, 2 tracks, 1 lado
+  right): CV de osso mediano 2,663% (robusto 1,195%); reproj e jitter no
+  relatorio. Versao SavGol: CV 2,748% (robusto 1,103%).
+- QC mostra que o par e' consistente no offline; usar como gate antes de
+  exportar dataset/treinar.
