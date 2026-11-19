@@ -10611,3 +10611,15 @@ ITEM 201 (19/11/2026) - EXPORTADOR DE DATASET 2 VISTAS
 - LIMITACAO: 85 frames e' smoke; treino real precisa de mais sessoes. Modelo
   oficial pode esperar 3 vistas; adaptar o trainer/config para 2 vistas no
   proximo passo.
+
+================================================================================
+ITEM 202 (19/11/2026) - TREINO HANDMVNET COM 2 VISTAS (SMOKE)
+================================================================================
+- handmvnet_train.py agora detecta n_views do dataset e carrega a arquitetura
+  oficial com esse numero (antes fixava 3 vistas). data-val precisa ter o
+  mesmo n_views.
+- Teste real com outputs/handmvnet_dataset/teste_sync3_2v (85 amostras, 2 vistas):
+  n_views=2; 1 epoca, batch 2, device xpu; loss_hm=0,1580;
+  val_mpjpe_mm=85,06 (pesos aleatorios; smoke de encanamento, NAO resultado).
+- Checkpoint em outputs/visao/handmvnet_smoke_2v/handmvnet_checkpoint.pt.
+- Commits anteriores: exportador 5ba5ac4; validacao 4ca0017/0e72048.

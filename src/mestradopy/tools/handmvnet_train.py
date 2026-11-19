@@ -137,15 +137,26 @@ def main():
     if args.data is None:
         raise SystemExit("passe --data ou --smoke")
 
+    # Detecta o numero de vistas do dataset (2 no nosso rig de webcams, 3 no
+    # smoke/futuro Kinect+2aux). Nao fixar 3.
+    probe = HandMvNetSessionDataset(args.data)
+    n_views = int(probe.n_views)
+    if args.data_val is not None:
+        probe_val = HandMvNetSessionDataset(args.data_val)
+        if int(probe_val.n_views) != n_views:
+            raise SystemExit(f"data e data-val com n_views diferentes: "
+                             f"{n_views} x {probe_val.n_views}")
+    print(f"dataset: {args.data} | n_views={n_views} | n={len(probe)}")
+
     # Modelo oficial. Sem checkpoint => inicializacao aleatoria (treino do zero).
     if args.checkpoint is not None:
         loaded = load_official_model(
             DEFAULT_REPO_ROOT, args.checkpoint, device=device,
-            num_views_override=3, adapt_num_views=True)
+            num_views_override=n_views, adapt_num_views=True)
         print("fine-tune de checkpoint:", args.checkpoint)
     else:
         loaded = load_random_model_for_validation(
-            DEFAULT_REPO_ROOT, num_views=3, image_size=256,
+            DEFAULT_REPO_ROOT, num_views=n_views, image_size=256,
             backbone=args.backbone, backbone_type=args.backbone_type,
             use_gcn=False, device=device)
         print("treino do zero: arquitetura oficial, pesos aleatorios")
