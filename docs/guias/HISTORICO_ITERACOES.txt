@@ -10698,3 +10698,11 @@ ITEM 207 (19/11/2026) - PREVIEW 2 CAMERAS: CORES + 3D + OCLUSAO
 - Uso:
   .\.venv\Scripts\python.exe src\mestradopy\tools\athena_live_preview.py \
     --num-hands 2 --exposicao "0:-6,1:-6"
+
+================================================================================
+ITEM 208 (19/11/2026) - CORRECAO DO PREVIEW: PAR UNKNOWN
+================================================================================
+- athena_live_preview.py: quando o pareamento entre vistas retorna lado
+  "unknown" (rotulos L/R discordantes), o par e' ignorado no painel 3D em vez
+  de causar KeyError; os esqueletos 2D continuam visiveis. vis.get seguro.
+- COMPILE OK; --dry-run OK (aux0 RMS 1,699 / aux1 RMS 1,315).

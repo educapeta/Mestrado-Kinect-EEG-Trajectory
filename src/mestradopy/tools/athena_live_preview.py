@@ -270,6 +270,10 @@ def main() -> int:
             }
             status = {}
             for lado, d0, d1 in casadas:
+                if lado not in ("right", "left"):
+                    # rotulos L/R discordantes entre as vistas: nao ha' painel 3D
+                    # para "unknown"; os esqueletos 2D continuam desenhados.
+                    continue
                 pontos, err = gt.triangulate_pair_points(
                     views[indices[0]], views[indices[1]],
                     d0.landmarks_px, d1.landmarks_px)
@@ -279,7 +283,7 @@ def main() -> int:
                     palm = pts[9]
                     if np.isfinite(palm).all():
                         trails.setdefault(lado, deque(maxlen=80)).append(palm)
-                    vtxt = "ambas" if all(vis[lado]) else "1 vista"
+                    vtxt = "ambas" if all(vis.get(lado, (False, False))) else "1 vista"
                     status[lado] = (f"{lado}: reproj={err:.1f}px "
                                      f"Z={palm[2]:.3f}m | {vtxt}")
                 else:
@@ -287,7 +291,7 @@ def main() -> int:
             for lado in ("right", "left"):
                 if lado in status:
                     continue
-                v0, v1 = vis[lado]
+                v0, v1 = vis.get(lado, (False, False))
                 if v0 or v1:
                     qual = "aux0" if v0 and not v1 else (
                         "aux1" if v1 and not v0 else "ambas")
