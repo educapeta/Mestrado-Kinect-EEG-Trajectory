@@ -82,8 +82,11 @@ def main() -> int:
     ap.add_argument("--ganho", type=str, default=None)
     ap.add_argument("--largura", type=int, default=1280)
     ap.add_argument("--altura", type=int, default=720)
-    ap.add_argument("--num-hands", type=int, default=1,
-                    help="1 para uma mao (recomendado)")
+    ap.add_argument("--num-hands", type=int, default=2,
+                    help="2 para as duas maos; 1 para sessoes de uma mao")
+    ap.add_argument("--min-detection-confidence", type=float, default=0.5)
+    ap.add_argument("--min-presence-confidence", type=float, default=0.5)
+    ap.add_argument("--min-tracking-confidence", type=float, default=0.5)
     ap.add_argument("--pareamento", choices=("lateral", "geometrico"),
                     default="geometrico")
     ap.add_argument("--duracao", type=float, default=0.0,
@@ -110,7 +113,12 @@ def main() -> int:
             caps.append(_abre(i, _controle(args.exposicao, i),
                               _controle(args.ganho, i),
                               args.largura, args.altura))
-        detector = MediaPipeHandDetector(num_hands=args.num_hands, verbose=False)
+        detector = MediaPipeHandDetector(
+            num_hands=args.num_hands,
+            min_detection_confidence=args.min_detection_confidence,
+            min_presence_confidence=args.min_presence_confidence,
+            min_tracking_confidence=args.min_tracking_confidence,
+            verbose=False)
         t0 = time.time(); n = 0
         while args.duracao <= 0 or (time.time() - t0) < args.duracao:
             frames = []

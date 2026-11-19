@@ -10671,3 +10671,15 @@ ITEM 205 (19/11/2026) - PREVIEW AO VIVO HIBRIDO DAS 2 AUXILIARES
     --exposicao "0:-6,1:-6" --num-hands 1 --pareamento geometrico
 - ATHENA offline: athena-review vai gerar video demo com o main v1.0 nos dados
   teste_sync3 (task separada).
+
+================================================================================
+ITEM 206 (19/11/2026) - PREVIEW LIVE: DUAS MAOS POR PADRAO
+================================================================================
+- athena_live_preview.py passa a usar --num-hands 2 por padrao e expone
+  --min-detection-confidence / --min-presence-confidence /
+  --min-tracking-confidence para reduzir deteccao de uma mao so'.
+- Uso para duas maos:
+  .\.venv\Scripts\python.exe src\mestradopy\tools\athena_live_preview.py \
+    --num-hands 2 --exposicao "0:-6,1:-6"
+  Se uma camera nao detectar as duas, baixar --min-detection-confidence 0.3
+  e enquadrar as duas maos no FOV.
