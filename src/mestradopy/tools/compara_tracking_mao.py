@@ -79,7 +79,7 @@ PONTOS_DORSO = (0, 5, 9, 13, 17)
 #: `kd_aux` mediano caia de 84,6 -> 15,2 px (aux0) e 39,0 -> 10,1 px (aux1) na
 #: sessao de 12/11. Arquivo gerado por
 #: `tools/auditoria_multiview_offline.py --salvar-frame-cor ...`.
-RAIZ_PROJETO = Path(__file__).resolve().parent.parent.parent
+RAIZ_PROJETO = Path(__file__).resolve().parents[3]
 FRAME_COR_FILE = (RAIZ_PROJETO / "configs" / "calibracao"
                   / "kinect_depth_para_cor.npz")
 _FRAME_COR = None
