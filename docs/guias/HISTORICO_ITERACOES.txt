@@ -10850,3 +10850,14 @@ ITEM 218 (19/11/2026) - TESTES DE REGRESSAO DO FEEDBACK
   * test_finite_np: NaN/inf -> finitos.
 - Suite: 13/13 OK (antes 10/10).
 - Objetivo: impedir recorrencia dos bugs de orientacao/reamostragem e pickle.
+
+================================================================================
+ITEM 219 (19/11/2026) - RESUMO CONSOLIDADO DO PILOTO EEG
+================================================================================
+- NOVO docs/validation/RESUMO_PILOTO_EEG_20261119.md: ME/MI CSP+LDA, FFT/PSD,
+  feedback L/R congelado, ERD, interpretacao e limitacoes.
+- CSP+LDA cross-sessao reproduzido: ME 0,633/0,750; MI 0,550/0,533.
+- Feedback congelado s02 corrigido: BA=0,567 IC95[0,437;0,688] -> nao-respondedor.
+- FFT: mu sem diferenca L/R; beta C4 R<L -0,49 dB apenas exploratorio.
+- CONCLUSAO: ME decodificavel, MI fraca; participante nao-respondedor no piloto;
+  proximo passo e o protocolo de 3 sessoes x20/classe.
