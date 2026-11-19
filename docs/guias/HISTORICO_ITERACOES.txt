@@ -10683,3 +10683,18 @@ ITEM 206 (19/11/2026) - PREVIEW LIVE: DUAS MAOS POR PADRAO
     --num-hands 2 --exposicao "0:-6,1:-6"
   Se uma camera nao detectar as duas, baixar --min-detection-confidence 0.3
   e enquadrar as duas maos no FOV.
+
+================================================================================
+ITEM 207 (19/11/2026) - PREVIEW 2 CAMERAS: CORES + 3D + OCLUSAO
+================================================================================
+- athena_live_preview.py reorganizado em canvas 2x2 (1280x680):
+  * cima: aux0 | aux1, redimensionados para caber;
+  * baixo: grafico 3D da mao DIREITA e da mao ESQUERDA;
+  * direita=verde, esquerda=laranja (linhas e pontos);
+  * cada camera mostra visibilidade R:OK/-- L:OK/-- e numero de maos;
+  * painel 3D mostra "visao: aux0=OK aux1=--" e nota de oclusao/sem par.
+- Eixos X/Y/Z e trilha do punho no grafico 3D; PALM x/y/z em metros.
+- Defaults: num-hands=2, canvas 1280x680, panel-height=340.
+- Uso:
+  .\.venv\Scripts\python.exe src\mestradopy\tools\athena_live_preview.py \
+    --num-hands 2 --exposicao "0:-6,1:-6"
