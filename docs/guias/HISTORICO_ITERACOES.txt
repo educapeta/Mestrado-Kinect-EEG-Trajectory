@@ -10746,3 +10746,19 @@ ITEM 211 (19/11/2026) - COMPARADOR ONLINE: REPROJ AUX E FPS
   * Kinect depth_fail/map_fail = 0;
   * reproj Kinect med 15,5 px (alta) -> investigar pareamento/sync.
   Proximo: rodar de novo e analisar CSV com reproj aux corrigida.
+
+================================================================================
+ITEM 212 (19/11/2026) - METRICA DE RIGIDEZ (COMPRIMENTO DE OSSO)
+================================================================================
+- compara_pair_kinect_online.py agora calcula, por frame/lado:
+  * comprimento de cada osso adjacente (HAND_CONNECTIONS) do par aux0/aux1;
+  * mesmo para o 3D do Kinect (depth->cor);
+  * ao final grava <csv>_rigidez.csv com n, media_mm, std_mm, cv_pct, mad_mm
+    por osso e lado, e imprime CV mediano por fonte.
+- Teste offline no par (teste_sync3/processed_track1b, 42 ossos):
+  CV mediano 2,66%; p90 6,19% -> boa consistencia de comprimento de osso.
+  A suavizacao SavGol nao melhorou CV (2,72% mediano) porque o SavGol muda
+  comprimentos; usar CV para comparar fontes, nao para escolher suavizacao.
+- RESSALVA: rigidez nao mede escala absoluta; uma reconstrucao com escala/
+  cisalhamento constante tem CV baixo. Comparar mediana de ossos com medidas
+  antropometricas/caliper e com Kinect.

@@ -97,6 +97,37 @@ def _proj_px(pontos, K, dist):
     return out
 
 
+BONES = tuple(gt.HAND_CONNECTIONS)
+
+
+def _comprimentos_ossos(xyz):
+    """Comprimento (m) de cada osso adjacente; NaN se ponta invalida."""
+    p = np.asarray(xyz, np.float64).reshape(-1, 3)
+    out = np.full(len(BONES), np.nan)
+    for k, (a, b) in enumerate(BONES):
+        if (np.isfinite(p[a]).all() and np.isfinite(p[b]).all()):
+            out[k] = float(np.linalg.norm(p[a] - p[b]))
+    return out
+
+
+def _resumo_rigidez(por_osso):
+    """[{osso, n, media_mm, std_mm, cv_pct, mad_mm}] a partir de listas."""
+    linhas = []
+    for k, (a, b) in enumerate(BONES):
+        vals = np.asarray(por_osso.get(k, []), np.float64)
+        vals = vals[np.isfinite(vals) & (vals > 0)]
+        if vals.size < 3:
+            continue
+        media = float(np.median(vals))
+        mad = float(np.median(np.abs(vals - media)))
+        linhas.append({"osso": f"{a}-{b}", "n": int(vals.size),
+                       "media_mm": round(media * 1000.0, 3),
+                       "std_mm": round(float(np.std(vals)) * 1000.0, 3),
+                       "cv_pct": round(100.0 * float(np.std(vals)) / max(media, 1e-9), 3),
+                       "mad_mm": round(mad * 1000.0, 3)})
+    return linhas
+
+
 def _proj_aux(view, pontos):
     """X_aux = R X_kin + T; depois projeta com K/dist da auxiliar."""
     p = np.asarray(pontos, np.float64).reshape(-1, 3).copy()
@@ -170,6 +201,8 @@ def main() -> int:
         last_fps_t = t0
         fps_atual = 0.0
         last_palm: Dict[str, np.ndarray] = {}
+        rigidez: Dict[str, Dict[str, Dict[int, list]]] = {
+            side: {"pair": {}, "kin": {}} for side in ("right", "left")}
         cv2.namedWindow("Comparador ONLINE: aux pair x Kinect", cv2.WINDOW_NORMAL)
         cv2.resizeWindow("Comparador ONLINE: aux pair x Kinect", 1280, 760)
         while args.duracao <= 0 or (time.time() - t0) < args.duracao:
@@ -236,6 +269,14 @@ def main() -> int:
                           lm.y * tracker.color_height)
                          for lm in (kin.get("landmarks") or [])], np.float64),
                         axis=1))
+                if pair_xyz is not None:
+                    for k, val in enumerate(_comprimentos_ossos(pair_xyz)):
+                        if np.isfinite(val):
+                            rigidez[lado]["pair"].setdefault(k, []).append(float(val))
+                if kin_cor is not None:
+                    for k, val in enumerate(_comprimentos_ossos(kin_cor)):
+                        if np.isfinite(val):
+                            rigidez[lado]["kin"].setdefault(k, []).append(float(val))
                 erro3d = np.array([])
                 if pair_xyz is not None and kin_cor is not None:
                     ok = (np.isfinite(pair_xyz).all(axis=1)
@@ -318,6 +359,26 @@ def main() -> int:
         if csv_file is not None:
             csv_file.close()
         cv2.destroyAllWindows()
+    # resumo de rigidez (comprimento de osso constante)
+    linhas_rig = []
+    for side in ("right", "left"):
+        for fonte in ("pair", "kin"):
+            for item in _resumo_rigidez(rigidez[side][fonte]):
+                linhas_rig.append({"lado": side, "fonte": fonte, **item})
+    rig_csv = args.csv.with_name(args.csv.stem + "_rigidez.csv")
+    if linhas_rig:
+        rig_csv.parent.mkdir(parents=True, exist_ok=True)
+        with open(rig_csv, "w", newline="", encoding="utf-8") as fh:
+            w = csv.DictWriter(fh, fieldnames=list(linhas_rig[0].keys()))
+            w.writeheader(); w.writerows(linhas_rig)
+        print("RIGIDEZ CSV:", rig_csv)
+        for side in ("right", "left"):
+            for fonte in ("pair", "kin"):
+                cv = [x["cv_pct"] for x in linhas_rig
+                      if x["lado"] == side and x["fonte"] == fonte]
+                if cv:
+                    print(f"  rigidez {side}/{fonte}: CV mediano "
+                          f"{np.median(cv):.2f}% (n ossos={len(cv)})")
     print("CSV:", args.csv)
     return 0
 
