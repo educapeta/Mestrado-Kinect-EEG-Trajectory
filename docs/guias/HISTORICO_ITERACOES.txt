@@ -10918,3 +10918,19 @@ ITEM 223 (19/11/2026) - TESTE DE OFFSET MARCADOR x EEG
   deslocamento vem de incluir ME/ITI. Sem marcador externo independente, o
   teste por classificacao e circular.
 - Relatorio: docs/validation/OFFSET_MARCADOR_20261119.md.
+
+================================================================================
+ITEM 224 (19/11/2026) - TESTE PMBR (ERD/ERS) + PERMUTACAO LATE
+================================================================================
+- NOVO src/mestradopy/tools/erd_pmbr_permutacao.py: ERD/ERS mu 8-12 e beta
+  13-30 em janelas de 1 s da MI, graficos; permutacao de labels por trial na
+  janela late 2-4 s (1000 perm, 5-fold fixo).
+- PMBR esperado: beta early aumentado, late diminuido. Dados: beta early
+  direita C4/Cz +21,5/+11,6%, mas esquerda negativa; 1-2 s beta negativo nas
+  duas classes; late majoritariamente negativo (com excecoes) -> PMBR NAO
+  confirmado de forma limpa.
+- Permutacao late: BA obs=0,567; p=0,1149; nulo mediana=0,483, p95=0,583,
+  max=0,675 -> NAO significativo.
+- CONCLUSAO: late 2-4 s nao tem sinal convincente; 0,567 compativel com ruido
+  estruturado; nao mudar paradigma com base nisso.
+- Relatorio: docs/validation/PMBR_ERD_PERMUTACAO_20261119.md.
