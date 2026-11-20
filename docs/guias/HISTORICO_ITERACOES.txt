@@ -10902,3 +10902,19 @@ ITEM 222 (19/11/2026) - JANELA CURTA DE MI (HIPOTESE DA JANELA LONGA)
   Mid 1-3 s tem sinal exploratorio (0,683 s01; 0,617 s01->s02) mas nao robusto.
 - Ressalva: "2 s apos o cue" incluiria ME no nosso paradigma; teste usa MI (780).
 - Relatorio: docs/validation/JANELA_CURTA_MI_20261119.md.
+
+================================================================================
+ITEM 223 (19/11/2026) - TESTE DE OFFSET MARCADOR x EEG
+================================================================================
+- NOVO src/mestradopy/tools/analisa_offset_marcador.py: varredura de offset
+  (janela configuravel) com CSP+LDA 5-fold por trial; figura/relatorio.
+- JSON vs CSV: offset constante ~0,88-0,92 s (compatível com inicio da
+  gravacao antes do session_start), mas intervalos entre markers batem em ~1 ms
+  -> sem deriva.
+- 4 s, +1,0 s: BA=0,627, MAS a janela entra no ITI -> teste invalido.
+- 2 s: melhor -1,0 s BA=0,675, MAS inclui ME/transicao -> contamina; dentro da
+  MI (0 a +2 s): early 0,458; +0,4 0,592; +1,7 0,600; sem pico em zero.
+- CONCLUSAO: nao ha evidencia de offset constante marcador/EEG; ganhos de
+  deslocamento vem de incluir ME/ITI. Sem marcador externo independente, o
+  teste por classificacao e circular.
+- Relatorio: docs/validation/OFFSET_MARCADOR_20261119.md.
