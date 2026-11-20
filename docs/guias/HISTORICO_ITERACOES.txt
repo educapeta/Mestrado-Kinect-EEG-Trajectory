@@ -10870,3 +10870,20 @@ ITEM 220 (19/11/2026) - RASCUNHO DE SECAO DA TESE
   protocolo EEG, CSP LDA, FFT, feedback congelado, limitacoes e proximos passos.
 - Fonte: relatorios docs/validation/ de 19/11.
 - GOAL (6) avanca; autor deve revisar/adaptar antes de colocar na tese.
+
+================================================================================
+ITEM 221 (19/11/2026) - TRANSFER BCIC IV-2b -> PILOTO COM CSP+LDA/EA
+================================================================================
+- NOVO src/mestradopy/tools/transfer_bci2b_csp_ea.py: valida CSP+LDA no 2b
+  (within-subject, 2 sessoes treino/1 teste), aplica EA por sujeito/sessao,
+  testa target-only, target+EA, source-only, CSP-fonte+LDA-alvo e CSP+LDA
+  source+target combinados; splits alvo agrupados por trial (5-fold).
+- BCIC 2b: 9 sujeitos x3 sessoes T = 3680 janelas; validacao BA=0,658 +-0,122
+  (27 folds), compativel com ~68% da literatura.
+- ALVO: 2 sessoes x 60 trials = 120 trials, 600 janelas (o pedido citava 40
+  trials/200 janelas; os dados disponiveis sao 60/sessao).
+- RESULTADOS: target_only BA=0,475; target_only_EA=0,475; source_only_EA=0,508
+  (colapsa em uma classe); source_csp+LDA_alvo=0,500; source+target=0,500.
+- CONCLUSAO: pipeline correto no 2b, mas EA/transfer nao melhora o piloto;
+  gargalo aparenta ser paradigma/qualidade de MI, nao so volume de dados.
+- Relatorio: docs/validation/TRANSFER_BCI2B_20261119.md.
