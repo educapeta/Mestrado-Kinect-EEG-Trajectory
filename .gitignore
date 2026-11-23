@@ -159,3 +159,9 @@ __pycache__/
 
 docs/literature/*_text.txt
 
+
+# Amostras reduzidas (10 s por condicao) publicadas COM os resultados do teste
+# de ruido EEG. Os CSV completos continuam fora do git por tamanho - os hashes
+# estao em resultados/ruido_eeg_20261123/checksums_sha256.txt
+!resultados/ruido_eeg_20261123/amostras/*.csv
+

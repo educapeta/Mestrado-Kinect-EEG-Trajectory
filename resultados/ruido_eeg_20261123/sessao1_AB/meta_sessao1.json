@@ -1,0 +1,38 @@
+{
+  "csv": "outputs\\eeg\\ruido_laptop\\ruido_bruto_20261123_170201.csv",
+  "duracao_alvo_s": 60.0,
+  "test_generator": false,
+  "eventos": [
+    {
+      "condicao": "A",
+      "code": 1,
+      "descricao": "laptop na BATERIA, longe do desktop",
+      "inicio_s": 4.846
+    },
+    {
+      "condicao": "B",
+      "code": 2,
+      "descricao": "laptop na BATERIA, perto do desktop",
+      "inicio_s": 93.926
+    },
+    {
+      "condicao": "C",
+      "code": 3,
+      "descricao": "laptop na TOMADA, longe do desktop",
+      "inicio_s": 257.751
+    },
+    {
+      "condicao": "D",
+      "code": 4,
+      "descricao": "laptop na TOMADA, perto do desktop",
+      "inicio_s": 375.973
+    },
+    {
+      "condicao": "E",
+      "code": 5,
+      "descricao": "laptop na BATERIA, perto do desktop e monitor/tela LIGADA",
+      "inicio_s": 449.466
+    }
+  ],
+  "nota": "EEG cru, sem filtros; coluna Marker indica o início de cada condição."
+}
