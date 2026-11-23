@@ -11005,3 +11005,24 @@ ITEM 228 (23/11/2026) - ANALISE DA S02: FEEDBACK x ARTEFATO/INTERFERENCIA
 - Recomendacao s03: manter setup da s02, rodar congelado, baseline de olhos,
   registrar qualquer mudanca.
 - Relatorio: docs/validation/S02_FEEDBACK_QUALIDADE_20261123.md.
+
+================================================================================
+ITEM 229 (23/11/2026) - ANALISE DE RUIDO EEG CRU (5 CONDICOES)
+================================================================================
+- NOVOS src/mestradopy/tools/aquisicao_ruido_eeg.py (EEG cru, sem notch/bandpass,
+  4 condicoes padrao + E perto do desktop, marcadores/CSV/JSON) e
+  src/mestradopy/tools/analisa_ruido_eeg.py (PSD, 50/60Hz, harmonicos, banda
+  larga, RMS, correlacao entre canais).
+- Aquisicao de 23/11: 5x60s; E foi na verdade monitor LIGADO + ~0,3m do
+  desktop (nao monitor desligado).
+- RESULTADO: 60Hz dominante em TODAS as condicoes.
+  * A-D: RMS60 84-99 uV; RMS50 1,6-1,7 uV; sem diferenca clara monitor on/off
+    a ~1m (A 98,8 vs B 94,9; C 88,2 vs D 83,7).
+  * E: RMS60 1469,6 uV (~15x), RMS50 9,6 uV, std 1554 uV, p99.9 |x| 3035 uV,
+    + banda larga 40-80Hz (PSD 40-55=47,7 vs ~3,4; 65-80=41,0 vs ~1,9).
+- CONCLUSAO: 60Hz de modo comum em todas as condicoes (rede/terra/referencia/
+  cabos), nao explicado apenas pelo monitor; perto do desktop ha agravamento
+  extremo com banda larga (desktop/fonte/GPU). Recomendado corrigir
+  referencia/terra, afastar cap/cabos, repetir E com monitor realmente off e
+  F com monitor on perto.
+- Relatorio: docs/validation/RUIDO_EEG_CRU_20261123.md.
