@@ -54,6 +54,23 @@ $comando = @(
     "--pasta-saida", $PastaSaida
 )
 
+# Feedback online: s01 calibra no bloco 1; s02 adapta; s03 congelado.
+$modeloDir = Join-Path $raiz "outputs\visao\lr_adaptativo"
+New-Item -ItemType Directory -Force -Path $modeloDir | Out-Null
+$comando += @("--feedback", "online")
+if ($Sessao -eq "01") {
+    $comando += @("--salvar-modelo", (Join-Path $modeloDir "modelo_s01.joblib"))
+} elseif ($Sessao -eq "02") {
+    $modelo01 = Join-Path $modeloDir "modelo_s01.joblib"
+    if (-not (Test-Path $modelo01)) { throw "Modelo s01 nao encontrado: $modelo01" }
+    $comando += @("--modelo", $modelo01,
+                  "--salvar-modelo", (Join-Path $modeloDir "modelo_s02.joblib"))
+} else {
+    $modelo02 = Join-Path $modeloDir "modelo_s02.joblib"
+    if (-not (Test-Path $modelo02)) { throw "Modelo s02 nao encontrado: $modelo02" }
+    $comando += @("--modelo", $modelo02, "--congelado")
+}
+
 & $py @comando 2>&1 | Tee-Object -FilePath (Join-Path $PastaSaida "log_aquisicao_s$Sessao.txt")
 if ($LASTEXITCODE -ne 0) { throw "Aquisicao falhou (exit $LASTEXITCODE)" }
 

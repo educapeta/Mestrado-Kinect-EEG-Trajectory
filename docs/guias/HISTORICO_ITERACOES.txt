@@ -10934,3 +10934,27 @@ ITEM 224 (19/11/2026) - TESTE PMBR (ERD/ERS) + PERMUTACAO LATE
 - CONCLUSAO: late 2-4 s nao tem sinal convincente; 0,567 compativel com ruido
   estruturado; nao mudar paradigma com base nisso.
 - Relatorio: docs/validation/PMBR_ERD_PERMUTACAO_20261119.md.
+
+================================================================================
+ITEM 225 (19/11/2026) - FEEDBACK ONLINE EM TEMPO REAL
+================================================================================
+- NOVO src/mestradopy/tools/feedback_online.py:
+  * EEGTap (gpype IONode) copia EEG filtrado para fila;
+  * OnlineFeedbackDecoder: buffer de 2 s estritamente dentro da MI, passo
+    0,25 s, 500->128 Hz, banda 8-30, CSP+LDA;
+  * score 2*P(direita)-1; calibracao no bloco 1; adaptacao ao fim de blocos;
+    modo congelado; save/load joblib; texto de barra para UI.
+- validacao_eeg_3classes.py:
+  * pipeline agora tem EEGTap antes do MarkerMuxer;
+  * UI Qt ganhou feedback_label; fase MI roda decoder online e atualiza barra;
+  * args --feedback {off,online}, --modelo, --salvar-modelo, --congelado;
+  * s01 calibra bloco1, s02 adapta, s03 congelado; modelo salvo no finalize.
+- scripts/aquisicao_lr_adaptativo.ps1 passa automaticamente as flags por sessao.
+- NOVO tests/manual/test_feedback_online.py: calibra 40 trials sinteticos,
+  fit, score, save/load -> FEEDBACK_ONLINE_OK.
+- EEGTap testado em pipeline gpype Generator: 422 blocos na fila.
+- scripts/verificar_preflight_lr.ps1 inclui o teste do decoder online;
+  PREFLIGHT OK -SkipCameras.
+- Docs: docs/guias/RUNBOOK_AQUISICAO_LR.md atualizado com feedback online.
+- Nao testado com g.Nautilus real ainda; primeiro teste de bancada e'
+  uma sessao curta de 2 blocos x10/classe.

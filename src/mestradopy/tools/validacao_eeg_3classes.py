@@ -50,6 +50,7 @@ from gpype.backend.sources.marker import Marker
 from gpype.common._private import channels
 from gpype.common.launch_config import LaunchConfig
 from gpype.backend.core.io_node import IONode
+from feedback_online import EEGTap, OnlineFeedbackDecoder
 
 # Tentativa de importar PySide6 para UI opcional
 try:
@@ -309,6 +310,8 @@ class AcquisitionPipeline:
         self.source_node = None
         self.marker_node = None
         self.csv_writer = None
+        self.eeg_tap = None
+        self.eeg_queue = queue.Queue(maxsize=2000)
         self._running = False
         self._synthetic_gen = SyntheticEEGGenerator(
             sampling_rate=sampling_rate,
@@ -370,13 +373,15 @@ class AcquisitionPipeline:
         self._marker_queue = queue.Queue()
         self.marker_node = MarkerMuxer(self._marker_queue,
                                        hold_samples=1)
+        self.eeg_tap = EEGTap(self.eeg_queue)
         self.csv_writer = CsvWriter(file_name=str(self.output_csv))
         
         # --- Conexões ---
         # Source -> Bandpass -> Notch -> MarkerMuxer -> CsvWriter
         self.pipeline.connect(self.source_node, bandpass)
         self.pipeline.connect(bandpass, notch)
-        self.pipeline.connect(notch, self.marker_node)
+        self.pipeline.connect(notch, self.eeg_tap)
+        self.pipeline.connect(self.eeg_tap, self.marker_node)
         self.pipeline.connect(self.marker_node, self.csv_writer)
         
         return self.pipeline
@@ -463,6 +468,7 @@ class MI3ClassParadigm:
         impedance_limit_kohm: float = 50.0,
         classes: Optional[List[str]] = None,
         baseline_eyes_sec: float = 0.0,
+        feedback: Optional[OnlineFeedbackDecoder] = None,
     ):
         self.pipeline = pipeline
         self.n_blocks = n_blocks
@@ -482,6 +488,8 @@ class MI3ClassParadigm:
         self.impedance_limit_kohm = impedance_limit_kohm
         self.classes = list(classes) if classes else CLASS_NAMES.copy()
         self.baseline_eyes_sec = float(baseline_eyes_sec)
+        self.feedback = feedback
+        self.feedback_label = None
         
         self._running = False
         self._aborted = False
@@ -596,6 +604,12 @@ class MI3ClassParadigm:
         self.label.setStyleSheet("font-size: 48px; font-weight: bold;")
         layout.addWidget(self.label)
         
+        self.feedback_label = QLabel("")
+        self.feedback_label.setAlignment(Qt.AlignCenter)
+        self.feedback_label.setStyleSheet(
+            "font-size: 28px; color: #00cc66; font-family: monospace;")
+        layout.addWidget(self.feedback_label)
+        
         self.window.setCentralWidget(central)
         self.window.showFullScreen()
         
@@ -667,6 +681,8 @@ class MI3ClassParadigm:
                 # Fim do bloco
                 self.pipeline.emit_marker("block_end")
                 self._log_event("block_end", {"block": block_idx + 1})
+                if self.feedback is not None:
+                    self.feedback.finish_block()
                 
                 # Pausa entre blocos (exceto último)
                 if block_idx < self.n_blocks - 1 and not self._aborted:
@@ -742,7 +758,9 @@ class MI3ClassParadigm:
             texto_mi = "IMAGINE\n\nMão " + class_label.upper()
         self.pipeline.emit_marker("mi_start")
         self._log_event("mi_start", {"class": class_label})
-        if not self.headless:
+        if self.feedback is not None and class_label in ("esquerda", "direita"):
+            self._run_mi_feedback(texto_mi, class_label)
+        elif not self.headless:
             self._show_text(texto_mi, duration=self.mi_sec)
         else:
             self._wait_with_abort_check(self.mi_sec)
@@ -755,6 +773,27 @@ class MI3ClassParadigm:
         
         self._log_event("trial_end", {"trial": trial_num, "class": class_label})
     
+    def _run_mi_feedback(self, texto: str, class_label: str) -> None:
+        """MI com decoder online e feedback visual."""
+        if not self.headless:
+            self._show_text(texto, duration=None)
+        if self.feedback is not None:
+            coletar = not getattr(self.feedback, "congelado", False)
+            self.feedback.begin_trial(class_label, collect=coletar)
+        fim = time.monotonic() + self.mi_sec
+        while time.monotonic() < fim and not self._aborted:
+            if self.feedback is not None:
+                self.feedback.update()
+                if self.feedback_label is not None:
+                    self.feedback_label.setText(self.feedback.score_texto())
+            if not self.headless and self.app is not None:
+                self.app.processEvents()
+            time.sleep(0.02)
+        if self.feedback is not None:
+            self.feedback.end_trial()
+        if self.feedback_label is not None:
+            self.feedback_label.setText("")
+
     def _get_cue_text(self, class_label: str) -> str:
         """Retorna texto do cue visual."""
         if class_label == "esquerda":
@@ -808,6 +847,9 @@ class MI3ClassParadigm:
         
         # Para pipeline
         self.pipeline.stop()
+        
+        if self.feedback is not None:
+            self.feedback.save()
         
         # Salva JSON de eventos
         json_path = self.output_dir / f"eventos_{self.subject_id}_s{self.session_id}_{datetime.now().strftime('%Y%m%d_%H%M%S')}.json"
@@ -1064,6 +1106,14 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--bp-low", type=float, default=0.5, help="Highpass (Hz)")
     parser.add_argument("--bp-high", type=float, default=40.0, help="Lowpass (Hz)")
     parser.add_argument("--oscar", action="store_true", help="Ativar OSCAR (remoção de artefatos)")
+    parser.add_argument("--feedback", choices=["off", "online"], default="off",
+                        help="Feedback visual em tempo real (apenas gnautilus)")
+    parser.add_argument("--modelo", type=Path, default=None,
+                        help="Modelo .joblib a carregar para feedback online")
+    parser.add_argument("--salvar-modelo", type=Path, default=None,
+                        help="Caminho para salvar o modelo adaptado")
+    parser.add_argument("--congelado", action="store_true",
+                        help="Teste congelado: nao adapta o decoder")
     
     return parser.parse_args()
 
@@ -1109,6 +1159,20 @@ def main() -> int:
         enable_oscar=args.oscar,
     )
     
+    feedback = None
+    if args.feedback == "online":
+        if args.source != "gnautilus":
+            print("[AVISO] feedback online so' funciona com --source gnautilus; ignorando")
+        else:
+            mode = ("frozen" if args.congelado else
+                    ("adaptive" if args.modelo else "calibration"))
+            feedback = OnlineFeedbackDecoder(
+                pipeline.eeg_queue, mode=mode, model_path=args.modelo,
+                salvar_modelo=args.salvar_modelo,
+                congelado=bool(args.congelado))
+            print(f"[online] modo={mode} modelo={args.modelo} "
+                  f"salvar={args.salvar_modelo} congelado={args.congelado}")
+    
     # Cria paradigma
     paradigm = MI3ClassParadigm(
         pipeline=pipeline,
@@ -1129,6 +1193,7 @@ def main() -> int:
         impedance_limit_kohm=args.limite_impedancia,
         classes=[c.strip() for c in args.classes.split(",") if c.strip()],
         baseline_eyes_sec=args.baseline_olhos_sec,
+        feedback=feedback,
     )
     
     # Executa

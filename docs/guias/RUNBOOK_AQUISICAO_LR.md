@@ -32,6 +32,21 @@ Não iniciar a sessão se qualquer critério falhar.
 
 ---
 
+## Feedback online (novo)
+
+A aquisição agora abre o feedback online junto com o protocolo:
+
+- **s01:** bloco 1 é calibração (CSP+LDA); o bloco 2 já mostra o feedback e o
+  modelo é salvo em `outputs/visao/lr_adaptativo/modelo_s01.joblib`;
+- **s02:** carrega o modelo s01, mostra feedback nos dois blocos e adapta ao
+  fim de cada bloco; salva `modelo_s02.joblib`;
+- **s03:** carrega o modelo s02 e roda **congelado**; sem adaptação.
+
+Na tela aparecem: cue, texto da MI e a barra de feedback
+(`ESQUERDA ... DIREITA`, score e p(dir)). O decoder só vê janelas de 2 s
+dentro da MI; nenhuma janela atravessa ME→MI. O `rodar_feedback_lr.ps1`
+continua disponível para consolidar o relatório offline depois da sessão.
+
 ## 1. Sessão 01 — treino adaptativo
 
 ```powershell
