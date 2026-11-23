@@ -11026,3 +11026,17 @@ ITEM 229 (23/11/2026) - ANALISE DE RUIDO EEG CRU (5 CONDICOES)
   referencia/terra, afastar cap/cabos, repetir E com monitor realmente off e
   F com monitor on perto.
 - Relatorio: docs/validation/RUIDO_EEG_CRU_20261123.md.
+
+================================================================================
+ITEM 230 (23/11/2026) - PERFIL LAPTOP PARA TESTE DE RUIDO
+================================================================================
+- aquisicao_ruido_eeg.py ganhou --perfil {desktop,laptop}.
+- Perfil laptop:
+  A: bateria, longe do desktop
+  B: bateria, perto do desktop
+  C: tomada, longe do desktop
+  D: tomada, perto do desktop
+  E: bateria, perto do desktop com tela/monitor ligado
+- Teste sintetico do perfil laptop OK; metadados das condicoes corretos.
+- Objetivo: rodar no laptop com dongle local, bateria vs tomada e distancia do
+  desktop, para isolar falta de terra/fonte chaveada.

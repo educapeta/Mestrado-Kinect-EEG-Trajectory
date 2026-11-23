@@ -42,13 +42,23 @@ PORT_OUT = Constants.Defaults.PORT_OUT
 FS = 500.0
 N_CH = 32
 
-CONDICOES = [
-    ("A", 1, "monitor LIGADO, posicao normal"),
-    ("B", 2, "monitor DESLIGADO, posicao normal"),
-    ("C", 3, "monitor LIGADO, afastado ~1 m"),
-    ("D", 4, "monitor DESLIGADO, afastado ~1 m"),
-    ("E", 5, "monitor DESLIGADO, MUITO perto do desktop (~0,3 m)"),
-]
+PERFIS = {
+    "desktop": [
+        ("A", 1, "monitor LIGADO, posicao normal"),
+        ("B", 2, "monitor DESLIGADO, posicao normal"),
+        ("C", 3, "monitor LIGADO, afastado ~1 m"),
+        ("D", 4, "monitor DESLIGADO, afastado ~1 m"),
+        ("E", 5, "monitor LIGADO, MUITO perto do desktop (~0,3 m)"),
+    ],
+    "laptop": [
+        ("A", 1, "laptop na BATERIA, longe do desktop"),
+        ("B", 2, "laptop na BATERIA, perto do desktop"),
+        ("C", 3, "laptop na TOMADA, longe do desktop"),
+        ("D", 4, "laptop na TOMADA, perto do desktop"),
+        ("E", 5, "laptop na BATERIA, perto do desktop e monitor/tela LIGADA"),
+    ],
+}
+CONDICOES = PERFIS["desktop"]
 
 
 class MarkerMuxer(IONode):
@@ -95,6 +105,8 @@ def main() -> int:
     ap.add_argument("--saida", type=Path, default=Path("outputs/eeg/ruido_bruto"))
     ap.add_argument("--duracao", type=float, default=60.0,
                     help="segundos por condição")
+    ap.add_argument("--perfil", choices=["desktop", "laptop"], default="desktop",
+                    help="conjunto de condições A-E")
     ap.add_argument("--condicoes", default="A,B,C,D,E",
                     help="quais condições executar")
     ap.add_argument("--test-generator", action="store_true",
@@ -117,7 +129,8 @@ def main() -> int:
     pipeline.connect(mux, writer)
 
     desejadas = [c.strip().upper() for c in args.condicoes.split(",") if c.strip()]
-    selecionadas = [c for c in CONDICOES if c[0] in desejadas]
+    perfil = PERFIS[args.perfil]
+    selecionadas = [c for c in perfil if c[0] in desejadas]
     if not selecionadas:
         print("nenhuma condição válida")
         return 2
