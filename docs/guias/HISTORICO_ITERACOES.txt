@@ -10978,3 +10978,13 @@ ITEM 226 (23/11/2026) - PRIMEIRA SESSAO COM FEEDBACK ONLINE (s01)
   n=20/bloco, IC largo; falta s02 (adaptativa) e s03 (congelada).
 - Relatorio: docs/validation/FEEDBACK_ONLINE_S01_20261123.md.
 - Modelo: outputs/visao/lr_adaptativo/modelo_s01.joblib (limiar ~0,0595).
+
+================================================================================
+ITEM 227 (23/11/2026) - PAUSA ENTRE BLOCOS POR ESPACO + BARRA MAIOR
+================================================================================
+- validacao_eeg_3classes.py: pausa entre blocos agora e' indefinida ate ESPACO
+  (GUI); headless mantem 10 s. Event filter _SpaceCatcher na janela Qt.
+- Pausa usa loop com processEvents; nao bloqueia thread Qt.
+- feedback_label aumentado de 28px para 36px.
+- Runbook/protocolo atualizados (sem 2 min fixos).
+- Teste de compilacao OK.

@@ -33,7 +33,7 @@ o efeito do treino sem vazamento.
 |---|---|
 | sessÃµes por participante | **3** |
 | trials/classe por sessÃ£o | **20** (total de 40 trials/sessÃ£o) |
-| blocos por sessÃ£o | **2** (pausa de 2 min entre eles) |
+| blocos por sessÃ£o | **2** (pausa entre blocos indefinida até pressionar ESPAÇO) |
 | trials/classe por bloco | **10** |
 | total | **60 trials/classe** (120 trials) em 3 sessÃµes |
 | sessÃµes de treino adaptativo | sessÃµes 1 e 2 |
@@ -267,3 +267,4 @@ powershell -NoProfile -ExecutionPolicy Bypass -File .\scripts\verificar_prefligh
 
 O passo a passo completo (sessões 01/02/03, feedback, critérios e checklist)
 está em `docs/guias/RUNBOOK_AQUISICAO_LR.md`.
+

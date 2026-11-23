@@ -54,7 +54,7 @@ from feedback_online import EEGTap, OnlineFeedbackDecoder
 
 # Tentativa de importar PySide6 para UI opcional
 try:
-    from PySide6.QtCore import QObject, QTimer, Qt
+    from PySide6.QtCore import QObject, QTimer, Qt, QEvent
     from PySide6.QtWidgets import QApplication, QLabel, QMainWindow, QVBoxLayout, QWidget
     PYSIDE6_AVAILABLE = True
 except ImportError:
@@ -131,6 +131,23 @@ SYNTHETIC_CLASS_PATTERNS = {
 # =============================================================================
 # GERADOR DE EEG SINTÉTICO COM CLASSES CONHECIDAS
 # =============================================================================
+
+class _SpaceCatcher(QObject):
+    """Event filter que detecta ESPACO na janela Qt."""
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.pressed = False
+
+    def eventFilter(self, obj, event):
+        try:
+            if event.type() == QEvent.KeyPress and event.key() == Qt.Key_Space:
+                self.pressed = True
+                return True
+        except Exception:
+            pass
+        return False
+
 
 class SyntheticEEGGenerator:
     """
@@ -490,6 +507,7 @@ class MI3ClassParadigm:
         self.baseline_eyes_sec = float(baseline_eyes_sec)
         self.feedback = feedback
         self.feedback_label = None
+        self._space_catcher = None
         
         self._running = False
         self._aborted = False
@@ -607,7 +625,7 @@ class MI3ClassParadigm:
         self.feedback_label = QLabel("")
         self.feedback_label.setAlignment(Qt.AlignCenter)
         self.feedback_label.setStyleSheet(
-            "font-size: 28px; color: #00cc66; font-family: monospace;")
+            "font-size: 36px; color: #00cc66; font-family: monospace;")
         layout.addWidget(self.feedback_label)
         
         self.window.setCentralWidget(central)
@@ -686,9 +704,10 @@ class MI3ClassParadigm:
                 
                 # Pausa entre blocos (exceto último)
                 if block_idx < self.n_blocks - 1 and not self._aborted:
-                    pause_sec = 10.0  # pausa curta, sem tecla; ESC/Ctrl+C aborta
-                    self._show_text(f"FIM DO BLOCO {block_idx + 1}\n"
-                                    f"Pausa de {pause_sec:.0f}s", duration=pause_sec)
+                    self._show_text(f"FIM DO BLOCO {block_idx + 1}\n\n"
+                                    "Pressione ESPACO quando estiver pronto",
+                                    duration=None)
+                    self._wait_space_da_pausa()
             
         except Exception as e:
             print(f"[ERRO] Exceção no loop de blocos: {e}")
@@ -698,6 +717,20 @@ class MI3ClassParadigm:
         finally:
             self._running = False
     
+    def _wait_space_da_pausa(self) -> None:
+        """Pausa indefinida entre blocos ate ESPACO (GUI) ou 10 s no headless."""
+        if self.headless or self._space_catcher is None:
+            self._wait_with_abort_check(10.0)
+            return
+        self._space_catcher.pressed = False
+        while (self._running and not self._aborted
+               and not self._space_catcher.pressed):
+            if self.app is not None:
+                self.app.processEvents()
+            time.sleep(0.02)
+        self._space_catcher.pressed = False
+        self._show_text("RETOMANDO...", duration=0.5)
+
     def _run_trial(self, block_idx: int, trial_idx: int, class_label: str, block_trials: List[str]):
         """Executa um único trial."""
         trial_num = self._current_trial

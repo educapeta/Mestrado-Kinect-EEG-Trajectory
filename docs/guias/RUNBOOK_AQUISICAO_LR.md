@@ -1,19 +1,19 @@
-# Runbook de aquisição — protocolo L/R adaptativo
+﻿# Runbook de aquisiÃ§Ã£o â€” protocolo L/R adaptativo
 
-**Versão:** 19/11/2026
+**VersÃ£o:** 19/11/2026
 **Protocolo:** `docs/guias/PROTOCOLO_TREINO_LR_ADAPTATIVO.md`
-**Objetivo:** 3 sessões × 20 trials/classe (2 blocos de 10), sendo s01–s02 de treino adaptativo e s03 de teste congelado.
+**Objetivo:** 3 sessÃµes Ã— 20 trials/classe (2 blocos de 10), sendo s01â€“s02 de treino adaptativo e s03 de teste congelado.
 
 ---
 
-## 0. Antes da primeira sessão
+## 0. Antes da primeira sessÃ£o
 
-1. Fechar **gRecorder/GtecSuite** (o g.Nautilus só entrega dados com o receptor livre).
+1. Fechar **gRecorder/GtecSuite** (o g.Nautilus sÃ³ entrega dados com o receptor livre).
 2. Conferir:
    - Kinect conectado;
    - aux0 SIGMA e aux1 Trust conectadas;
    - luz de bancada suficiente;
-   - espaço em disco (vídeos vão para `F:`).
+   - espaÃ§o em disco (vÃ­deos vÃ£o para `F:`).
 3. Rodar o preflight:
 
 ```powershell
@@ -21,44 +21,44 @@ cd C:\mestradopy
 powershell -NoProfile -ExecutionPolicy Bypass -File .\scripts\verificar_preflight_lr.ps1
 ```
 
-Critérios:
+CritÃ©rios:
 - `RAIZ_OK`;
-- calibração aux0/aux1 utilizável (RMS ≤ 2 px);
-- câmeras abrem na resolução calibrada;
-- plano do feedback = 3 sessões × 20/classe;
+- calibraÃ§Ã£o aux0/aux1 utilizÃ¡vel (RMS â‰¤ 2 px);
+- cÃ¢meras abrem na resoluÃ§Ã£o calibrada;
+- plano do feedback = 3 sessÃµes Ã— 20/classe;
 - testes `73/73` e `10/10`.
 
-Não iniciar a sessão se qualquer critério falhar.
+NÃ£o iniciar a sessÃ£o se qualquer critÃ©rio falhar.
 
 ---
 
 ## Feedback online (novo)
 
-A aquisição agora abre o feedback online junto com o protocolo:
+A aquisiÃ§Ã£o agora abre o feedback online junto com o protocolo:
 
-- **s01:** bloco 1 é calibração (CSP+LDA); o bloco 2 já mostra o feedback e o
-  modelo é salvo em `outputs/visao/lr_adaptativo/modelo_s01.joblib`;
+- **s01:** bloco 1 Ã© calibraÃ§Ã£o (CSP+LDA); o bloco 2 jÃ¡ mostra o feedback e o
+  modelo Ã© salvo em `outputs/visao/lr_adaptativo/modelo_s01.joblib`;
 - **s02:** carrega o modelo s01, mostra feedback nos dois blocos e adapta ao
   fim de cada bloco; salva `modelo_s02.joblib`;
-- **s03:** carrega o modelo s02 e roda **congelado**; sem adaptação.
+- **s03:** carrega o modelo s02 e roda **congelado**; sem adaptaÃ§Ã£o.
 
 Na tela aparecem: cue, texto da MI e a barra de feedback
-(`ESQUERDA ... DIREITA`, score e p(dir)). O decoder só vê janelas de 2 s
-dentro da MI; nenhuma janela atravessa ME→MI. O `rodar_feedback_lr.ps1`
-continua disponível para consolidar o relatório offline depois da sessão.
+(`ESQUERDA ... DIREITA`, score e p(dir)). O decoder sÃ³ vÃª janelas de 2 s
+dentro da MI; nenhuma janela atravessa MEâ†’MI. O `rodar_feedback_lr.ps1`
+continua disponÃ­vel para consolidar o relatÃ³rio offline depois da sessÃ£o.
 
-## 1. Sessão 01 — treino adaptativo
+## 1. SessÃ£o 01 â€” treino adaptativo
 
 ```powershell
 .\scripts\aquisicao_lr_adaptativo.ps1 -Sessao 01 -Sujeito S01
 ```
 
 Durante:
-- trial: cue 1 s → ME 4 s → transição 1 s → MI 4 s → ITI;
-- 2 blocos × 10/classe = 20/classe;
-- pausa de 2 min entre blocos;
-- não conversar/mexer durante MI;
-- anotar estratégia e fadiga no questionário.
+- trial: cue 1 s â†’ ME 4 s â†’ transiÃ§Ã£o 1 s â†’ MI 4 s â†’ ITI;
+- 2 blocos Ã— 10/classe = 20/classe;
+- pausa entre blocos indefinida até pressionar **ESPAÇO**;
+- nÃ£o conversar/mexer durante MI;
+- anotar estratÃ©gia e fadiga no questionÃ¡rio.
 
 Depois:
 
@@ -72,11 +72,11 @@ Depois:
 Guardar:
 - `outputs/eeg/lr_adaptativo_s01/` (CSV + JSON + log);
 - `outputs/visao/lr_adaptativo/modelo_s01.joblib`;
-- relatório do feedback.
+- relatÃ³rio do feedback.
 
 ---
 
-## 2. Sessão 02 — treino adaptativo (continuação)
+## 2. SessÃ£o 02 â€” treino adaptativo (continuaÃ§Ã£o)
 
 ```powershell
 .\scripts\aquisicao_lr_adaptativo.ps1 -Sessao 02 -Sujeito S01
@@ -94,9 +94,9 @@ Depois:
 
 ---
 
-## 3. Sessão 03 — teste congelado
+## 3. SessÃ£o 03 â€” teste congelado
 
-Mesma aquisição, mas **sem adaptação** depois:
+Mesma aquisiÃ§Ã£o, mas **sem adaptaÃ§Ã£o** depois:
 
 ```powershell
 .\scripts\aquisicao_lr_adaptativo.ps1 -Sessao 03 -Sujeito S01
@@ -111,29 +111,30 @@ Depois:
   -Modelo outputs\visao\lr_adaptativo\modelo_s02.joblib
 ```
 
-Critérios pré-fixados:
-- respondedor: BA ≥ 0,55 com IC95% inferior ≥ 0,55;
-- sucesso: BA ≥ 0,65;
-- não-respondedor: IC95% inferior < 0,55 → revisar estratégia/ERD antes de continuar.
+CritÃ©rios prÃ©-fixados:
+- respondedor: BA â‰¥ 0,55 com IC95% inferior â‰¥ 0,55;
+- sucesso: BA â‰¥ 0,65;
+- nÃ£o-respondedor: IC95% inferior < 0,55 â†’ revisar estratÃ©gia/ERD antes de continuar.
 
 ---
 
-## 4. Checklist pós-sessão
+## 4. Checklist pÃ³s-sessÃ£o
 
-- [ ] n trials/classe = 20 (2 blocos × 10);
+- [ ] n trials/classe = 20 (2 blocos Ã— 10);
 - [ ] marcadores 768/769/770/778/779/780/781/790/791 presentes;
 - [ ] nenhum bloco abortado;
-- [ ] questionário de estratégia preenchido;
+- [ ] questionÃ¡rio de estratÃ©gia preenchido;
 - [ ] modelo salvo apenas em s01/s02;
 - [ ] s03 avaliada com modelo congelado;
 - [ ] CSV/JSON/log copiados para o backup do projeto;
-- [ ] registrar data/hora, fadiga e intercorrências no histórico.
+- [ ] registrar data/hora, fadiga e intercorrÃªncias no histÃ³rico.
 
 ---
 
-## 5. Critério para a próxima sessão
+## 5. CritÃ©rio para a prÃ³xima sessÃ£o
 
-- se BA do bloco anterior ≥ 0,55 e IC inferior ≥ 0,45: seguir o plano;
-- se BA < 0,50 por dois blocos: pausar, revisar estratégia/ERD e considerar não-respondedor;
-- não aumentar trials/classe nem rodar 60 em sequência;
-- não usar s03 para treinar/adaptar.
+- se BA do bloco anterior â‰¥ 0,55 e IC inferior â‰¥ 0,45: seguir o plano;
+- se BA < 0,50 por dois blocos: pausar, revisar estratÃ©gia/ERD e considerar nÃ£o-respondedor;
+- nÃ£o aumentar trials/classe nem rodar 60 em sequÃªncia;
+- nÃ£o usar s03 para treinar/adaptar.
+
