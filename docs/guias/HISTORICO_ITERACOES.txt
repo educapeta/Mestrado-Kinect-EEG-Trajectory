@@ -11040,3 +11040,18 @@ ITEM 230 (23/11/2026) - PERFIL LAPTOP PARA TESTE DE RUIDO
 - Teste sintetico do perfil laptop OK; metadados das condicoes corretos.
 - Objetivo: rodar no laptop com dongle local, bateria vs tomada e distancia do
   desktop, para isolar falta de terra/fonte chaveada.
+
+================================================================================
+ITEM 231 (23/11/2026) - REVISAO INDEPENDENTE DA BRANCH DE RUIDO
+================================================================================
+- Branch resultados/ruido-eeg-20261123 revisada; amostras de 10s recalculadas.
+- Confirmado congelamento da sessao1 em C/D/E (std=0); validas A/B.
+- Sessao2 C/D/E validas; 60Hz modo comum com corr 59-61Hz +0,99.
+- D(tomada)->E(bateria): RMS60 1727->96,7 uV (17,9x menor), RMS50 5,35->1,84.
+- A->B (bateria, longe->perto): 4,6x pior; C->D (tomada): 1,8x pior.
+- Banda larga 40-80 do B (200/159) nao reproduziu -> achado isolado.
+- Limitacoes: sem sessao unica A-E; tela nao registrada; uma repeticao;
+  ordem fixa; sem watchdog de enlace.
+- Proximo: sessao unica com A-E repetidos/randomizados, F (bateria+perto+tela
+  off), D<->E alternado, watchdog de std/fluxo.
+- Relatorio: docs/validation/REVISAO_BRANCH_RUIDO_20261123.md.
