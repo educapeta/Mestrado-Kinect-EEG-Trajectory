@@ -850,6 +850,10 @@ class MI3ClassParadigm:
         
         if self.feedback is not None:
             self.feedback.save()
+            try:
+                self.feedback.save_log(self.output_dir / "feedback_online.json")
+            except Exception as exc:              # noqa: BLE001
+                print(f"[online] aviso ao salvar log: {exc}")
         
         # Salva JSON de eventos
         json_path = self.output_dir / f"eventos_{self.subject_id}_s{self.session_id}_{datetime.now().strftime('%Y%m%d_%H%M%S')}.json"

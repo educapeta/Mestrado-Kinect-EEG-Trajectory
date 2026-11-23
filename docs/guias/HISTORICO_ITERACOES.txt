@@ -10958,3 +10958,23 @@ ITEM 225 (19/11/2026) - FEEDBACK ONLINE EM TEMPO REAL
 - Docs: docs/guias/RUNBOOK_AQUISICAO_LR.md atualizado com feedback online.
 - Nao testado com g.Nautilus real ainda; primeiro teste de bancada e'
   uma sessao curta de 2 blocos x10/classe.
+
+================================================================================
+ITEM 226 (23/11/2026) - PRIMEIRA SESSAO COM FEEDBACK ONLINE (s01)
+================================================================================
+- Aquisicao s01: 40/40 trials, 2 blocos x10/classe; bloco1 calibracao (160
+  janelas online), bloco2 feedback online; CSV/JSON/log e modelo salvos.
+- Correcoes pos-sessao:
+  * modelo online agora salva limiar calibrado (mediana L/R) e e' portavel
+    entre processos; modelo s01 reconstruido e recarregado com sucesso;
+  * feedback_online.py grava historico de scores em feedback_online.json;
+  * validacao_eeg_3classes.py salva o log online no finalize.
+- RESULTADO ONLINE (modelo salvo, sem retreino):
+  * bloco1 calibracao BA=0,600 (20 trials);
+  * bloco2 BA=0,500 (20 trials).
+- RETREINO OFFLINE da mesma sessao: bloco1 0,650 [0,417;0,850]; bloco2
+  0,550 [0,338;0,750].
+- CONCLUSAO: pipeline online funciona, mas o feedback nao melhorou o bloco2;
+  n=20/bloco, IC largo; falta s02 (adaptativa) e s03 (congelada).
+- Relatorio: docs/validation/FEEDBACK_ONLINE_S01_20261123.md.
+- Modelo: outputs/visao/lr_adaptativo/modelo_s01.joblib (limiar ~0,0595).

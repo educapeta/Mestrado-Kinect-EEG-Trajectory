@@ -14,10 +14,11 @@ Este modulo NAO abre hardware; e' integrado ao `validacao_eeg_3classes.py`.
 """
 from __future__ import annotations
 
+import json
 import queue
 import time
 from pathlib import Path
-from typing import List, Optional, Sequence, Tuple
+from typing import Dict, List, Optional, Sequence, Tuple
 
 import numpy as np
 from scipy.signal import butter, sosfiltfilt, resample_poly
@@ -105,6 +106,7 @@ class OnlineFeedbackDecoder:
         self.congelado = bool(congelado)
         self.verbose = bool(verbose)
         self.pipeline = None
+        self.limiar = 0.0
         self.buffer = np.zeros((0, len(CH_OWN)), np.float64)
         self._last_eval_n = 0
         self._label: Optional[int] = None
@@ -115,6 +117,7 @@ class OnlineFeedbackDecoder:
         self.last_score: Optional[float] = None
         self.last_p_right: Optional[float] = None
         self.n_updates = 0
+        self.history: List[Dict] = []
         if self.model_path and self.model_path.is_file():
             self.load(self.model_path)
 
@@ -174,7 +177,11 @@ class OnlineFeedbackDecoder:
         if self.ready:
             prob = self.pipeline.predict_proba(x.reshape(1, 3, -1))[0]
             self.last_p_right = float(prob[1])
-            self.last_score = float(2.0 * prob[1] - 1.0)
+            self.last_score = float(2.0 * prob[1] - 1.0) - float(self.limiar)
+            self.history.append({
+                "t": round(float(time.time()), 3),
+                "label": self._label, "score": round(self.last_score, 4),
+                "p_right": round(self.last_p_right, 4)})
         return self.last_score
 
     def end_trial(self) -> List[np.ndarray]:
@@ -199,6 +206,16 @@ class OnlineFeedbackDecoder:
         y = np.asarray(self._y, int)
         self.pipeline = _pipeline()
         self.pipeline.fit(X, y)
+        # limiar que equilibra as classes na calibracao (mediana L/R)
+        try:
+            proba = self.pipeline.predict_proba(X)[:, 1]
+            scores = 2.0 * proba - 1.0
+            esq = scores[y == 0]; dir_ = scores[y == 1]
+            if len(esq) and len(dir_):
+                self.limiar = float((float(np.median(esq)) +
+                                     float(np.median(dir_))) / 2.0)
+        except Exception:
+            self.limiar = 0.0
         if self.verbose:
             print(f"[online] modelo CSP+LDA ajustado com {len(y)} janelas")
         return True
@@ -218,8 +235,9 @@ class OnlineFeedbackDecoder:
             return None
         import joblib
         self.salvar_modelo.parent.mkdir(parents=True, exist_ok=True)
-        joblib.dump({"pipeline": self.pipeline,
-                     "n_calibracao": len(self._y)}, self.salvar_modelo)
+        joblib.dump({"pipeline": self.pipeline, "limiar": float(self.limiar),
+                     "n_calibracao": len(self._y),
+                     "online": True}, self.salvar_modelo)
         if self.verbose:
             print(f"[online] modelo salvo em {self.salvar_modelo}")
         return self.salvar_modelo
@@ -229,6 +247,7 @@ class OnlineFeedbackDecoder:
         try:
             d = joblib.load(caminho)
             self.pipeline = d["pipeline"]
+            self.limiar = float(d.get("limiar", 0.0))
             if self.verbose:
                 print(f"[online] modelo carregado de {caminho}")
             return True
@@ -237,12 +256,24 @@ class OnlineFeedbackDecoder:
             self.pipeline = None
             return False
 
+    def save_log(self, caminho: Path) -> Optional[Path]:
+        """Grava historico de scores online (para auditoria do feedback)."""
+        if not self.history:
+            return None
+        caminho = Path(caminho)
+        caminho.parent.mkdir(parents=True, exist_ok=True)
+        caminho.write_text(json.dumps({"n_updates": len(self.history),
+                                        "scores": self.history},
+                                       indent=2, ensure_ascii=False),
+                           encoding="utf-8")
+        return caminho
+
     def score_texto(self) -> str:
         """Texto curto para a UI (barra proporcional)."""
         if not self.ready:
             return "CALIBRANDO...\n(mova a mao imaginada conforme o cue)"
         s = 0.0 if self.last_score is None else float(self.last_score)
-        # 21 posicoes; centro = 0
+        # 21 posicoes; centro = 0 (score ja subtraiu o limiar)
         pos = int(round((s + 1.0) * 10))
         barra = [" "] * 21
         barra[max(0, min(20, pos))] = "|"
