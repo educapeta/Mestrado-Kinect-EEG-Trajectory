@@ -1,0 +1,24 @@
+{
+  "n_trials": 120,
+  "n_windows": 600,
+  "window_samples": 256,
+  "channels": [
+    "C3",
+    "C4",
+    "Cz"
+  ],
+  "fs": 128,
+  "window_sec": 2.0,
+  "step_sec": 0.5,
+  "classes": {
+    "esquerda": 0,
+    "direita": 1
+  },
+  "n_classes": {
+    "0": 300,
+    "1": 300
+  },
+  "groups": "0..59=s01; 60..119=s02",
+  "folds": "docs/validation/folds_piloto_groupkf.json",
+  "preprocess": "4-40Hz, resample 128Hz, windows 2s step0.5, MI start 780"
+}
