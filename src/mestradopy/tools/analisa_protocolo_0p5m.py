@@ -45,12 +45,23 @@ def main() -> int:
     rows = []
     with open(args.traj, encoding="utf-8") as f:
         for r in csv.DictReader(f):
-            if r.get("lado") != args.lado:
-                continue
             rows.append(r)
     if not rows:
-        raise SystemExit(f"nenhuma linha para lado={args.lado}")
-    print(f"lado={args.lado} frames={len(rows)}")
+        raise SystemExit("CSV de trajetoria vazio")
+
+    lados = sorted({r.get("lado") for r in rows if r.get("lado")})
+    lado = args.lado
+    if lado not in lados:
+        # A lateralidade do MediaPipe pode sair invertida (frame espelhado).
+        # Nao invente: use o unico lado que realmente foi gravado.
+        preferido = [x for x in lados if x in ("right", "left")]
+        if not preferido:
+            raise SystemExit(f"lados no CSV: {lados}")
+        lado = preferido[0]
+        print(f"[aviso] lado={args.lado!r} sem linhas; usando lado={lado!r} "
+              f"(lados disponiveis: {lados})")
+    rows = [r for r in rows if r.get("lado") == lado]
+    print(f"lado={lado} frames={len(rows)}")
 
     def por_fase(fase):
         return [r for r in rows if r["fase"] == fase]
