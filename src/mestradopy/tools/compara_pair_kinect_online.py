@@ -330,6 +330,7 @@ def main() -> int:
                   "O banner no video mostrara quando mover.", flush=True)
             print(f"[debug] LOOP inicio duracao={args.duracao}s", flush=True)
         color_ausente_warned = False
+        diag_last = 0.0
         while args.duracao <= 0 or (time.time() - t0) < args.duracao:
             color, depth = tracker.frames()
             if color is None:
@@ -387,6 +388,15 @@ def main() -> int:
                     views[indices[0]], views[indices[1]], gt)
             else:
                 casadas, _ = _casa_maos(dets[indices[0]], dets[indices[1]])
+            if args.protocolo_0p5m and time.time() - diag_last > 1.0:
+                diag_last = time.time()
+                a0 = [(getattr(d, "side", "?"), round(float(getattr(d, "confidence", 0.0)), 2))
+                      for d in dets[indices[0]]]
+                a1 = [(getattr(d, "side", "?"), round(float(getattr(d, "confidence", 0.0)), 2))
+                      for d in dets[indices[1]]]
+                print(f"[diag] fase={fase_atual} aux0={a0} aux1={a1} "
+                      f"casadas={[x[0] for x in casadas]} "
+                      f"kinect={list(kin_por_lado.keys())}", flush=True)
             for lado, d0, d1 in casadas:
                 if lado not in ("right", "left"):
                     continue
@@ -505,6 +515,13 @@ def main() -> int:
                 cv2.putText(kin_bgr, f"par vs Kinect | FPS "
                             f"{fps_atual:.1f}",
                             (10, kin_bgr.shape[0] - 12),
+                            cv2.FONT_HERSHEY_SIMPLEX, 0.55, (0, 255, 255),
+                            1, cv2.LINE_AA)
+            if args.protocolo_0p5m:
+                cv2.putText(kin_bgr,
+                            f"aux0={len(dets[indices[0]])} aux1={len(dets[indices[1]])} "
+                            f"par={len(casadas)} kin={len(kin_hands)}",
+                            (10, kin_bgr.shape[0] - 60),
                             cv2.FONT_HERSHEY_SIMPLEX, 0.55, (0, 255, 255),
                             1, cv2.LINE_AA)
             h = 360
