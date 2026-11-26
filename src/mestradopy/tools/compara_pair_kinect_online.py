@@ -159,7 +159,9 @@ def _resumo(vals):
 
 
 def _fase_0p5m(t: float) -> str:
-    """Fases do protocolo de deslocamento de 0,5 m."""
+    """Fases do protocolo de deslocamento de 0,5 m (t relativo ao inicio)."""
+    if t < 0:
+        return "PREPARACAO"
     if t < 5:
         return "A_parado"
     if t < 15:
@@ -169,6 +171,46 @@ def _fase_0p5m(t: float) -> str:
     if t < 30:
         return "volta_0p5m"
     return "A_retorno"
+
+
+def _banner_protocolo(img, t_rel: float) -> None:
+    """Banner grande com a acao atual e contagem regressiva."""
+    if t_rel < 0:
+        texto = "PREPARE-SE: MAO EM A"
+        restante = -t_rel
+    else:
+        fase = _fase_0p5m(t_rel)
+        if fase == "A_parado":
+            texto, restante = "MAO PARADA EM A", 5 - t_rel
+        elif fase == "ida_0p5m":
+            texto, restante = "MOVA A MAO PARA B  --->>>", 15 - t_rel
+        elif fase == "B_parado":
+            texto, restante = "MAO PARADA EM B", 20 - t_rel
+        elif fase == "volta_0p5m":
+            texto, restante = "<<<---  VOLTE PARA A", 30 - t_rel
+        else:
+            texto, restante = "MAO PARADA EM A", 35 - t_rel
+    h, w = img.shape[:2]
+    y0 = max(0, h // 2 - 55)
+    y1 = min(h, h // 2 + 55)
+    overlay = img.copy()
+    cv2.rectangle(overlay, (0, y0), (w, y1), (0, 0, 0), -1)
+    cv2.addWeighted(overlay, 0.72, img, 0.28, 0, img)
+    cv2.putText(img, texto, (20, h // 2 + 4),
+                cv2.FONT_HERSHEY_SIMPLEX, 0.95, (0, 255, 255), 2, cv2.LINE_AA)
+    cv2.putText(img, f"{max(0.0, restante):.1f}s", (w - 130, h // 2 + 4),
+                cv2.FONT_HERSHEY_SIMPLEX, 0.9, (255, 255, 255), 2, cv2.LINE_AA)
+    cv2.putText(img, "A = inicio | B = 0,5 m | mova devagar",
+                (20, y0 + 22), cv2.FONT_HERSHEY_SIMPLEX, 0.55,
+                (200, 220, 255), 1, cv2.LINE_AA)
+
+
+def _beep(freq: int, ms: int = 150) -> None:
+    try:
+        import winsound
+        winsound.Beep(int(freq), int(ms))
+    except Exception:
+        pass
 
 
 def main() -> int:
@@ -192,9 +234,11 @@ def main() -> int:
                     help="protocolo A->B 0,5 m->B->A; 35 s")
     ap.add_argument("--trajetoria-csv", type=Path,
                     default=Path("outputs/visao/protocolo_0p5m_traj.csv"))
+    ap.add_argument("--preparacao-sec", type=float, default=5.0,
+                    help="segundos de preparacao antes do protocolo 0,5 m")
     args = ap.parse_args()
     if args.protocolo_0p5m:
-        args.duracao = args.duracao or 35.0
+        args.duracao = args.duracao or (args.preparacao_sec + 35.0)
     indices = (int(args.aux[0]), int(args.aux[1]))
     alignment = gt.CameraAlignment(aux_indices=indices)
     views = {i: alignment.aux_view(i) for i in indices}
@@ -240,14 +284,20 @@ def main() -> int:
                 "par_x", "par_y", "par_z",
                 "kin_x", "kin_y", "kin_z",
                 "par_ok", "kin_ok"])
-            print("PROTOCOLO 0,5 m: 0-5s A parado | 5-15s A->B | "
-                  "15-20s B parado | 20-30s B->A | 30-35s A parado")
+            print("PROTOCOLO 0,5 m: preparacao de "
+                  f"{args.preparacao_sec:.0f}s; depois 0-5s A parado | "
+                  "5-15s A->B | 15-20s B parado | 20-30s B->A | "
+                  "30-35s A parado")
         t0 = time.time(); n = 0
+        last_fase = "PREPARACAO"
         last_fps_t = t0
         fps_atual = 0.0
         last_palm: Dict[str, np.ndarray] = {}
         rigidez: Dict[str, Dict[str, Dict[int, list]]] = {
             side: {"pair": {}, "kin": {}} for side in ("right", "left")}
+        if args.protocolo_0p5m:
+            print(f"Prepare-se: {args.preparacao_sec:.0f}s; mao em A. "
+                  "O banner no video mostrara quando mover.", flush=True)
         cv2.namedWindow("Comparador ONLINE: aux pair x Kinect", cv2.WINDOW_NORMAL)
         cv2.resizeWindow("Comparador ONLINE: aux pair x Kinect", 1280, 760)
         while args.duracao <= 0 or (time.time() - t0) < args.duracao:
@@ -269,6 +319,16 @@ def main() -> int:
             fps_atual = 1.0 / max(1e-6, now - last_fps_t)
             last_fps_t = now
             stamp = int(time.monotonic() * 1000)
+            fase_atual = _fase_0p5m(time.time() - t0 - args.preparacao_sec) if args.protocolo_0p5m else ""
+            if args.protocolo_0p5m and fase_atual != last_fase:
+                print(f"[PROTOCOLO] {fase_atual}", flush=True)
+                if fase_atual in ("ida_0p5m", "volta_0p5m"):
+                    _beep(880 if fase_atual == "ida_0p5m" else 660, 180)
+                elif fase_atual == "B_parado":
+                    _beep(1175, 120)
+                elif fase_atual == "A_retorno":
+                    _beep(440, 180)
+                last_fase = fase_atual
             dets: Dict[int, List[HandDetection]] = {}
             for k, i in enumerate(indices):
                 dets[i] = detector.detect(frames[k], f"aux{i}", stamp,
@@ -302,7 +362,7 @@ def main() -> int:
                                        alignment.kinect_dist)
                 # registro da trajetoria de deslocamento (punho)
                 if traj_writer is not None:
-                    elapsed = time.time() - t0
+                    elapsed = time.time() - t0 - args.preparacao_sec
                     fase = _fase_0p5m(elapsed)
                     pw = (pair_xyz[0] if pair_xyz is not None
                           and np.isfinite(pair_xyz[0]).all() else [np.nan]*3)
@@ -392,7 +452,7 @@ def main() -> int:
                         n_kin_fail, n_kin_map,
                         "" if pair_xyz is not None else "triangulacao_falhou"])
                 if args.protocolo_0p5m:
-                    cv2.putText(kin_bgr, f"FASE: {_fase_0p5m(time.time()-t0)}",
+                    cv2.putText(kin_bgr, f"FASE: {_fase_0p5m(time.time()-t0-args.preparacao_sec)}",
                                 (10, kin_bgr.shape[0] - 36),
                                 cv2.FONT_HERSHEY_SIMPLEX, 0.55, (0, 255, 255),
                                 1, cv2.LINE_AA)
@@ -407,6 +467,8 @@ def main() -> int:
                 esc = h / f.shape[0]
                 paineis.append(cv2.resize(f, (int(f.shape[1] * esc), h)))
             canvas = np.hstack(paineis)
+            if args.protocolo_0p5m:
+                _banner_protocolo(canvas, time.time() - t0 - args.preparacao_sec)
             cv2.imshow("Comparador ONLINE: aux pair x Kinect", canvas)
             n += 1
             if (cv2.waitKey(1) & 0xFF) in (27, ord("q")):
