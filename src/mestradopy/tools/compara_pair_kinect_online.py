@@ -249,6 +249,34 @@ def main() -> int:
     if args.dry_run:
         return 0
 
+    # Tela de espera ANTES de abrir cameras/tracker. O tracker do Kinect nao
+    # pode ficar sem consumir frames, senao bloqueia quando o protocolo comeca.
+    if args.protocolo_0p5m:
+        cv2.namedWindow("Comparador ONLINE: aux pair x Kinect", cv2.WINDOW_NORMAL)
+        cv2.resizeWindow("Comparador ONLINE: aux pair x Kinect", 1280, 760)
+        while True:
+            espera = np.zeros((480, 1200, 3), np.uint8)
+            cv2.putText(espera, "PRESSIONE ESPACO PARA INICIAR",
+                        (40, 210), cv2.FONT_HERSHEY_SIMPLEX,
+                        1.1, (0, 255, 255), 3, cv2.LINE_AA)
+            cv2.putText(espera, "Mao em A; B fica a 0,5 m de A",
+                        (40, 270), cv2.FONT_HERSHEY_SIMPLEX,
+                        0.8, (255, 255, 255), 2, cv2.LINE_AA)
+            cv2.putText(espera, "ESC/Q cancela",
+                        (40, 330), cv2.FONT_HERSHEY_SIMPLEX,
+                        0.7, (180, 180, 180), 1, cv2.LINE_AA)
+            cv2.imshow("Comparador ONLINE: aux pair x Kinect", espera)
+            key = cv2.waitKey(30) & 0xFF
+            if key == 32:
+                break
+            if key in (27, ord("q")):
+                return 0
+        print("[PROTOCOLO] INICIADO", flush=True)
+        cv2.putText(espera, "ABRINDO CAMERAS...", (40, 420),
+                    cv2.FONT_HERSHEY_SIMPLEX, 0.8, (0, 220, 0), 2, cv2.LINE_AA)
+        cv2.imshow("Comparador ONLINE: aux pair x Kinect", espera)
+        cv2.waitKey(1)
+
     caps = []
     tracker = None
     csv_file = None
@@ -260,12 +288,14 @@ def main() -> int:
             caps.append(_abre(i, _controle(args.exposicao, i),
                               _controle(args.ganho, i)))
         tracker = gt.KinectHandTracker(aux_indices=indices)
+        print("[debug] Kinect tracker pronto", flush=True)
         detector = MediaPipeHandDetector(
             num_hands=args.num_hands,
             min_detection_confidence=args.min_detection_confidence,
             min_presence_confidence=args.min_presence_confidence,
             min_tracking_confidence=args.min_tracking_confidence,
             verbose=False)
+        print("[debug] MediaPipe detector pronto", flush=True)
         args.csv.parent.mkdir(parents=True, exist_ok=True)
         csv_file = open(args.csv, "w", newline="", encoding="utf-8")
         writer = csv.writer(csv_file)
@@ -298,37 +328,14 @@ def main() -> int:
         if args.protocolo_0p5m:
             print(f"Prepare-se: {args.preparacao_sec:.0f}s; mao em A. "
                   "O banner no video mostrara quando mover.", flush=True)
-        cv2.namedWindow("Comparador ONLINE: aux pair x Kinect", cv2.WINDOW_NORMAL)
-        cv2.resizeWindow("Comparador ONLINE: aux pair x Kinect", 1280, 760)
-        if args.protocolo_0p5m:
-            # tela de espera: nada comeca ate o usuario confirmar
-            while True:
-                espera = np.zeros((480, 1200, 3), np.uint8)
-                cv2.putText(espera, "PRESSIONE ESPACO PARA INICIAR",
-                            (40, 210), cv2.FONT_HERSHEY_SIMPLEX,
-                            1.1, (0, 255, 255), 3, cv2.LINE_AA)
-                cv2.putText(espera, "Mao em A; B fica a 0,5 m de A",
-                            (40, 270), cv2.FONT_HERSHEY_SIMPLEX,
-                            0.8, (255, 255, 255), 2, cv2.LINE_AA)
-                cv2.putText(espera, "ESC/Q cancela",
-                            (40, 330), cv2.FONT_HERSHEY_SIMPLEX,
-                            0.7, (180, 180, 180), 1, cv2.LINE_AA)
-                cv2.imshow("Comparador ONLINE: aux pair x Kinect", espera)
-                key = cv2.waitKey(30) & 0xFF
-                if key == 32:   # ESPACO
-                    break
-                if key in (27, ord("q")):
-                    return 0
-            print("[PROTOCOLO] INICIADO", flush=True)
-            t0 = time.time()
-            last_fase = "PREPARACAO"
-        if args.protocolo_0p5m:
             print(f"[debug] LOOP inicio duracao={args.duracao}s", flush=True)
         while args.duracao <= 0 or (time.time() - t0) < args.duracao:
             color, depth = tracker.frames()
             if color is None:
                 time.sleep(0.01)
                 continue
+            if n == 0:
+                print("[debug] primeiro frame do loop de protocolo", flush=True)
             if color.ndim == 3 and color.shape[2] == 4:
                 kin_bgr = cv2.cvtColor(color, cv2.COLOR_BGRA2BGR)
             else:
