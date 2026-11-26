@@ -225,6 +225,10 @@ def main() -> int:
     ap.add_argument("--min-tracking-confidence", type=float, default=0.5)
     ap.add_argument("--pareamento", choices=("lateral", "geometrico"),
                     default="geometrico")
+    ap.add_argument("--lado-mao", choices=("auto", "right", "left"),
+                    default="auto",
+                    help="forca a lateralidade da mao no protocolo quando as "
+                         "auxiliares discordam (ex.: right)")
     ap.add_argument("--duracao", type=float, default=0.0)
     ap.add_argument("--csv", type=Path,
                     default=Path("outputs/visao/comparacao_pair_kinect.csv"))
@@ -388,11 +392,20 @@ def main() -> int:
                     views[indices[0]], views[indices[1]], gt)
             else:
                 casadas, _ = _casa_maos(dets[indices[0]], dets[indices[1]])
+            # Se as auxiliares discordam do lado (ou o casamento deu unknown),
+            # o operador informa a mao pretendida. Com uma deteccao por vista,
+            # o par geometrico e' valido e so' o rotulo estava errado.
+            if args.lado_mao != "auto":
+                if (not casadas and len(dets[indices[0]]) == 1
+                        and len(dets[indices[1]]) == 1):
+                    casadas = [("unknown", dets[indices[0]][0],
+                                dets[indices[1]][0])]
+                casadas = [(args.lado_mao, d0, d1) for _, d0, d1 in casadas]
             if args.protocolo_0p5m and time.time() - diag_last > 1.0:
                 diag_last = time.time()
-                a0 = [(getattr(d, "side", "?"), round(float(getattr(d, "confidence", 0.0)), 2))
+                a0 = [(getattr(d, "side", "?"), round(float(getattr(d, "score", 0.0)), 2))
                       for d in dets[indices[0]]]
-                a1 = [(getattr(d, "side", "?"), round(float(getattr(d, "confidence", 0.0)), 2))
+                a1 = [(getattr(d, "side", "?"), round(float(getattr(d, "score", 0.0)), 2))
                       for d in dets[indices[1]]]
                 print(f"[diag] fase={fase_atual} aux0={a0} aux1={a1} "
                       f"casadas={[x[0] for x in casadas]} "
