@@ -158,6 +158,19 @@ def _resumo(vals):
     return round(float(np.median(a)), 2), round(float(np.percentile(a, 90)), 2)
 
 
+def _fase_0p5m(t: float) -> str:
+    """Fases do protocolo de deslocamento de 0,5 m."""
+    if t < 5:
+        return "A_parado"
+    if t < 15:
+        return "ida_0p5m"
+    if t < 20:
+        return "B_parado"
+    if t < 30:
+        return "volta_0p5m"
+    return "A_retorno"
+
+
 def main() -> int:
     ap = argparse.ArgumentParser(description="Comparador online par aux vs Kinect")
     ap.add_argument("--aux", type=int, nargs=2, default=(0, 1))
@@ -175,7 +188,13 @@ def main() -> int:
                     default=Path("outputs/visao/comparacao_pair_kinect.csv"))
     ap.add_argument("--dry-run", action="store_true",
                     help="so' valida calibracao, sem abrir cameras")
+    ap.add_argument("--protocolo-0p5m", action="store_true",
+                    help="protocolo A->B 0,5 m->B->A; 35 s")
+    ap.add_argument("--trajetoria-csv", type=Path,
+                    default=Path("outputs/visao/protocolo_0p5m_traj.csv"))
     args = ap.parse_args()
+    if args.protocolo_0p5m:
+        args.duracao = args.duracao or 35.0
     indices = (int(args.aux[0]), int(args.aux[1]))
     alignment = gt.CameraAlignment(aux_indices=indices)
     views = {i: alignment.aux_view(i) for i in indices}
@@ -190,6 +209,8 @@ def main() -> int:
     tracker = None
     csv_file = None
     writer = None
+    traj_file = None
+    traj_writer = None
     try:
         for i in indices:
             caps.append(_abre(i, _controle(args.exposicao, i),
@@ -210,6 +231,17 @@ def main() -> int:
             "reproj_aux0_med_px", "reproj_aux1_med_px",
             "reproj_kinect_med_px", "n3d", "n_kin",
             "kin_depth_fail", "kin_map_fail", "obs"])
+        if args.protocolo_0p5m:
+            args.trajetoria_csv.parent.mkdir(parents=True, exist_ok=True)
+            traj_file = open(args.trajetoria_csv, "w", newline="", encoding="utf-8")
+            traj_writer = csv.writer(traj_file)
+            traj_writer.writerow([
+                "frame", "t", "fase", "lado",
+                "par_x", "par_y", "par_z",
+                "kin_x", "kin_y", "kin_z",
+                "par_ok", "kin_ok"])
+            print("PROTOCOLO 0,5 m: 0-5s A parado | 5-15s A->B | "
+                  "15-20s B parado | 20-30s B->A | 30-35s A parado")
         t0 = time.time(); n = 0
         last_fps_t = t0
         fps_atual = 0.0
@@ -268,6 +300,19 @@ def main() -> int:
                     n_kin_map = sum(1 for x in info if x["map_fail"])
                     kin_px = _proj_px(kin_cor, alignment.kinect_matrix,
                                        alignment.kinect_dist)
+                # registro da trajetoria de deslocamento (punho)
+                if traj_writer is not None:
+                    elapsed = time.time() - t0
+                    fase = _fase_0p5m(elapsed)
+                    pw = (pair_xyz[0] if pair_xyz is not None
+                          and np.isfinite(pair_xyz[0]).all() else [np.nan]*3)
+                    kw = (kin_cor[0] if kin_cor is not None
+                          and np.isfinite(kin_cor[0]).all() else [np.nan]*3)
+                    traj_writer.writerow([
+                        n, f"{elapsed:.4f}", fase, lado,
+                        *[f"{float(v):.6f}" for v in pw],
+                        *[f"{float(v):.6f}" for v in kw],
+                        int(np.isfinite(pw).all()), int(np.isfinite(kw).all())])
                 # reprojecao do par
                 r0 = _proj_aux(views[indices[0]], pair_xyz)
                 r1 = _proj_aux(views[indices[1]], pair_xyz)
@@ -346,6 +391,11 @@ def main() -> int:
                         int(kin is not None),
                         n_kin_fail, n_kin_map,
                         "" if pair_xyz is not None else "triangulacao_falhou"])
+                if args.protocolo_0p5m:
+                    cv2.putText(kin_bgr, f"FASE: {_fase_0p5m(time.time()-t0)}",
+                                (10, kin_bgr.shape[0] - 36),
+                                cv2.FONT_HERSHEY_SIMPLEX, 0.55, (0, 255, 255),
+                                1, cv2.LINE_AA)
                 cv2.putText(kin_bgr, f"par vs Kinect | FPS "
                             f"{fps_atual:.1f}",
                             (10, kin_bgr.shape[0] - 12),
@@ -371,6 +421,8 @@ def main() -> int:
             pass
         if csv_file is not None:
             csv_file.close()
+        if traj_file is not None:
+            traj_file.close()
         cv2.destroyAllWindows()
     # resumo de rigidez (comprimento de osso constante)
     linhas_rig = []
