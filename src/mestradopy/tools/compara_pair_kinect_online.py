@@ -1,4 +1,4 @@
-﻿#!/usr/bin/env python
+#!/usr/bin/env python
 # -*- coding: utf-8 -*-
 """Comparador ONLINE: triangulaÃ§Ã£o aux0â†”aux1 vs Kinect RGB/depth.
 
@@ -300,6 +300,28 @@ def main() -> int:
                   "O banner no video mostrara quando mover.", flush=True)
         cv2.namedWindow("Comparador ONLINE: aux pair x Kinect", cv2.WINDOW_NORMAL)
         cv2.resizeWindow("Comparador ONLINE: aux pair x Kinect", 1280, 760)
+        if args.protocolo_0p5m:
+            # tela de espera: nada comeca ate o usuario confirmar
+            while True:
+                espera = np.zeros((480, 1200, 3), np.uint8)
+                cv2.putText(espera, "PRESSIONE ESPACO PARA INICIAR",
+                            (40, 210), cv2.FONT_HERSHEY_SIMPLEX,
+                            1.1, (0, 255, 255), 3, cv2.LINE_AA)
+                cv2.putText(espera, "Mao em A; B fica a 0,5 m de A",
+                            (40, 270), cv2.FONT_HERSHEY_SIMPLEX,
+                            0.8, (255, 255, 255), 2, cv2.LINE_AA)
+                cv2.putText(espera, "ESC/Q cancela",
+                            (40, 330), cv2.FONT_HERSHEY_SIMPLEX,
+                            0.7, (180, 180, 180), 1, cv2.LINE_AA)
+                cv2.imshow("Comparador ONLINE: aux pair x Kinect", espera)
+                key = cv2.waitKey(30) & 0xFF
+                if key == 32:   # ESPACO
+                    break
+                if key in (27, ord("q")):
+                    return 0
+            print("[PROTOCOLO] INICIADO", flush=True)
+            t0 = time.time()
+            last_fase = "PREPARACAO"
         while args.duracao <= 0 or (time.time() - t0) < args.duracao:
             color, depth = tracker.frames()
             if color is None:
@@ -515,4 +537,5 @@ def main() -> int:
 
 if __name__ == "__main__":
     raise SystemExit(main())
+
 
