@@ -322,6 +322,8 @@ def main() -> int:
             print("[PROTOCOLO] INICIADO", flush=True)
             t0 = time.time()
             last_fase = "PREPARACAO"
+        if args.protocolo_0p5m:
+            print(f"[debug] LOOP inicio duracao={args.duracao}s", flush=True)
         while args.duracao <= 0 or (time.time() - t0) < args.duracao:
             color, depth = tracker.frames()
             if color is None:
@@ -495,6 +497,18 @@ def main() -> int:
             n += 1
             if (cv2.waitKey(1) & 0xFF) in (27, ord("q")):
                 break
+        if args.protocolo_0p5m:
+            print(f"[debug] LOOP fim elapsed={time.time()-t0:.1f}s n={n}", flush=True)
+    except Exception:
+        import traceback
+        tb = traceback.format_exc()
+        print(tb, flush=True)
+        try:
+            Path("outputs/visao").mkdir(parents=True, exist_ok=True)
+            Path("outputs/visao/protocolo_0p5m_crash.txt").write_text(tb, encoding="utf-8")
+        except Exception:
+            pass
+        return 1
     finally:
         for cap in caps:
             cap.release()
