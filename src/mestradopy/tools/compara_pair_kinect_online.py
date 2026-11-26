@@ -329,17 +329,29 @@ def main() -> int:
             print(f"Prepare-se: {args.preparacao_sec:.0f}s; mao em A. "
                   "O banner no video mostrara quando mover.", flush=True)
             print(f"[debug] LOOP inicio duracao={args.duracao}s", flush=True)
+        color_ausente_warned = False
         while args.duracao <= 0 or (time.time() - t0) < args.duracao:
             color, depth = tracker.frames()
             if color is None:
-                time.sleep(0.01)
-                continue
+                if not color_ausente_warned:
+                    print("[aviso] Kinect RGB indisponivel; "
+                          "mostrando cameras auxiliares e mantendo o protocolo.",
+                          flush=True)
+                    color_ausente_warned = True
+                # fallback visual: nao trava a UI por falta de RGB do Kinect
+                color = np.zeros((480, 640, 4), np.uint8)
+                depth = None
+                kin_bgr = np.zeros((480, 640, 3), np.uint8)
+                cv2.putText(kin_bgr, "KINECT RGB AUSENTE",
+                            (20, 240), cv2.FONT_HERSHEY_SIMPLEX,
+                            0.9, (0, 0, 255), 2, cv2.LINE_AA)
+            else:
+                if color.ndim == 3 and color.shape[2] == 4:
+                    kin_bgr = cv2.cvtColor(color, cv2.COLOR_BGRA2BGR)
+                else:
+                    kin_bgr = np.asarray(color).copy()
             if n == 0:
                 print("[debug] primeiro frame do loop de protocolo", flush=True)
-            if color.ndim == 3 and color.shape[2] == 4:
-                kin_bgr = cv2.cvtColor(color, cv2.COLOR_BGRA2BGR)
-            else:
-                kin_bgr = np.asarray(color).copy()
             frames = []
             for cap in caps:
                 ok, frame = cap.read()
@@ -364,7 +376,10 @@ def main() -> int:
             for k, i in enumerate(indices):
                 dets[i] = detector.detect(frames[k], f"aux{i}", stamp,
                                           aux_index=i) or []
-            _, kin_hands = tracker.detect_hands_all(color, depth)
+            if depth is not None:
+                _, kin_hands = tracker.detect_hands_all(color, depth)
+            else:
+                kin_hands = []
             kin_por_lado = {h.get("side"): h for h in kin_hands if h.get("side")}
             if args.pareamento == "geometrico":
                 casadas, _ = _casa_maos_geometrica(
