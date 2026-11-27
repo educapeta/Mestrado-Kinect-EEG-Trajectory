@@ -22,7 +22,7 @@ import numpy as np
 import matplotlib
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt
-from scipy.signal import butter, sosfiltfilt
+from scipy.signal import butter, sosfiltfilt, spectrogram
 from scipy.stats import ttest_1samp
 
 _SRC = Path(__file__).resolve().parents[2]
@@ -83,6 +83,18 @@ def power_track(x, fs, lo, hi, win=WIN_SEC, step=STEP_SEC):
     return (t, bp[:, 0, :]) if single else (t, bp)
 
 
+def tf_spec(x):
+    """Espectrograma PSD (freq 4-40 Hz) de x (samples,3).
+
+    Retorna f, t e S com shape (freq, canais, tempo).
+    """
+    f, t, S = spectrogram(
+        x, fs=FS, nperseg=64, noverlap=48, axis=0,
+        mode="psd", detrend="constant")
+    sel = (f >= 4.0) & (f <= 40.0)
+    return f[sel], t, S[sel]
+
+
 def load_eyes_session(pasta):
     """Le uma sessao e devolve baseline olhos abertos e trials MI."""
     csv_path = sorted(Path(pasta).glob("eeg_mi3c*.csv"))[-1]
@@ -141,9 +153,25 @@ def main() -> int:
     erds = []
     labels = []
     t_ref = None
+    tf_trials = []
+    tf_labels = []
+    tf_freq = tf_time = None
     for pasta in (Path("outputs/eeg/piloto_me_mi_s01"),
                   Path("outputs/eeg/piloto_me_mi_s02")):
         base_eyes, mi, y = load_eyes_session(pasta)
+        # representacao tempo-frequencia media (baseline olhos abertos)
+        tf_freq, _, base_tf = tf_spec(base_eyes)           # (F,3,Tb)
+        base_tf = np.median(base_tf, axis=2)               # (F,3)
+        tf_sess = []
+        for trial in mi:
+            _, t_mi, S = tf_spec(trial)                    # (F,3,T)
+            if tf_time is None:
+                tf_time = t_mi
+            erd_tf = 100.0 * (S / (base_tf[:, :, None] + 1e-12) - 1.0)
+            tf_sess.append(np.clip(erd_tf, -200.0, 200.0)
+                           .transpose(0, 2, 1))             # (F,T,3)
+        tf_trials.append(np.stack(tf_sess))
+        tf_labels.append(y)
         erd_sess = {}
         for band, (lo, hi) in BANDS.items():
             _, bp_base = power_track(base_eyes, FS, lo, hi)
@@ -159,6 +187,15 @@ def main() -> int:
     labels = np.concatenate(labels)
     print("total", len(labels), "esquerda", int((labels == 0).sum()),
           "direita", int((labels == 1).sum()), flush=True)
+
+    tf_all = np.concatenate(tf_trials)
+    tf_y = np.concatenate(tf_labels)
+    tf_mean = {cls: tf_all[tf_y == cls].mean(axis=0) for cls in (0, 1)}
+    np.savez_compressed(
+        out / "tempo_frequencia.npz",
+        freq=tf_freq, time=tf_time,
+        tf_esquerda=tf_mean[0], tf_direita=tf_mean[1],
+        tf_todos=tf_all.mean(axis=0), labels=tf_y)
 
     res = {}
     for band in BANDS:
@@ -216,6 +253,30 @@ def main() -> int:
         fig.savefig(out / f"erd_ers_{band}.png", dpi=160)
         plt.close(fig)
 
+    # mapa tempo-frequencia medio: 3 canais x 2 classes
+    fig, axes = plt.subplots(3, 2, figsize=(13, 10), sharex=True, sharey=True)
+    vmax = 100.0
+    for ci, ch in enumerate(CH):
+        for cj, cls in enumerate((0, 1)):
+            ax = axes[ci, cj]
+            Z = tf_mean[cls][:, :, ci].T  # (tempo, freq)
+            im = ax.imshow(
+                np.clip(Z, -vmax, vmax), origin="lower", aspect="auto",
+                extent=[tf_time[0], tf_time[-1], tf_freq[0], tf_freq[-1]],
+                cmap="RdBu_r", vmin=-vmax, vmax=vmax)
+            for fl in (8, 13, 20, 30):
+                ax.axhline(fl, color="k", lw=0.4, alpha=0.35)
+            ax.set_title(f"{ch} — {CLASSES[cls]}")
+            if cj == 0:
+                ax.set_ylabel("Hz")
+            if ci == 2:
+                ax.set_xlabel("tempo desde o início da MI (s)")
+    fig.colorbar(im, ax=axes, shrink=0.8, label="ERD/ERS vs olhos abertos (%)")
+    fig.suptitle("Tempo-frequência médio da MI por canal e classe")
+    fig.savefig(out / "tempo_frequencia_por_canal.png", dpi=160,
+                bbox_inches="tight")
+    plt.close(fig)
+
     # relatorio
     linhas = ["# ERD/ERS da MI — baseline olhos abertos", "",
               "Baseline: 60 s de olhos abertos (marcadores 901–903).",
@@ -247,6 +308,10 @@ def main() -> int:
         "- os eventos ERD/ERS estão presentes, mas a média por classe não mostra "
         "uma separação espacial limpa; a classificação FBCSP pode explorar "
         "padrões espaciais que a média de eletrodo não revela.",
+        "",
+        "## Tempo-frequência",
+        "Mapa `tempo_frequencia_por_canal.png`: 3 canais x 2 classes; "
+        "`tempo_frequencia.npz` contém os mapas médios.",
     ]
     (out / "resultados.json").write_text(
         json.dumps(res, indent=2, ensure_ascii=False), encoding="utf-8")
