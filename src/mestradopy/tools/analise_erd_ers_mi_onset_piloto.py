@@ -1,10 +1,10 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
-"""ERD/ERS cue-locked: janela de -1 s a +3 s em relacao ao cue.
+"""ERD/ERS em torno do inicio da MI: janela -1 s a +3 s em relacao a 780.
 
 Baseline: bloco de olhos abertos (901 -> 903) de cada sessao.
 Evento: cue 769/770; janela [cue-1s, cue+3s], fs=128, 4-40 Hz.
-No protocolo atual essa janela cobre o pre-cue e a ME (a MI comeca depois).
+A janela cobre o ultimo 1 s da transicao ME->MI e os primeiros 3 s da MI.
 """
 from __future__ import annotations
 
@@ -37,10 +37,10 @@ BANDS = {"mu": (8.0, 13.0), "beta_low": (13.0, 20.0),
          "beta_high": (20.0, 30.0)}
 CLASSES = {0: "esquerda", 1: "direita"}
 WINDOWS = {
-    "pre_cue": (-1.0, 0.0),
-    "pos_0_1": (0.0, 1.0),
-    "pos_1_2": (1.0, 2.0),
-    "pos_2_3": (2.0, 3.0),
+    "pre_MI": (-1.0, 0.0),
+    "MI_0_1": (0.0, 1.0),
+    "MI_1_2": (1.0, 2.0),
+    "MI_2_3": (2.0, 3.0),
 }
 
 
@@ -101,15 +101,21 @@ def load_session(pasta):
         raise RuntimeError(f"{pasta}: sem marcadores 901/903")
     base_eyes = eeg[int(round(ini[0] * escala)):int(round(fim[0] * escala))]
 
-    cues = []
-    for code, nome in ((769, "esquerda"), (770, "direita")):
-        for pos in np.where(markers == code)[0]:
-            cues.append((int(round(pos * escala)), 0 if nome == "esquerda" else 1))
-    cues.sort()
     npre = int(PRE * FS)
     npost = int(POST * FS)
     segs, labels = [], []
-    for a, cls in cues:
+    # Ancora: inicio da MI (780). A classe vem do cue 769/770 que o antecede.
+    for pos780 in np.where(markers == 780)[0]:
+        prev = markers[:pos780]
+        ultimo, cls = -1, None
+        for code, nome in ((769, "esquerda"), (770, "direita")):
+            pos = np.where(prev == code)[0]
+            if len(pos) and pos[-1] > ultimo:
+                ultimo = pos[-1]
+                cls = 0 if nome == "esquerda" else 1
+        if cls is None:
+            continue
+        a = int(round(pos780 * escala))
         s, e = a - npre, a + npost
         if s < 0 or e > len(eeg):
             continue
@@ -132,7 +138,7 @@ def media_classe(erd, labels, cls, t):
 
 
 def main() -> int:
-    out = Path("outputs/eeg/erd_ers_cue")
+    out = Path("outputs/eeg/erd_ers_mi_onset")
     out.mkdir(parents=True, exist_ok=True)
     erds, labels, t_ref = [], [], None
     tf_trials, tf_labels, tf_freq, tf_time = [], [], None, None
@@ -168,7 +174,7 @@ def main() -> int:
     tf_all = np.concatenate(tf_trials)
     tf_y = np.concatenate(tf_labels)
     tf_mean = {cls: tf_all[tf_y == cls].mean(axis=0) for cls in (0, 1)}
-    np.savez_compressed(out / "tempo_frequencia_cue.npz",
+    np.savez_compressed(out / "tempo_frequencia_mi_onset.npz",
                         freq=tf_freq, time=tf_time,
                         tf_esquerda=tf_mean[0], tf_direita=tf_mean[1],
                         tf_todos=tf_all.mean(axis=0), labels=tf_y)
@@ -217,15 +223,15 @@ def main() -> int:
                     ax.scatter(t_ref[sig], np.full(sig.sum(), ax.get_ylim()[0]),
                                s=10, color=cores[cls], marker=".")
             ax.set_title(f"{band} — {ch}")
-            ax.set_xlabel("tempo em relação ao cue (s)")
+            ax.set_xlabel("tempo em relação ao início da MI (s)")
             ax.set_xlim(-1.0, 3.0)
             ax.grid(alpha=0.25)
             if ci == 0:
                 ax.set_ylabel("ERD/ERS vs olhos abertos (%)")
             ax.legend(fontsize=8)
-        fig.suptitle("ERD/ERS cue-locked (-1 s a +3 s) — baseline olhos abertos")
+        fig.suptitle("ERD/ERS em torno do início da MI (-1 s a +3 s) — baseline olhos abertos")
         fig.tight_layout()
-        fig.savefig(out / f"erd_ers_cue_{band}.png", dpi=160)
+        fig.savefig(out / f"erd_ers_mi_onset_{band}.png", dpi=160)
         plt.close(fig)
 
     fig, axes = plt.subplots(3, 2, figsize=(13, 9), sharex=True, sharey=True)
@@ -244,17 +250,17 @@ def main() -> int:
             if cj == 0:
                 ax.set_ylabel("Hz")
             if ci == 2:
-                ax.set_xlabel("tempo em relação ao cue (s)")
+                ax.set_xlabel("tempo em relação ao início da MI (s)")
     fig.colorbar(im, ax=axes, shrink=0.8, label="ERD/ERS vs olhos abertos (%)")
-    fig.suptitle("Tempo-frequência cue-locked por canal e classe")
-    fig.savefig(out / "tempo_frequencia_cue_por_canal.png", dpi=160,
+    fig.suptitle("Tempo-frequência em torno do início da MI por canal e classe")
+    fig.savefig(out / "tempo_frequencia_mi_onset_por_canal.png", dpi=160,
                 bbox_inches="tight")
     plt.close(fig)
 
-    linhas = ["# ERD/ERS cue-locked — janela −1 s a +3 s", "",
-              "Baseline: olhos abertos (901–903). Cue: 769/770.",
-              "ATENÇÃO: no protocolo, o cue é seguido pela ME; esta janela "
-              "cobre pré-cue + ME, não a MI.", "",
+    linhas = ["# ERD/ERS em torno do início da MI — janela −1 s a +3 s", "",
+              "Baseline: olhos abertos (901–903). Âncora: início da MI (780); classe pelo cue anterior (769/770).",
+              "A janela cobre os 1 s finais da transição ME→MI e os primeiros "
+              "3 s da MI.", "",
               "| banda | janela | classe | C3 | C4 | Cz |",
               "|---|---|---|---:|---:|---:|"]
     for band in BANDS:
