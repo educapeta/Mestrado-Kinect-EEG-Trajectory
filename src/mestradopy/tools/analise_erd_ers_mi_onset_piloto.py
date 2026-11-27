@@ -3,7 +3,8 @@
 """ERD/ERS em torno do inicio da MI: janela -1 s a +3 s em relacao a 780.
 
 Baseline: bloco de olhos abertos (901 -> 903) de cada sessao.
-Evento: cue 769/770; janela [cue-1s, cue+3s], fs=128, 4-40 Hz.
+Evento: inicio da MI (marcador 780); classe pelo cue 769/770 anterior;
+janela [-1 s, +3 s] em relacao ao inicio da MI, fs=128, 4-40 Hz.
 A janela cobre o ultimo 1 s da transicao ME->MI e os primeiros 3 s da MI.
 """
 from __future__ import annotations
@@ -79,7 +80,7 @@ def power_track(x, lo, hi, win=WIN_SEC, step=STEP_SEC):
 
 
 def tf_spec(x):
-    """Espectrograma (freq, canais, tempo), tempo relativo ao cue."""
+    """Espectrograma (freq, canais, tempo), tempo relativo ao início da MI."""
     f, t, S = spectrogram(x, fs=FS, nperseg=64, noverlap=48,
                           axis=0, mode="psd", detrend="constant")
     sel = (f >= 4.0) & (f <= 40.0)
