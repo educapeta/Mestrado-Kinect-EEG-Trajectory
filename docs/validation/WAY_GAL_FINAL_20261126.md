@@ -91,23 +91,93 @@ deslocamento, GroupKFold por participante, 25 épocas, scaler fit no treino.
 
 Conclusão: o EEGNet **não generalizou entre participantes** para deslocamento
 3D. Ele não superou o baseline de MAE. Isso é um resultado negativo válido e
-deve ser reportado como tal. A validação neural precisa ser refeita
-within-participant ou com normalização por participante antes de afirmar que
-a arquitetura neural funciona.
+deve ser reportado como tal.
 
-## 6. Arquivos
+## 6. EEGNet within-participant (protocolo SAND-like)
+
+Protocolo:
+
+- um modelo por participante;
+- split por **série/sessão**, não por trial:
+  - 6 séries de treino;
+  - 1 série de validação interna (early stopping);
+  - 2 séries de teste, nunca usadas no treino/validação;
+- z-score de EEG com estatísticas do treino;
+- 32 canais, 2 s do ME, 256 amostras;
+- 30 épocas, Adam, early stopping;
+- alvo `wrist_pos_disp` (3D).
+
+Resultado por participante (PCC médio dos 3 eixos):
+
+| participante | PCC |
+|---|---:|
+| P1 | 0,365 |
+| P2 | 0,147 |
+| P3 | −0,229 |
+| P4 | 0,157 |
+| P5 | −0,143 |
+| P6 | 0,398 |
+| P7 | 0,426 |
+| P8 | 0,042 |
+| P9 | 0,257 |
+| P10 | 0,093 |
+| P11 | 0,493 |
+| P12 | −0,006 |
+
+Agregado:
+
+| métrica | valor |
+|---|---:|
+| **PCC médio por participante** | **0,167** |
+| desvio entre participantes | 0,220 |
+| PCC eixo X | 0,363 |
+| PCC eixo Y | 0,507 |
+| PCC eixo Z | 0,789 |
+| MAE médio | 1,308 cm |
+
+Importante: o PCC “agregado” de 0,553 (calculado concatenando participantes)
+é inflado pela diferença de escala entre participantes; a métrica honesta para
+comparar com o Ridge within é a **média por participante = 0,167**.
+
+Leitura:
+
+- o EEGNet within-participant **não superou** o baseline Ridge within
+  (`time_bins`, PCC ≈ 0,234 para posição);
+- 4 participantes ficaram negativos/zero;
+- a arquitetura neural ainda não está validada para pose 3D;
+- o resultado é útil como linha de base negativa e mostra que a abordagem
+  SAND-like precisa de mais dados, regularização ou alvo de trajetória.
+
+### Como o SAND deste repositório foi treinado
+
+- modelo por gravação/sujeito;
+- split por **sessão** (`--test-frac 0.2`), não LOSO;
+- z-score com estatísticas do treino;
+- saída de trajetória (30 pontos × 3);
+- MSE + termo de suavidade + regularizador anatômico opcional;
+- early stopping na validação;
+- não é um protocolo cross-subject.
+
+O EEGNet within acima copia o **espírito do protocolo** (modelo por sujeito,
+separação por sessão, validação interna e teste separado), mas não é o SAND
+completo: falta a saída de trajetória temporal, o termo de suavidade e o
+regularizador anatômico.
+
+## 7. Arquivos
 
 - loader: `src/mestradopy/eeg/way_gal/loader.py`
 - benchmark: `src/mestradopy/tools/way_gal_bench.py`
-- CNN: `src/mestradopy/tools/way_gal_cnn.py`
+- CNN cross-participant: `src/mestradopy/tools/way_gal_cnn.py`
+- CNN within-participant: `src/mestradopy/tools/way_gal_cnn_within.py`
 - QC do loader: `outputs/eeg/way_gal/loader_qc.json`
 - auditoria: `outputs/eeg/way_gal/auditoria_trials.json`
 - alvos: `outputs/eeg/way_gal/targets.npz`
 - benchmark: `outputs/eeg/way_gal/regression_results.json`
 - relatório do benchmark: `outputs/eeg/way_gal/WAY_GAL_BENCH_20261126.md`
-- CNN: `outputs/eeg/way_gal/cnn/cnn_results.json`
+- CNN cross-participant: `outputs/eeg/way_gal/cnn/cnn_results.json`
+- CNN within-participant: `outputs/eeg/way_gal/cnn_within/cnn_within_results.json`
 
-## 7. Comandos reproduzíveis
+## 8. Comandos reproduzíveis
 
 ```powershell
 cd C:\mestradopy
@@ -116,16 +186,21 @@ $env:PYTHONPATH="C:\mestradopy;C:\mestradopy\src"
 .\.venv\Scripts\python.exe src\mestradopy\tools\way_gal_bench.py --save-targets
 
 .\.venv\Scripts\python.exe src\mestradopy\tools\way_gal_cnn.py --epochs 25
+
+.\.venv\Scripts\python.exe src\mestradopy\tools\way_gal_cnn_within.py --epochs 30
 ```
 
-## 8. Limitações e o que falta
+## 9. Limitações e o que falta
 
 - WAY tem ME, não MI; não valida decodificação de imagética;
 - apenas mão direita;
 - alvo final de pose é quase constante (mesmo objeto/local);
 - não há validação de orientação/grip como pose completa;
 - LOSO cross-participant permanece um problema em aberto;
-- o EEGNet não superou o baseline;
+- o EEGNet within-participant (PCC médio 0,167) não superou o baseline
+  Ridge within (0,234) e teve 4 participantes negativos/zero;
+- o resultado neural ainda é uma linha de base negativa, não uma arquitetura
+  validada;
 - a unidade de posição é assumida como cm e deve ser confirmada na
   documentação do dataset;
 - a contagem 3.528 vs 3.936 precisa ser explicada na tese.
