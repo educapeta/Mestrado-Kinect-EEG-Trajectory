@@ -1,7 +1,8 @@
 # Rascunho para a tese — métodos e resultados da validação
 
 > **Status:** rascunho para revisão do autor. Não foi inserido no LaTeX da tese.
-> Fontes: relatórios em `docs/validation/` (19/11/2026).
+> Fontes: relatórios em `docs/validation/` (19/11/2026; atualizado em
+> 27/11/2026 com a subseção 5.4).
 
 ---
 
@@ -122,6 +123,103 @@ ME é decodificável; MI permanece próxima do acaso.
 - treino s01: BA 0,700 (calibração) e 0,533 (adaptação);
 - teste congelado s02: **BA=0,567, IC95% [0,437; 0,688]**, n=60;
 - veredito: **não-respondedor** pelo critério pré-fixado.
+
+---
+
+### 5.4 ERD/ERS e representação tempo-frequência do piloto (atualização 27/11/2026)
+
+Esta subseção substitui a leitura espectral preliminar da subseção 5.2 para
+a questão de ERD/ERS. Foram usados os 120 trials do piloto (60 mão esquerda,
+60 mão direita), das sessões s01 e s02, nos canais C3, C4 e Cz.
+
+**Protocolo de análise.** O baseline foi o bloco de olhos abertos de 60 s
+do início de cada sessão (marcadores 901→903). A janela de interesse foi
+definida em torno do **início da MI** (marcador 780):
+
+```text
+[início da MI − 1 s, início da MI + 3 s]
+```
+
+Essa janela cobre o último segundo da transição ME→MI e os primeiros três
+segundos da MI. O intervalo nominal da transição ME→MI foi de **1,0 s**
+(`transicao_sec = 1,0`), confirmado nos eventos gravados
+(`mi_start − me_end ≈ 1,015 s`). Os sinais foram filtrados em 4–40 Hz e
+reamostrados para 128 Hz. A potência foi calculada em janelas de 0,5 s
+(passo 0,125 s); o ERD/ERS foi definido por
+
+```text
+ERD/ERS(%) = 100 × (P_MI(t)/P_olhos_abertos − 1)
+```
+
+e testado contra zero com teste t de uma amostra e correção FDR ao longo do
+tempo. A representação tempo-frequência usou espectrograma de Welch
+(nperseg = 64, sobreposição 48) e a mesma normalização pelo baseline de
+olhos abertos.
+
+**Resultados.** A Figura 5.4.1 mostra o mapa tempo-frequência médio por canal
+e por classe; a Figura 5.4.2 mostra o curso temporal de mu e beta baixo.
+
+![Mapa tempo-frequência médio da MI por canal e classe](../thesis/figures/fig_erd_ers_tf.png)
+
+*Figura 5.4.1 — ERD/ERS médio (%, relativo a olhos abertos) em torno do início
+da MI. Linhas: C3, C4 e Cz; colunas: mão esquerda e mão direita. Azul = ERD;
+vermelho = ERS. A janela vai de −1 s a +3 s em relação ao início da MI.*
+
+![Curso temporal de mu](../thesis/figures/fig_erd_ers_mu.png)
+
+*Figura 5.4.2 — Curso temporal do ERD/ERS em mu (8–13 Hz), média ± erro
+padrão, por canal e classe. A linha vertical marca o início da MI.*
+
+Na banda **mu (8–13 Hz)**, o padrão dominante foi de **ERS** (potência acima
+do baseline de olhos abertos), particularmente na transição e no início da MI.
+O ERD em mu foi transitório e modesto: na janela de 1–2 s após o início da MI,
+o maior valor foi −7,0% em C4 para a mão esquerda, sem significância; não se
+observou um ERD alto e bilateral em mu.
+
+Na banda **beta baixo (13–20 Hz)**, observou-se **ERD robusto** após o início
+da MI. Na janela de 1–2 s, os valores foram:
+
+| canal | mão esquerda | mão direita |
+|---|---:|---:|
+| C3 | −21,8%* | −19,1%* |
+| C4 | −21,1%* | −24,8%* |
+| Cz | −22,8%* | −19,1%* |
+
+`*` = p < 0,05 contra olhos abertos.
+
+O ERD em beta baixo persistiu na janela de 2–3 s (entre −11,8% e −23,1%,
+conforme o canal e a classe). Em **beta alto (20–30 Hz)** também houve ERD,
+mas com padrão menos homogêneo entre canais e classes.
+
+**Sobre a lateralização.** A leitura visual da Figura 5.4.1 pode sugerir uma
+dissociação do tipo “C4 na mão esquerda / C3 na mão direita”. A quantificação,
+entretanto, **não confirmou** essa dupla dissociação:
+
+- o ERD em mu foi bilateral e, numericamente, maior na mão esquerda tanto em
+  C3 quanto em C4;
+- em beta baixo, o ERD foi bilateral e de magnitude semelhante nas duas
+  classes;
+- não houve um padrão contralateral limpo e consistente entre as bandas.
+
+Assim, os dados sustentam a **presença de ERD/ERS** — sobretudo ERD em beta
+baixo —, mas não sustentam uma assinatura lateralizada simples em C3/C4 na
+média por eletrodo. A classificação FBCSP pode explorar combinações espaciais
+e temporais que não aparecem na média univariada dos canais; essa hipótese será
+testada no espaço dos componentes CSP.
+
+**Relação com a ME.** A transição ME→MI ainda apresenta ERS em relação ao
+baseline de olhos abertos, e a janela pós-cue inicial é dominada pela ME. Por
+isso, a análise de MI deve ser ancorada no marcador 780 e não no cue inicial;
+os resultados de ME não podem ser interpretados como evidência de imagética
+motora.
+
+**Limitações.** O baseline de olhos abertos é um bloco de 60 s no início da
+sessão, não imediatamente antes de cada trial; há apenas três canais; não houve
+EMG simultâneo; e o número de trials é pequeno (120). Os efeitos são
+exploratórios e devem ser confirmados nas 3 sessões completas.
+
+<!-- FIGURAS DA SUBSECAO: docs/thesis/figures/fig_erd_ers_tf.png,
+     fig_erd_ers_mu.png, fig_erd_ers_beta_low.png -->
 
 ---
 
